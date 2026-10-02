@@ -1,0 +1,20 @@
+[package]
+name = "big-gtk-kit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+repository = "https://github.com/biglinux/big-gtk-kit"
+description = "GTK4 building blocks shared by the BigLinux programs"
+publish = false
+
+[dependencies]
+gtk = { version = "0.11", features = ["v4_12"], package = "gtk4" }
+# ToggleGroup, for the view switcher, is libadwaita 1.7.
+adw = { version = "0.9", features = ["v1_7"], package = "libadwaita" }
+
+[dev-dependencies]
+# The demo switches the dark card on through a GTK 4.20 setting.
+gtk = { version = "0.11", features = ["v4_20"], package = "gtk4" }
+# The kept-dialog test builds an AdwShortcutsDialog, which is libadwaita 1.8.
+adw = { version = "0.9", features = ["v1_8"], package = "libadwaita" }

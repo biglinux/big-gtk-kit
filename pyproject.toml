@@ -1,0 +1,18 @@
+# The Python half of the kit, for the BigLinux PyGObject programs.
+[project]
+name = "big-gtk-kit"
+version = "0.1.0"
+description = "GTK4 building blocks shared by the BigLinux programs"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["PyGObject"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "python"
+
+[tool.pytest.ini_options]
+pythonpath = ["python"]

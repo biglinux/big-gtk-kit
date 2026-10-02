@@ -1,0 +1,27 @@
+# Maintainer: Bruno Gonçalves <https://www.biglinux.com.br>
+
+# The Python half of the kit. The Rust crate is a Cargo git dependency of each
+# program and is not packaged.
+pkgname=python-big-gtk-kit
+_name=big-gtk-kit
+pkgdesc="GTK4 building blocks shared by the BigLinux Python programs"
+depends=('python' 'python-gobject' 'gtk4>=4.20')
+makedepends=('git' 'python-build' 'python-installer' 'python-uv-build')
+pkgver=$(date +%y.%m.%d)
+pkgrel=$(date +%H%M)
+arch=('any')
+license=('MIT')
+url="https://github.com/biglinux/${_name}"
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+build() {
+    cd "${srcdir}/${_name}" || return
+    python -m build --wheel --no-isolation --skip-dependency-check
+}
+
+package() {
+    cd "${srcdir}/${_name}" || return
+    python -m installer --destdir="${pkgdir}" dist/*.whl
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

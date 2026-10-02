@@ -1,0 +1,6 @@
+target/
+tools/build/
+__pycache__/
+*.so
+*.o
+dist/
