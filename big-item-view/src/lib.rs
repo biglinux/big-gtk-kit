@@ -91,6 +91,12 @@ pub trait ItemPresenter: 'static {
         None
     }
 
+    /// Whether resting a drag on the item at `target` opens it (emits
+    /// `activate`), the way a folder springs open in a file manager.
+    fn springs_open(&self, _target: u32) -> bool {
+        false
+    }
+
     /// Take a drop on `target` (the view itself when `None`). `want_move` is
     /// Shift held. Returns whether the drop was taken.
     fn receive_drop(&self, _target: Option<u32>, _value: &glib::Value, _want_move: bool) -> bool {

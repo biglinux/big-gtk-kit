@@ -885,7 +885,10 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
         {
             big_gtk_kit::source::remove(source);
         }
-        if restart && let Some(position) = under {
+        if restart
+            && let Some(position) = under
+            && presenter.springs_open(position)
+        {
             let view_weak = view.downgrade();
             let slot = Rc::clone(&spring);
             let source = glib::timeout_add_local_once(SPRING_DWELL, move || {
