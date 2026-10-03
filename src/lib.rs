@@ -14,6 +14,7 @@ pub mod dialog;
 pub mod menu;
 pub mod password;
 pub mod popover;
+pub mod source;
 mod surface;
 pub mod switch;
 pub mod tooltip;

@@ -525,7 +525,7 @@ impl Engine {
 
     fn cancel_timer(&self) {
         if let Some(timer) = self.timer.take() {
-            timer.remove();
+            crate::source::remove(timer);
         }
     }
 }

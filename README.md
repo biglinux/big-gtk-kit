@@ -62,6 +62,7 @@ the program's own.
 | `menu::append_shared_section`, `append_refilled_section` (items vary per build) | `gio::Menu::append_section` | GTK 4.22's menu tracker keeps every section it shows |
 | `password::password_row` | `PasswordEntryRow::new`, `build()` | libadwaita 1.9 keeps the buffer, and the password |
 | `popover::auto_unparent_on_close` | a popover left on `set_parent` | GTK pins it, and its tree, to the widget forever |
+| `source::remove` | `glib::SourceId::remove` | panics, and so aborts the program, when the source already ran |
 | `switch::set_active` | `Switch::set_active` | GTK 4.22 cancels a click's slide on an unchanged value |
 | `view_switcher::toggles_for` | `AdwViewStack`, `AdwInlineViewSwitcher` | leak their animation and a tree per page |
 
