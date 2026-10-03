@@ -93,7 +93,7 @@ mod tests {
     use super::*;
     use crate::testing::{pump, watch};
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn windows_that_showed_a_popover_release_their_surface() {
         gtk::init().expect("a display");

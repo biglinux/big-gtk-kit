@@ -59,7 +59,7 @@ mod tests {
     use super::*;
     use crate::testing::{init, pump, watch};
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn breakpoints_finalize_with_their_windows() {
         init();
@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(finalized.get(), 25);
     }
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn a_breakpoint_the_program_keeps_stays() {
         init();

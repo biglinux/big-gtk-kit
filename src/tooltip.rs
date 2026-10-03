@@ -671,7 +671,7 @@ mod tests {
     use crate::testing::{pump, watch};
 
     /// Needs a display: run under `tools/headless-gate.sh`.
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn closed_windows_release_their_card_and_owner() {
         gtk::init().expect("a display");

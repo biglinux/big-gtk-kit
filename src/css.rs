@@ -31,7 +31,7 @@ mod tests {
     use super::*;
     use crate::testing::watch;
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn providers_finalize_with_their_widgets() {
         gtk::init().expect("a display");

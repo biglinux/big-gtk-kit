@@ -31,7 +31,7 @@ mod tests {
     use super::*;
 
     /// A click's slide survives a refresh that shows the same state, and lands.
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn a_refresh_with_the_shown_state_keeps_the_click() {
         gtk::init().expect("a display");

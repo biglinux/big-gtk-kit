@@ -42,7 +42,7 @@ mod tests {
     use super::*;
     use crate::testing::{init, watch};
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn buffers_finalize_with_their_rows() {
         init();

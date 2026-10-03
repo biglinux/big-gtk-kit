@@ -61,7 +61,7 @@ mod tests {
     use super::*;
     use crate::testing::{init, pump, watch};
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn answered_dialogs_finalize() {
         init();

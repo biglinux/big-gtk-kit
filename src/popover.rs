@@ -36,7 +36,7 @@ mod tests {
     use super::*;
     use crate::testing::{pump, watch};
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn closing_keeps_the_parent_until_idle_then_finalizes() {
         gtk::init().expect("a display");

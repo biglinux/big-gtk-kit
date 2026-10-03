@@ -42,7 +42,7 @@ pub fn relate(
 mod tests {
     use super::*;
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn the_relation_is_set() {
         gtk::init().expect("a display");

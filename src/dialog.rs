@@ -73,7 +73,7 @@ mod tests {
     use crate::testing::{init, pump, watch};
 
     /// The tree of a dialog closed over a window with no focus, finalized.
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn dialogs_closed_without_earlier_focus_finalize() {
         init();
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(finalized.get(), 25);
     }
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn a_kept_dialog_is_built_once_per_window() {
         init();

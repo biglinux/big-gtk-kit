@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use crate::testing::{init, pump, watch};
 
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn switchers_and_their_pages_finalize() {
         init();
