@@ -9,6 +9,9 @@ When GTK or libadwaita gets something wrong, the fix lives here, as a different
 way of doing the same thing — never as a patch to the library. Each workaround
 checks for the faulty state first, so a fixed library leaves it idle.
 
+Built for the GTK 4.22 and libadwaita 1.9 BigLinux ships; older libraries are
+not supported.
+
 ## Use
 
 Rust, as a Cargo git dependency:
@@ -109,8 +112,10 @@ dark card, `BIG_DEMO_FOLLOW=1` to follow the pointer).
 ## Checks
 
 ```sh
-cargo clippy --all-targets -- -D warnings
-tools/headless-gate.sh cargo test -- --include-ignored
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+tools/headless-gate.sh cargo test --workspace -- --include-ignored
+cargo deny check
 ruff check . && ruff format --check .
 tools/headless-gate.sh python -m pytest python/tests
 ```

@@ -5,7 +5,7 @@
 pkgname=python-big-gtk-kit
 _name=big-gtk-kit
 pkgdesc="GTK4 building blocks shared by the BigLinux Python programs"
-depends=('python' 'python-gobject' 'gtk4>=4.20')
+depends=('python' 'python-gobject' 'gtk4>=4.22' 'libadwaita>=1.9')
 makedepends=('git' 'python-build' 'python-installer' 'python-uv-build')
 pkgver=$(date +%y.%m.%d)
 pkgrel=$(date +%H%M)
