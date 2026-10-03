@@ -28,8 +28,13 @@ pub fn append_shared_section(
     key: &'static str,
     build: impl FnOnce() -> gio::Menu,
 ) {
-    let section =
-        SECTIONS.with_borrow_mut(|sections| sections.entry(key).or_insert_with(build).clone());
+    // `build` runs outside the borrow: it may append shared sections itself.
+    let section = SECTIONS
+        .with_borrow(|sections| sections.get(key).cloned())
+        .unwrap_or_else(|| {
+            let section = build();
+            SECTIONS.with_borrow_mut(|sections| sections.entry(key).or_insert(section).clone())
+        });
     #[allow(
         clippy::disallowed_methods,
         reason = "the one place allowed to add sections"
@@ -107,6 +112,19 @@ mod tests {
 
     /// A context menu rebuilt with 0, 5 and 25 items keeps one section, and
     /// every menu that showed it finalizes.
+    /// A section built from shared sections of its own: building must not
+    /// hold the table the inner sections are kept in.
+    #[test]
+    fn shared_sections_nest() {
+        let menu = gio::Menu::new();
+        append_shared_section(&menu, None, "big-gtk-kit-outer", || {
+            let outer = gio::Menu::new();
+            append_shared_section(&outer, None, "big-gtk-kit-inner", gio::Menu::new);
+            outer
+        });
+        assert_eq!(menu.n_items(), 1);
+    }
+
     #[gtk::test]
     #[ignore = "needs a display"]
     fn a_refilled_section_is_kept_once() {
