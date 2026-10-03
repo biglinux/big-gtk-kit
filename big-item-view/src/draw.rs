@@ -27,6 +27,8 @@ pub(crate) struct State {
     pub(crate) drop_target: bool,
     /// An editor is laid over the name, which is therefore not drawn.
     pub(crate) editing: bool,
+    /// In a tree: the row's depth, and whether it is expanded when it can be.
+    pub(crate) tree: Option<(u16, Option<bool>)>,
 }
 
 /// The picture, resolved for drawing.
@@ -41,8 +43,10 @@ pub(crate) enum Picture<'a> {
 pub(crate) struct Item<'a> {
     pub(crate) size: (f32, f32),
     /// Where the picture and the name go: across the whole item, or in the
-    /// primary column of a row ([`primary_span`]).
+    /// primary column of a row ([`primary_span`]), past a tree row's expander.
     pub(crate) primary: (f32, (f32, f32)),
+    /// The primary span before a tree row's indent: where its expander goes.
+    pub(crate) outer: (f32, (f32, f32)),
     /// The other columns' words, one per column (`None` for the primary one).
     pub(crate) cells: &'a [Option<pango::Layout>],
     pub(crate) geometry: &'a Geometry,
@@ -201,6 +205,85 @@ fn ring(
     );
 }
 
+/// One level of a tree: how far a child row is pushed in, and the side of the
+/// expander's box.
+pub(crate) const TREE_STEP: f32 = 16.0;
+
+/// A tree row's primary span, pushed in past its depth and its expander.
+pub(crate) fn tree_span(primary: (f32, (f32, f32)), depth: u16, rtl: bool) -> (f32, (f32, f32)) {
+    let inset = TREE_STEP * f32::from(depth.saturating_add(1));
+    let (x, (width, height)) = primary;
+    let x = if rtl { x } else { x + inset };
+    (x, ((width - inset).max(0.0), height))
+}
+
+/// Where a tree row's expander is, in the item's coordinates; `primary` is
+/// the span before [`tree_span`].
+pub(crate) fn expander_box(
+    geometry: &Geometry,
+    primary: (f32, (f32, f32)),
+    depth: u16,
+    rtl: bool,
+) -> graphene::Rect {
+    let (x, (width, height)) = primary;
+    let level = geometry.margin.1 as f32 + TREE_STEP * f32::from(depth);
+    let x = if rtl {
+        x + width - level - TREE_STEP
+    } else {
+        x + level
+    };
+    graphene::Rect::new(x, (height - TREE_STEP) / 2.0, TREE_STEP, TREE_STEP)
+}
+
+/// The side of a star in a [`ColumnShows::Stars`] column, and of a
+/// [`ColumnShows::Button`]'s icon.
+pub(crate) const CELL_ICON: f32 = 14.0;
+
+/// Where a column's icons go: `count` of them, side by side, placed in the
+/// column `(x, width)` by its `xalign`; the first icon's box.
+pub(crate) fn cell_icons(
+    geometry: &Geometry,
+    column: &crate::Column,
+    (x, width): (f32, f32),
+    height: f32,
+    count: usize,
+    rtl: bool,
+) -> graphene::Rect {
+    let pad = geometry.padding as f32;
+    let row = CELL_ICON * count as f32;
+    let slack = (width - 2.0 * pad - row).max(0.0);
+    let align = if rtl {
+        1.0 - column.xalign
+    } else {
+        column.xalign
+    };
+    graphene::Rect::new(
+        x + pad + slack * align,
+        (height - CELL_ICON) / 2.0,
+        CELL_ICON,
+        CELL_ICON,
+    )
+}
+
+/// Which star, 1 to 5, is at `x` (in the item's coordinates) of a
+/// [`ColumnShows::Stars`] column `(x, width)`; `None` between or beside them.
+pub(crate) fn star_at(
+    geometry: &Geometry,
+    column: &crate::Column,
+    span: (f32, f32),
+    height: f32,
+    x: f32,
+    rtl: bool,
+) -> Option<u8> {
+    let first = cell_icons(geometry, column, span, height, 5, rtl);
+    let slot = ((x - first.x()) / CELL_ICON).floor();
+    if !(0.0..5.0).contains(&slot) {
+        return None;
+    }
+    let slot = slot as u8;
+    Some(if rtl { 5 - slot } else { slot + 1 })
+}
+
 /// How big a [`Corner::Trailing`] mark is; the name leaves room for it.
 pub(crate) const TRAILING_BADGE: f32 = 16.0;
 
@@ -211,7 +294,14 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
     let palette = item.palette;
     let state = item.state;
     let bg = if geometry.hit_drawn_only && geometry.columns.is_empty() {
-        card(geometry, item.size, item.rtl, item.title, item.subtitle)
+        card(
+            geometry,
+            item.primary.1,
+            item.rtl,
+            item.title,
+            item.subtitle,
+        )
+        .offset_r(item.primary.0, 0.0)
     } else {
         background(geometry, item.size)
     };
@@ -270,6 +360,16 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
             2.0,
             palette.get(Role::SelectedFocusRing),
         );
+    }
+
+    if let Some((depth, Some(expanded))) = state.tree {
+        let spot = expander_box(geometry, item.outer, depth, item.rtl);
+        let name = match (expanded, item.rtl) {
+            (true, _) => "pan-down-symbolic",
+            (false, false) => "pan-end-symbolic",
+            (false, true) => "pan-start-symbolic",
+        };
+        symbolic_at(&snapshot, item, name, &spot, palette.get(Role::TextDim));
     }
 
     // The picture, the name and their marks, in the primary column of a row.
@@ -399,6 +499,33 @@ fn draw_cells(snapshot: &gtk::Snapshot, item: &Item<'_>) {
     let pad = geometry.padding as f32;
     let spans = column_spans(geometry, item.size.0, item.rtl);
     for ((column, (x, width)), layout) in geometry.columns.iter().zip(spans).zip(item.cells) {
+        match column.shows {
+            ColumnShows::Stars(index) => {
+                let rating = item.content.ratings.get(index).copied().unwrap_or(0);
+                let first = cell_icons(geometry, column, (x, width), item.size.1, 5, item.rtl);
+                for star in 0..5_u8 {
+                    // The first star at the start of the reading direction.
+                    let slot = if item.rtl { 4 - star } else { star };
+                    let spot = first.offset_r(CELL_ICON * f32::from(slot), 0.0);
+                    let (name, role) = if star < rating {
+                        ("starred-symbolic", Role::Accent)
+                    } else {
+                        ("non-starred-symbolic", Role::TextDim)
+                    };
+                    symbolic_at(snapshot, item, name, &spot, item.palette.get(role));
+                }
+                continue;
+            }
+            ColumnShows::Button(name) => {
+                let state = item.state;
+                if state.hovered || (state.cursor && state.focus_visible) {
+                    let spot = cell_icons(geometry, column, (x, width), item.size.1, 1, item.rtl);
+                    symbolic_at(snapshot, item, name, &spot, item.palette.get(Role::TextDim));
+                }
+                continue;
+            }
+            ColumnShows::Primary | ColumnShows::Cell(_) => {}
+        }
         let Some(layout) = layout else {
             continue;
         };
@@ -542,6 +669,11 @@ fn draw_words(snapshot: &gtk::Snapshot, item: &Item<'_>) {
     };
     let (_, title) = item.title.pixel_extents();
     let title_h = title.height() as f32;
+    let title_color = if item.content.emphasized {
+        palette.get(Role::Accent)
+    } else {
+        palette.get(Role::Text)
+    };
     let subtitle_h = item
         .subtitle
         .map_or(0.0, |layout| layout.pixel_extents().1.height() as f32);
@@ -552,7 +684,7 @@ fn draw_words(snapshot: &gtk::Snapshot, item: &Item<'_>) {
     };
     snapshot.save();
     snapshot.translate(&graphene::Point::new(words.x(), top));
-    snapshot.append_layout(item.title, &dim(palette.get(Role::Text)));
+    snapshot.append_layout(item.title, &dim(title_color));
     snapshot.restore();
     if let Some(subtitle) = item.subtitle {
         // Right under the name, whatever lines it took: a grid row is as tall
@@ -642,6 +774,26 @@ fn draw_badge(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect, 
             snapshot.restore();
         }
     }
+}
+
+/// A symbolic icon filling `spot`, in `color`.
+fn symbolic_at(
+    snapshot: &gtk::Snapshot,
+    item: &Item<'_>,
+    name: &str,
+    spot: &graphene::Rect,
+    color: gdk::RGBA,
+) {
+    let paintable = crate::icons::symbolic(item.display, name, spot.width() as i32, item.scale);
+    snapshot.save();
+    snapshot.translate(&graphene::Point::new(spot.x(), spot.y()));
+    paintable.snapshot_symbolic(
+        snapshot.upcast_ref::<gdk::Snapshot>(),
+        f64::from(spot.width()),
+        f64::from(spot.height()),
+        &[color],
+    );
+    snapshot.restore();
 }
 
 fn draw_tick(snapshot: &gtk::Snapshot, item: &Item<'_>, on: bool) {
@@ -743,4 +895,85 @@ pub(crate) fn cell_height(geometry: &Geometry, title_line: f32, caption_line: f3
         Composition::Inline => geometry.picture().1.max(text),
     };
     (2.0 * my + 2.0 * pad + body).ceil()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Column, ColumnShows};
+
+    fn stars() -> (Geometry, Column) {
+        let geometry = Geometry::rows(16);
+        let column = Column {
+            id: 7,
+            title: String::new(),
+            shows: ColumnShows::Stars(0),
+            width: 100,
+            expand: false,
+            xalign: 0.0,
+            sort: None,
+        };
+        (geometry, column)
+    }
+
+    /// A child row is pushed in one step per level past its expander, in
+    /// either reading direction, and its expander sits at its own level.
+    #[test]
+    fn tree_rows_are_pushed_in_by_their_depth() {
+        let geometry = Geometry::rows(16);
+        let outer = (0.0, (300.0, 30.0));
+        assert_eq!(
+            tree_span(outer, 0, false),
+            (TREE_STEP, (300.0 - TREE_STEP, 30.0))
+        );
+        assert_eq!(
+            tree_span(outer, 2, false),
+            (3.0 * TREE_STEP, (300.0 - 3.0 * TREE_STEP, 30.0))
+        );
+        assert_eq!(
+            tree_span(outer, 2, true),
+            (0.0, (300.0 - 3.0 * TREE_STEP, 30.0))
+        );
+        let margin = geometry.margin.1 as f32;
+        let left = expander_box(&geometry, outer, 1, false);
+        assert_eq!((left.x(), left.y()), (margin + TREE_STEP, 7.0));
+        let right = expander_box(&geometry, outer, 1, true);
+        assert_eq!(right.x(), 300.0 - margin - 2.0 * TREE_STEP);
+    }
+
+    /// Each star answers for its own box; the first star is at the start of
+    /// the reading direction, and nothing answers beside the five.
+    #[test]
+    fn a_press_finds_the_star_under_it() {
+        let (geometry, column) = stars();
+        let span = (40.0, 100.0);
+        let first = cell_icons(&geometry, &column, span, 30.0, 5, false).x();
+        let first_rtl = cell_icons(&geometry, &column, span, 30.0, 5, true).x();
+        for star in 0..5_u8 {
+            let step = CELL_ICON * f32::from(star) + 1.0;
+            assert_eq!(
+                star_at(&geometry, &column, span, 30.0, first + step, false),
+                Some(star + 1)
+            );
+            assert_eq!(
+                star_at(&geometry, &column, span, 30.0, first_rtl + step, true),
+                Some(5 - star)
+            );
+        }
+        assert_eq!(
+            star_at(&geometry, &column, span, 30.0, first - 1.0, false),
+            None
+        );
+        assert_eq!(
+            star_at(
+                &geometry,
+                &column,
+                span,
+                30.0,
+                first + 5.0 * CELL_ICON + 1.0,
+                false
+            ),
+            None
+        );
+    }
 }

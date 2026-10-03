@@ -45,9 +45,10 @@ pub(crate) enum Role {
     RubberbandFill,
     RubberbandEdge,
     PlaceholderFill,
+    Accent,
 }
 
-pub(crate) const ROLES: [Role; 20] = [
+pub(crate) const ROLES: [Role; 21] = [
     Role::Text,
     Role::TextDim,
     Role::HoverFill,
@@ -68,6 +69,7 @@ pub(crate) const ROLES: [Role; 20] = [
     Role::RubberbandFill,
     Role::RubberbandEdge,
     Role::PlaceholderFill,
+    Role::Accent,
 ];
 
 impl Role {
@@ -93,6 +95,7 @@ impl Role {
             Self::RubberbandFill => "rubberband-fill",
             Self::RubberbandEdge => "rubberband-edge",
             Self::PlaceholderFill => "placeholder-fill",
+            Self::Accent => "accent",
         }
     }
 }
@@ -124,6 +127,7 @@ itemview > probe.tick-on-fg { color: var(--accent-fg-color); }
 itemview > probe.rubberband-fill { color: alpha(var(--accent-bg-color), 0.2); }
 itemview > probe.rubberband-edge { color: var(--accent-bg-color); }
 itemview > probe.placeholder-fill { color: alpha(currentColor, 0.08); }
+itemview > probe.accent { color: var(--accent-color); }
 itemview > probe.caption { font-size: smaller; }
 itemheader > button { background-color: transparent; padding: 3px 6px; border-radius: 0; box-shadow: none; min-height: 0; }
 itemheader > button > box { color: color-mix(in srgb, currentColor 40%, transparent); border-spacing: 6px; }

@@ -270,6 +270,9 @@ mod imp {
                         .param_types([u, u])
                         .build(),
                     Signal::builder("check-toggled").param_types([u]).build(),
+                    Signal::builder("cell-pressed")
+                        .param_types([u, u, u])
+                        .build(),
                     Signal::builder("geometry-changed").build(),
                 ]
             })
@@ -716,7 +719,7 @@ mod imp {
             let start = sections.starts[index];
             let Some(title) = model
                 .item(start)
-                .and_then(|item| presenter.section_title(start, &item))
+                .and_then(|item| presenter.section_title(start, &crate::view::presented(&item)))
             else {
                 return;
             };
@@ -898,7 +901,7 @@ mod imp {
                     let Some(item) = model.item(position) else {
                         return 1;
                     };
-                    let title = presenter.title(position, &item);
+                    let title = presenter.title(position, &crate::view::presented(&item));
                     let layout = draw::title_layout(&context, geometry, &title, width);
                     u8::try_from(layout.line_count()).unwrap_or(u8::MAX)
                 })
@@ -923,7 +926,10 @@ mod imp {
             let titles: std::rc::Rc<[f32]> = (0..model.n_items())
                 .map(|position| {
                     model.item(position).map_or(0.0, |item| {
-                        widths.measure(&layout, &presenter.title(position, &item))
+                        widths.measure(
+                            &layout,
+                            &presenter.title(position, &crate::view::presented(&item)),
+                        )
                     })
                 })
                 .collect();
@@ -985,8 +991,10 @@ mod imp {
                     let Some(item) = model.item(position) else {
                         return 1.0;
                     };
-                    let title =
-                        title_chars.measure(&title_layout, &presenter.title(position, &item));
+                    let title = title_chars.measure(
+                        &title_layout,
+                        &presenter.title(position, &crate::view::presented(&item)),
+                    );
                     let subtitle = if geometry.subtitle {
                         presenter
                             .subtitle(position, &item)
@@ -1041,6 +1049,10 @@ mod imp {
                     .borrow()
                     .as_ref()
                     .is_some_and(|(edited, _, _)| edited.get() == position),
+                tree: self
+                    .model()
+                    .and_then(|model| model.item(position))
+                    .and_then(|item| tree_of(&item)),
             }
         }
 
@@ -1069,7 +1081,7 @@ mod imp {
                         let presenter = self.presenter.borrow().clone()?;
                         let mut scratch = self.scratch.borrow_mut();
                         *scratch = ItemContent::default();
-                        presenter.content(position, &item, &mut scratch);
+                        presenter.content(position, &crate::view::presented(&item), &mut scratch);
                         vacant.insert(Entry {
                             _object: item.clone(),
                             content: scratch.clone(),
@@ -1109,7 +1121,11 @@ mod imp {
             entry.icon = icon_key;
             let geometry = self.geometry.borrow();
             let rtl = obj.direction() == gtk::TextDirection::Rtl;
-            let primary = draw::primary_span(&geometry, size, rtl);
+            let outer = draw::primary_span(&geometry, size, rtl);
+            let primary = match state.tree {
+                Some((depth, _)) => draw::tree_span(outer, depth, rtl),
+                None => outer,
+            };
             let words = draw::text_box(&geometry, primary.1, rtl);
             let fonts = self.fonts.get();
             let layouts_for = (
@@ -1143,7 +1159,9 @@ mod imp {
                     .iter()
                     .zip(draw::column_spans(&geometry, size.0, rtl))
                     .map(|(column, (_, width))| match column.shows {
-                        crate::ColumnShows::Primary => None,
+                        crate::ColumnShows::Primary
+                        | crate::ColumnShows::Stars(_)
+                        | crate::ColumnShows::Button(_) => None,
                         crate::ColumnShows::Cell(index) => Some(draw::cell_layout(
                             &probes.title_context(),
                             &geometry,
@@ -1172,6 +1190,7 @@ mod imp {
             let node = draw::item_node(&draw::Item {
                 size,
                 primary,
+                outer,
                 cells: &entry.cells,
                 geometry: &geometry,
                 content: &entry.content,
@@ -1380,7 +1399,7 @@ mod imp {
                     continue;
                 };
                 content = ItemContent::default();
-                presenter.content(position, &item, &mut content);
+                presenter.content(position, &crate::view::presented(&item), &mut content);
                 a11y::describe(
                     &proxy,
                     position,
@@ -1392,6 +1411,7 @@ mod imp {
                         description: content.accessible_description.as_deref(),
                         selected: model.is_selected(position),
                         checked: content.checked,
+                        tree: tree_of(&item),
                         set_size: n,
                     },
                 );
@@ -1607,6 +1627,27 @@ impl ItemView {
 
     /// Whether only what an item draws is the item, and the rest of its cell
     /// the view's background (`Geometry::hit_drawn_only`).
+    /// Where the item at `position`, `size` big, draws its picture and name:
+    /// the primary span, past a tree row's expander.
+    pub(crate) fn primary_of(
+        &self,
+        position: u32,
+        geometry: &Geometry,
+        size: (f32, f32),
+    ) -> (f32, (f32, f32)) {
+        let rtl = self.direction() == gtk::TextDirection::Rtl;
+        let outer = draw::primary_span(geometry, size, rtl);
+        match self
+            .imp()
+            .model()
+            .and_then(|model| model.item(position))
+            .and_then(|item| tree_of(&item))
+        {
+            Some((depth, _)) => draw::tree_span(outer, depth, rtl),
+            None => outer,
+        }
+    }
+
     pub(crate) fn hits_drawn_only(&self) -> bool {
         let geometry = self.imp().geometry.borrow();
         geometry.hit_drawn_only && geometry.columns.is_empty()
@@ -1628,7 +1669,8 @@ impl ItemView {
         // last drawing; a new shape drops them until the next frame, and an
         // item not drawn yet has none, so they are made now from what the item
         // says.
-        let words = draw::text_box(&geometry, size, rtl);
+        let (offset, primary) = self.primary_of(position, &geometry, size);
+        let words = draw::text_box(&geometry, primary, rtl);
         let item = imp.model().and_then(|model| model.item(position))?;
         let key = item.as_ptr() as usize;
         let drawn = imp.cache.borrow().entries.get(&key).map(|entry| {
@@ -1641,7 +1683,7 @@ impl ItemView {
         let (title, subtitle, content) = drawn.unwrap_or_else(|| {
             let mut content = ItemContent::default();
             if let Some(presenter) = imp.presenter.borrow().clone() {
-                presenter.content(position, &item, &mut content);
+                presenter.content(position, &crate::view::presented(&item), &mut content);
             }
             (None, None, content)
         });
@@ -1662,7 +1704,9 @@ impl ItemView {
                 words.width(),
             ))
         });
-        areas.push(draw::card(&geometry, size, rtl, &title, subtitle.as_ref()));
+        areas.push(
+            draw::card(&geometry, primary, rtl, &title, subtitle.as_ref()).offset_r(offset, 0.0),
+        );
         Some(
             areas
                 .into_iter()
@@ -1680,7 +1724,7 @@ impl ItemView {
         let cell = self.item_rect(position)?;
         let geometry = imp.geometry.borrow();
         let rtl = self.direction() == gtk::TextDirection::Rtl;
-        let (offset, size) = draw::primary_span(&geometry, (cell.width(), cell.height()), rtl);
+        let (offset, size) = self.primary_of(position, &geometry, (cell.width(), cell.height()));
         let words = draw::text_box(&geometry, size, rtl);
         let height = match geometry.composition {
             Composition::Stacked => {
@@ -1878,6 +1922,22 @@ impl ItemView {
         )
     }
 
+    /// Run `f` on a press on a [`crate::ColumnShows::Stars`] or
+    /// [`crate::ColumnShows::Button`] cell: the item's position, the column's
+    /// id, and the star pressed (1 to 5; 0 for a button).
+    pub fn connect_cell_pressed<F: Fn(&Self, u32, u32, u32) + 'static>(
+        &self,
+        f: F,
+    ) -> glib::SignalHandlerId {
+        self.connect_closure(
+            "cell-pressed",
+            false,
+            glib::closure_local!(move |view: &Self, position: u32, column: u32, value: u32| {
+                f(view, position, column, value);
+            }),
+        )
+    }
+
     /// Run `f` when an item's own check is pressed ([`crate::TickMode::Check`]).
     pub fn connect_check_toggled<F: Fn(&Self, u32) + 'static>(
         &self,
@@ -1889,4 +1949,19 @@ impl ItemView {
             glib::closure_local!(move |view: &Self, position: u32| f(view, position)),
         )
     }
+}
+
+/// A tree row's depth, and whether it is expanded when it can be.
+pub(crate) fn tree_of(item: &glib::Object) -> Option<(u16, Option<bool>)> {
+    let row = item.downcast_ref::<gtk::TreeListRow>()?;
+    let depth = u16::try_from(row.depth()).unwrap_or(u16::MAX);
+    Some((depth, row.is_expandable().then(|| row.is_expanded())))
+}
+
+/// What the presenter is asked about: the item a tree row holds, else the
+/// model's item itself.
+pub(crate) fn presented(item: &glib::Object) -> glib::Object {
+    item.downcast_ref::<gtk::TreeListRow>()
+        .and_then(gtk::TreeListRow::item)
+        .unwrap_or_else(|| item.clone())
 }

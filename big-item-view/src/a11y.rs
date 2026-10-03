@@ -153,6 +153,8 @@ pub(crate) struct Facts<'a> {
     pub(crate) description: Option<&'a str>,
     pub(crate) selected: bool,
     pub(crate) checked: Option<bool>,
+    /// In a tree: the row's depth, and whether it is expanded when it can be.
+    pub(crate) tree: Option<(u16, Option<bool>)>,
     pub(crate) set_size: u32,
 }
 
@@ -170,6 +172,12 @@ pub(crate) fn describe(proxy: &ItemProxy, position: u32, facts: &Facts<'_>) {
         } else {
             gtk::AccessibleTristate::False
         })]);
+    }
+    if let Some((depth, expanded)) = facts.tree {
+        proxy.update_property(&[gtk::accessible::Property::Level(i32::from(depth) + 1)]);
+        if let Some(expanded) = expanded {
+            proxy.update_state(&[gtk::accessible::State::Expanded(Some(expanded))]);
+        }
     }
     let in_set = i32::try_from(position.saturating_add(1)).unwrap_or(i32::MAX);
     let size = i32::try_from(facts.set_size).unwrap_or(i32::MAX);

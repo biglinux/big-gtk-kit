@@ -124,6 +124,10 @@ pub struct ItemContent {
     pub accessible_label: Option<String>,
     /// What assistive technology reads after the name.
     pub accessible_description: Option<String>,
+    /// Drawn in the accent colour: the item that is playing, or current.
+    pub emphasized: bool,
+    /// Ratings out of five, by [`ColumnShows::Stars`] index.
+    pub ratings: Vec<u8>,
     /// The words of the other columns, by [`ColumnShows::Cell`] index, in a
     /// list with columns.
     pub cells: Vec<String>,
@@ -281,6 +285,13 @@ pub enum ColumnShows {
     Primary,
     /// [`ItemContent::cells`]`[index]`.
     Cell(usize),
+    /// [`ItemContent::ratings`]`[index]` as five stars. A press on the `n`th
+    /// star emits `cell-pressed` with `n`.
+    Stars(usize),
+    /// A symbolic icon drawn on the hovered item and the keyboard's item. A
+    /// press on it emits `cell-pressed` with 0. What it does must also be
+    /// reachable without a pointer (a key, the context menu).
+    Button(&'static str),
 }
 
 impl Geometry {

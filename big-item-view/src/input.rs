@@ -130,14 +130,56 @@ fn on_tick(view: &ItemView, position: u32, x: f64, y: f64) -> bool {
         return false;
     };
     let rtl = view.direction() == gtk::TextDirection::Rtl;
-    let (offset, primary) =
-        crate::draw::primary_span(&geometry, (rect.width(), rect.height()), rtl);
+    let (offset, primary) = view.primary_of(position, &geometry, (rect.width(), rect.height()));
     let tick = crate::draw::tick_box(&geometry, primary, rtl);
     shown
         && tick.contains_point(&graphene::Point::new(
             x as f32 - rect.x() - offset,
             y as f32 - rect.y(),
         ))
+}
+
+/// What a press at `(x, y)` in view coordinates lands on besides the item:
+/// a tree row's expander, or a cell that acts.
+pub(crate) enum Control {
+    Expander(gtk::TreeListRow),
+    Cell { column: u32, value: u32 },
+}
+
+pub(crate) fn control_at(view: &ItemView, position: u32, x: f64, y: f64) -> Option<Control> {
+    let imp = view.imp();
+    let rect = view.item_rect(position)?;
+    let geometry = imp.geometry.borrow();
+    let rtl = view.direction() == gtk::TextDirection::Rtl;
+    let size = (rect.width(), rect.height());
+    let point = graphene::Point::new(x as f32 - rect.x(), y as f32 - rect.y());
+    let item = view.model()?.item(position)?;
+    if let Some(row) = item.downcast_ref::<gtk::TreeListRow>()
+        && row.is_expandable()
+    {
+        let outer = crate::draw::primary_span(&geometry, size, rtl);
+        let depth = u16::try_from(row.depth()).unwrap_or(u16::MAX);
+        if crate::draw::expander_box(&geometry, outer, depth, rtl).contains_point(&point) {
+            return Some(Control::Expander(row.clone()));
+        }
+    }
+    let spans = crate::draw::column_spans(&geometry, size.0, rtl);
+    let (column, span) = geometry
+        .columns
+        .iter()
+        .zip(spans)
+        .find(|(_, (left, width))| (*left..left + width).contains(&point.x()))?;
+    let value = match column.shows {
+        crate::ColumnShows::Stars(_) => {
+            crate::draw::star_at(&geometry, column, span, size.1, point.x(), rtl)?
+        }
+        crate::ColumnShows::Button(_) => 0,
+        crate::ColumnShows::Primary | crate::ColumnShows::Cell(_) => return None,
+    };
+    Some(Control::Cell {
+        column: column.id,
+        value: u32::from(value),
+    })
 }
 
 fn install_click(view: &ItemView) {
@@ -180,6 +222,21 @@ fn install_click(view: &ItemView) {
             }
             return;
         };
+        match control_at(&view, position, x, y) {
+            Some(Control::Expander(row)) => {
+                row.set_expanded(!row.is_expanded());
+                imp.set_cursor(Some(position));
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                return;
+            }
+            Some(Control::Cell { column, value }) => {
+                imp.set_cursor(Some(position));
+                view.emit_by_name::<()>("cell-pressed", &[&position, &column, &value]);
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                return;
+            }
+            None => {}
+        }
         if on_tick(&view, position, x, y) {
             if imp.geometry.borrow().tick == TickMode::Check {
                 view.emit_by_name::<()>("check-toggled", &[&position]);
@@ -241,6 +298,7 @@ fn install_click(view: &ItemView) {
             && !shift
             && let Some(position) = view.position_at(x, y)
             && !on_tick(&view, position, x, y)
+            && control_at(&view, position, x, y).is_none()
         {
             view.emit_by_name::<()>("activate", &[&position]);
         }
@@ -549,6 +607,43 @@ pub(crate) fn step_cursor(view: &ItemView, direction: gtk::DirectionType) -> boo
     move_cursor(view, step, false, false)
 }
 
+/// The tree's answer to the key that opens (`opens`) or closes a row: open
+/// a closed row, close an open one, or go from a child to its parent. `false`
+/// when the cursor is not on a tree row or the key has nothing to do there.
+pub(crate) fn tree_key(view: &ItemView, opens: bool) -> bool {
+    let Some(row) = view
+        .cursor()
+        .and_then(|cursor| view.model()?.item(cursor))
+        .and_then(|item| item.downcast::<gtk::TreeListRow>().ok())
+    else {
+        return false;
+    };
+    if opens {
+        if row.is_expandable() && !row.is_expanded() {
+            row.set_expanded(true);
+            return true;
+        }
+        return false;
+    }
+    if row.is_expanded() {
+        row.set_expanded(false);
+        return true;
+    }
+    let Some(parent) = row.parent() else {
+        return false;
+    };
+    let target = parent.position();
+    if let Some(model) = view.model() {
+        model.select_item(target, true);
+    }
+    let imp = view.imp();
+    imp.anchor.set(Some(target));
+    imp.set_cursor(Some(target));
+    imp.keyboard_cursor.set(true);
+    bring_into_view(view, target);
+    true
+}
+
 fn install_keys(view: &ItemView) {
     let keys = gtk::EventControllerKey::new();
     let weak = view.downgrade();
@@ -563,6 +658,13 @@ fn install_keys(view: &ItemView) {
         } else {
             (Step::Previous, Step::Next)
         };
+        // In a tree, the key towards the reading direction's end opens the
+        // row and the other closes it, or goes to its parent.
+        let opens = matches!(key, gdk::Key::Right | gdk::Key::KP_Right) != rtl;
+        let closes = matches!(key, gdk::Key::Left | gdk::Key::KP_Left) != rtl;
+        if (opens || closes) && !ctrl && !shift && tree_key(&view, opens) {
+            return glib::Propagation::Stop;
+        }
         let step = match key {
             gdk::Key::Left | gdk::Key::KP_Left => Some(back),
             gdk::Key::Right | gdk::Key::KP_Right => Some(forward),
@@ -697,7 +799,7 @@ fn install_tooltip(view: &ItemView) {
         let position = view.position_at(x, y)?;
         let presenter = view.imp().presenter.borrow().clone()?;
         let item = view.model()?.item(position)?;
-        let text = presenter.tooltip(position, &item)?;
+        let text = presenter.tooltip(position, &crate::view::presented(&item))?;
         let rect = view.item_rect(position)?;
         Some((
             text,
@@ -839,4 +941,154 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
         presenter.receive_drop(under, value, want_move)
     });
     view.add_controller(target);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::{Column, ColumnShows, Geometry, ItemContent, ItemPresenter};
+
+    /// Names its items and rates each one its own length.
+    #[derive(Default)]
+    struct Named {
+        seen: RefCell<Vec<String>>,
+    }
+
+    impl ItemPresenter for Named {
+        fn content(&self, _position: u32, item: &glib::Object, out: &mut ItemContent) {
+            let name = item
+                .downcast_ref::<gtk::StringObject>()
+                .expect("the presenter gets the item a tree row holds")
+                .string()
+                .to_string();
+            self.seen.borrow_mut().push(name.clone());
+            out.ratings = vec![u8::try_from(name.len()).unwrap_or(5).min(5)];
+            out.title = name;
+        }
+    }
+
+    fn pump() {
+        let context = glib::MainContext::default();
+        for _ in 0..20 {
+            while context.iteration(false) {}
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    /// "a" holds "a1" and "a2"; "b" holds nothing.
+    fn tree() -> gtk::TreeListModel {
+        let root = gtk::StringList::new(&["a", "b"]);
+        gtk::TreeListModel::new(root, false, false, |item| {
+            let name = item.downcast_ref::<gtk::StringObject>()?.string();
+            (name == "a").then(|| gtk::StringList::new(&["a1", "a2"]).upcast())
+        })
+    }
+
+    fn row(view: &ItemView, position: u32) -> gtk::TreeListRow {
+        view.model()
+            .and_then(|model| model.item(position))
+            .and_downcast()
+            .expect("a tree row")
+    }
+
+    /// A tree opens and closes from its expander and from the keyboard, the
+    /// presenter only ever sees the items the rows hold, and a press on a
+    /// star rates the item with that star.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn a_tree_opens_and_closes_and_a_star_rates() {
+        let presenter = Rc::new(Named::default());
+        let mut geometry = Geometry::rows(16);
+        geometry.columns = vec![
+            Column {
+                id: 0,
+                title: "Name".into(),
+                shows: ColumnShows::Primary,
+                width: 200,
+                expand: true,
+                xalign: 0.0,
+                sort: None,
+            },
+            Column {
+                id: 9,
+                title: "Rating".into(),
+                shows: ColumnShows::Stars(0),
+                width: 100,
+                expand: false,
+                xalign: 0.0,
+                sort: None,
+            },
+        ];
+        let view = ItemView::new(presenter.clone(), geometry.clone());
+        let model = tree();
+        view.set_model(Some(&gtk::SingleSelection::new(Some(model.clone()))));
+        let window = gtk::Window::builder()
+            .default_width(400)
+            .default_height(300)
+            .child(&view)
+            .build();
+        window.present();
+        pump();
+        assert_eq!(model.n_items(), 2);
+
+        // The expander of "a", pressed where it is drawn.
+        let cell = view.item_rect(0).expect("a is shown");
+        let outer = crate::draw::primary_span(&geometry, (cell.width(), cell.height()), false);
+        let spot = crate::draw::expander_box(&geometry, outer, 0, false);
+        let (x, y) = (
+            f64::from(cell.x() + spot.x() + 2.0),
+            f64::from(cell.y() + spot.y() + 2.0),
+        );
+        match control_at(&view, 0, x, y) {
+            Some(Control::Expander(row)) => row.set_expanded(true),
+            _ => panic!("the expander of a is under the press"),
+        }
+        pump();
+        assert_eq!(model.n_items(), 4);
+        // "b" has no children: no expander to press.
+        let cell_b = view.item_rect(3).expect("b is shown");
+        assert!(control_at(&view, 3, x, f64::from(cell_b.y() + spot.y() + 2.0)).is_none());
+
+        // The keyboard: from "a1", closing goes to its parent, then closes it.
+        view.imp().set_cursor(Some(1));
+        assert!(tree_key(&view, false));
+        assert_eq!(view.cursor(), Some(0));
+        assert!(tree_key(&view, false));
+        pump();
+        assert!(!row(&view, 0).is_expanded());
+        assert_eq!(model.n_items(), 2);
+        assert!(tree_key(&view, true));
+        assert!(row(&view, 0).is_expanded());
+        assert!(!tree_key(&view, true), "an open row opens no further");
+        pump();
+
+        // The third star of "a2".
+        let cell = view.item_rect(2).expect("a2 is shown");
+        let spans = crate::draw::column_spans(&geometry, cell.width(), false);
+        let first = crate::draw::cell_icons(
+            &geometry,
+            &geometry.columns[1],
+            spans[1],
+            cell.height(),
+            5,
+            false,
+        );
+        let x = f64::from(cell.x() + first.x() + 2.0 * crate::draw::CELL_ICON + 2.0);
+        let y = f64::from(cell.y() + first.y() + 2.0);
+        assert!(matches!(
+            control_at(&view, 2, x, y),
+            Some(Control::Cell {
+                column: 9,
+                value: 3
+            })
+        ));
+
+        let seen = presenter.seen.borrow();
+        assert!(seen.iter().any(|name| name == "a1"), "{seen:?}");
+        drop(seen);
+        window.destroy();
+    }
 }
