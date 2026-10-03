@@ -3,7 +3,7 @@ name = "big-item-view"
 version = "0.1.0"
 publish = false
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.98.1"
 license = "MIT"
 description = "A drawn, virtualized view of many items: icon grid, column flow and rows"
 repository = "https://github.com/biglinux/big-gtk-kit"
@@ -11,5 +11,5 @@ keywords = ["gtk4", "virtualized", "grid", "biglinux"]
 categories = ["gui"]
 
 [dependencies]
-gtk = { version = "0.11", features = ["v4_12"], package = "gtk4" }
+gtk = { version = "0.11", features = ["v4_22"], package = "gtk4" }
 big-gtk-kit = { path = ".." }
