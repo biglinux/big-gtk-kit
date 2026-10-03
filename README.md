@@ -33,8 +33,14 @@ theme draws them.
 big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
 ```
 
-Python (PyGObject): the `python-big-gtk-kit` package (`pkgbuild/PKGBUILD`) in
-the program's `depends`.
+Python (PyGObject): each program ships `python/big_gtk_kit` inside its own
+package, pinned to a commit of this repository, and puts it beside its own
+modules. Its PKGBUILD adds the source and copies the directory:
+
+```sh
+source+=("big-gtk-kit::git+https://github.com/biglinux/big-gtk-kit.git#commit=…")
+cp -a "${srcdir}/big-gtk-kit/python/big_gtk_kit" "${pkgdir}/<program's module directory>/"
+```
 
 ## Install
 
