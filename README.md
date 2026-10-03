@@ -1,9 +1,9 @@
 # big-gtk-kit
 
-GTK4 building blocks shared by the BigLinux programs, in Rust (`src/`) and
-Python (`python/`), and the tools that check them. A piece enters only when it
-is GTK-generic, used by more than one program or backed by a measurement, and
-it depends on nothing but GTK and libadwaita: no code of any application.
+GTK4 building blocks shared by the BigLinux Rust programs, and the tools that
+check them. A piece enters only when it is GTK-generic, used by more than one
+program or backed by a measurement, and it depends on nothing but GTK and
+libadwaita: no code of any application.
 
 When GTK or libadwaita gets something wrong, the fix lives here, as a different
 way of doing the same thing — never as a patch to the library. Each workaround
@@ -33,26 +33,14 @@ theme draws them.
 big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
 ```
 
-Python (PyGObject): each program ships `python/big_gtk_kit` inside its own
-package, taken from this repository's `main`, and puts it beside its own
-modules. Its PKGBUILD adds the source and copies the directory, dereferencing
-the stylesheet link to `src/`:
-
-```sh
-source+=("big-gtk-kit::git+https://github.com/biglinux/big-gtk-kit.git#branch=main")
-cp -rL "${srcdir}/big-gtk-kit/python/big_gtk_kit" "${pkgdir}/<program's module directory>/"
-```
+The Python programs carry their own copy of the Python port (`big_gtk_kit`:
+`install()` with the tooltip card, the dialog focus fix and the popup-parent
+release), so they need nothing from this repository.
 
 ## Install
 
 ```rust
 app.connect_startup(|_| big_gtk_kit::install());
-```
-
-```python
-import big_gtk_kit
-
-app.connect("startup", lambda _app: big_gtk_kit.install())
 ```
 
 This turns on what needs no change at the call sites:
@@ -109,10 +97,6 @@ deriving the accessible name and description from the tooltip.
 - `tooltip::set_area_tips(&view, |view, x, y| ...)` gives a widget that draws
   its own items one tip per item, in place of answering GTK's `query-tooltip`.
 
-Both draw the card from the same `tooltip.css`. Python has `install()` only;
-the functions above, and the workarounds, stay Rust-only until a Python program
-needs one.
-
 `cargo run --example tooltip_demo` shows every case (`BIG_DEMO_DARK=1` for the
 dark card, `BIG_DEMO_FOLLOW=1` to follow the pointer).
 
@@ -124,7 +108,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 tools/headless-gate.sh cargo test --workspace -- --include-ignored
 cargo deny check
 ruff check . && ruff format --check .
-tools/headless-gate.sh python -m pytest python/tests
 ```
 
 The ignored tests need a display; `tools/headless-gate.sh` runs them in a

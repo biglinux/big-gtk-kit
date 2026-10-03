@@ -1,6 +1,0 @@
-# The Python half of the kit: programs copy python/big_gtk_kit into their own
-# packages, so nothing here is built or installed.
-[tool.pytest.ini_options]
-pythonpath = ["python"]
-# PyGObject's own deprecations under Python 3.14, thousands per run; ours still show.
-filterwarnings = ["ignore::DeprecationWarning:gi.*"]
