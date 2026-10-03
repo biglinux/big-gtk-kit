@@ -20,6 +20,16 @@ big-gtk-kit = { git = "https://github.com/biglinux/big-gtk-kit" }
 `deny.toml` in each consumer allows git sources from the `biglinux` GitHub
 organisation only.
 
+`big-item-view/` is a second crate in this workspace: one drawn, virtualized
+widget for an icon grid, a column flow or rows with columns. A list of 5 000
+items is 44 widgets instead of a `GtkColumnView`'s 2 903 (+1.6 MiB against
++10.0 MiB). Coloured icons come from the caller's `IconLoader`, else GTK's icon
+theme draws them.
+
+```toml
+big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
+```
+
 Python (PyGObject): the `python-big-gtk-kit` package (`pkgbuild/PKGBUILD`) in
 the program's `depends`.
 

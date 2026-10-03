@@ -8,6 +8,9 @@ repository = "https://github.com/biglinux/big-gtk-kit"
 description = "GTK4 building blocks shared by the BigLinux programs"
 publish = false
 
+[workspace]
+members = ["big-item-view"]
+
 [dependencies]
 gtk = { version = "0.11", features = ["v4_12"], package = "gtk4" }
 # ToggleGroup, for the view switcher, is libadwaita 1.7.

@@ -17,6 +17,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "big-item-view"
+version = "0.1.0"
+dependencies = [
+ "big-gtk-kit",
+ "gtk4",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
