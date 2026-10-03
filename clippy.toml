@@ -15,7 +15,7 @@ disallowed-methods = [
     { path = "libadwaita::prelude::AdwDialogExt::add_breakpoint", reason = "the breakpoint outlives the dialog (libadwaita 1.9); use `big_gtk_kit::breakpoint::add`" },
     { path = "libadwaita::prelude::BreakpointBinExt::add_breakpoint", reason = "the breakpoint outlives the bin (libadwaita 1.9); use `big_gtk_kit::breakpoint::add`" },
     { path = "gtk4::Switch::set_active", reason = "cancels a click's slide even when the value is unchanged (GTK 4.22), so a refresh swallows the click; use `big_gtk_kit::switch::set_active`" },
-    { path = "gio::Menu::append_section", reason = "GTK 4.22's menu tracker keeps every section it shows; use `big_gtk_kit::menu::append_shared_section`" },
+    { path = "gio::Menu::append_section", reason = "GTK 4.22's menu tracker keeps every section it shows; use `big_gtk_kit::menu::append_shared_section`, or `append_refilled_section` for items that vary per build" },
 ]
 disallowed-types = [
     { path = "libadwaita::InlineViewSwitcher", reason = "leaks a widget tree per page (libadwaita 1.9); use `big_gtk_kit::view_switcher::toggles_for` over a `gtk::Stack`" },

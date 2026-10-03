@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use gtk::gio;
+use gtk::gio::prelude::*;
 
 thread_local! {
     static SECTIONS: RefCell<HashMap<&'static str, gio::Menu>> = RefCell::default();
@@ -36,6 +37,32 @@ pub fn append_shared_section(
     menu.append_section(label, &section);
 }
 
+/// Append to `menu` the section kept under `key`, emptied and refilled by
+/// `fill`; an empty section is left out.
+///
+/// For sections whose items change between builds, such as a context menu
+/// made per click: the lost references then pile up on the one section kept
+/// per key instead of on a new one each build. Refilling also changes the
+/// section in any other live menu showing `key`, so use it only where each
+/// menu is rebuilt before it is shown.
+pub fn append_refilled_section(
+    menu: &gio::Menu,
+    label: Option<&str>,
+    key: &'static str,
+    fill: impl FnOnce(&gio::Menu),
+) {
+    let section = SECTIONS.with_borrow_mut(|sections| sections.entry(key).or_default().clone());
+    section.remove_all();
+    fill(&section);
+    if section.n_items() > 0 {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the one place allowed to add sections"
+        )]
+        menu.append_section(label, &section);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -48,7 +75,7 @@ mod tests {
 
     /// One section for every window's menu; each window's own menu and
     /// popover still finalize.
-    #[test]
+    #[gtk::test]
     #[ignore = "needs a display"]
     fn a_shared_section_is_built_once() {
         gtk::init().expect("a display");
@@ -76,5 +103,39 @@ mod tests {
             pump();
         }
         assert_eq!((built.get(), finalized.get()), (1, 25));
+    }
+
+    /// A context menu rebuilt with 0, 5 and 25 items keeps one section, and
+    /// every menu that showed it finalizes.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn a_refilled_section_is_kept_once() {
+        gtk::init().expect("a display");
+        let finalized = Rc::new(Cell::new(0));
+        let mut sections = Vec::new();
+        for size in [0, 5, 25].repeat(25) {
+            let menu = gio::Menu::new();
+            append_refilled_section(&menu, None, "big-gtk-kit-refill-test", |section| {
+                for item in 0..size {
+                    section.append(Some(&item.to_string()), Some("app.open"));
+                }
+                sections.push(section.clone());
+            });
+            assert_eq!(menu.n_items(), i32::from(size > 0));
+            watch(&menu, &finalized);
+            let button = gtk::MenuButton::builder().menu_model(&menu).build();
+            let window = gtk::Window::builder().child(&button).build();
+            window.present();
+            pump();
+            button.popup();
+            pump();
+            button.popdown();
+            drop((menu, button));
+            window.destroy();
+            drop(window);
+            pump();
+        }
+        assert!(sections.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(finalized.get(), 75);
     }
 }
