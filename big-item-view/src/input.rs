@@ -173,6 +173,7 @@ pub(crate) fn control_at(view: &ItemView, position: u32, x: f64, y: f64) -> Opti
         crate::ColumnShows::Stars(_) => {
             crate::draw::star_at(&geometry, column, span, size.1, point.x(), rtl)?
         }
+        crate::ColumnShows::Button(_) if imp.hides_button(&item) => return None,
         crate::ColumnShows::Button(_) => 0,
         crate::ColumnShows::Primary | crate::ColumnShows::Cell(_) => return None,
     };
@@ -969,6 +970,7 @@ mod tests {
                 .to_string();
             self.seen.borrow_mut().push(name.clone());
             out.ratings = vec![u8::try_from(name.len()).unwrap_or(5).min(5)];
+            out.hides_button = name == "b";
             out.title = name;
         }
     }
@@ -1022,6 +1024,15 @@ mod tests {
                 width: 100,
                 expand: false,
                 xalign: 0.0,
+                sort: None,
+            },
+            Column {
+                id: 8,
+                title: String::new(),
+                shows: ColumnShows::Button("go-next-symbolic"),
+                width: 30,
+                expand: false,
+                xalign: 0.5,
                 sort: None,
             },
         ];
@@ -1088,6 +1099,34 @@ mod tests {
                 value: 3
             })
         ));
+
+        // The button of "a2" answers; "b" has none.
+        let button = |position: u32| {
+            let cell = view.item_rect(position).expect("shown");
+            let spans = crate::draw::column_spans(&geometry, cell.width(), false);
+            let spot = crate::draw::cell_icons(
+                &geometry,
+                &geometry.columns[2],
+                spans[2],
+                cell.height(),
+                1,
+                false,
+            );
+            control_at(
+                &view,
+                position,
+                f64::from(cell.x() + spot.x() + 2.0),
+                f64::from(cell.y() + spot.y() + 2.0),
+            )
+        };
+        assert!(matches!(
+            button(2),
+            Some(Control::Cell {
+                column: 8,
+                value: 0
+            })
+        ));
+        assert!(button(3).is_none(), "b hides its button");
 
         let seen = presenter.seen.borrow();
         assert!(seen.iter().any(|name| name == "a1"), "{seen:?}");

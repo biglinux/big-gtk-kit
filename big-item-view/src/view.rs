@@ -1254,6 +1254,16 @@ mod imp {
             self.icons.borrow().get(&key)
         }
 
+        /// Whether `item`, as last drawn, has no button. Only drawn items
+        /// are pressed.
+        pub(crate) fn hides_button(&self, item: &glib::Object) -> bool {
+            self.cache
+                .borrow()
+                .entries
+                .get(&(item.as_ptr() as usize))
+                .is_some_and(|entry| entry.content.hides_button)
+        }
+
         fn icon_arrived(&self, key: IconKey, state: IconState) {
             self.icons.borrow_mut().settle(key.clone(), state);
             // Only the items drawing this icon are drawn again. The cache may be

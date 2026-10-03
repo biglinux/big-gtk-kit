@@ -518,7 +518,9 @@ fn draw_cells(snapshot: &gtk::Snapshot, item: &Item<'_>) {
             }
             ColumnShows::Button(name) => {
                 let state = item.state;
-                if state.hovered || (state.cursor && state.focus_visible) {
+                if !item.content.hides_button
+                    && (state.hovered || (state.cursor && state.focus_visible))
+                {
                     let spot = cell_icons(geometry, column, (x, width), item.size.1, 1, item.rtl);
                     symbolic_at(snapshot, item, name, &spot, item.palette.get(Role::TextDim));
                 }
@@ -583,6 +585,12 @@ fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect
             snapshot.pop();
         }
         Picture::Paintable(paintable) => {
+            let icon = if item.content.frame == IconFrame::Small {
+                let (w, h) = (icon.width() / 2.0, icon.height() / 2.0);
+                graphene::Rect::new(icon.x() + w / 2.0, icon.y() + h / 2.0, w, h)
+            } else {
+                *icon
+            };
             snapshot.save();
             snapshot.translate(&graphene::Point::new(icon.x(), icon.y()));
             let (w, h) = (f64::from(icon.width()), f64::from(icon.height()));

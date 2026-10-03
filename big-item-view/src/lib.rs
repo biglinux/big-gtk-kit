@@ -134,6 +134,9 @@ pub struct ItemContent {
     pub emphasized: bool,
     /// Ratings out of five, by [`ColumnShows::Stars`] index.
     pub ratings: Vec<u8>,
+    /// The item has no [`ColumnShows::Button`]: nothing is drawn or pressed
+    /// there (a song among albums that open).
+    pub hides_button: bool,
     /// The words of the other columns, by [`ColumnShows::Cell`] index, in a
     /// list with columns.
     pub cells: Vec<String>,
@@ -164,6 +167,9 @@ pub enum IconFrame {
     /// photograph shown as a cover. A soft placeholder holds its place while
     /// the item has no picture yet.
     Cover,
+    /// Half the picture box, centred: a symbolic mark of a kind of item in
+    /// rows whose other items show covers.
+    Small,
 }
 
 /// A small mark on a corner of an item's picture.
