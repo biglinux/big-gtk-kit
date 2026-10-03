@@ -125,7 +125,6 @@ private KWin session.
 
 ## tools/
 
-Leak detection for GTK4 programs (formerly `gtk4-leak-guard`): a static
-checker for Rust sources, plus a per-type sweep over open/close cycles with a
-GObject census and a reference tracer that work on any GLib process. See
-`tools/README.md` (Portuguese).
+Leak detection for GTK4 programs: a static checker for Rust sources, plus a
+per-type sweep over open/close cycles with a GObject census and a reference
+tracer that work on any GLib process. See `tools/README.md`.

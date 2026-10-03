@@ -1,142 +1,145 @@
-# Ferramentas de vazamento do big-gtk-kit
+# big-gtk-kit leak tools
 
-Verificações automáticas de vazamento de memória para programas GTK4, nascidas da caça de
-2026-09-26 no desktop BigLinux. Três peças, da mais barata à mais precisa; cada uma responde o
-que a anterior não consegue. O verificador estático lê só Rust; a varredura, o censo e o
-`reftrace` valem para qualquer processo GLib (Rust, C, Python, Vala).
+Automated memory leak checks for GTK4 programs. Three pieces, from the cheapest
+to the most precise; each answers what the one before cannot. The static
+checker reads Rust only; the sweep, the census and `reftrace` work on any GLib
+process (Rust, C, Python, Vala).
 
-| Peça | Pergunta | Precisa de tela |
+| Piece | Question | Needs a display |
 |---|---|---|
-| `static/leak_lint.py` | o código tem um formato que já vazou? | não |
-| `sweep/leak_sweep.py` + `build/libgobject-census.so` | abrir e fechar esta tela deixa objetos de que tipo? | sim (sessão isolada com AT-SPI) |
-| `build/reftrace.so` + `reftrace/reftrace.py` | quem segura o objeto que sobrou? | sim |
+| `static/leak_lint.py` | does the code have a shape that has leaked before? | no |
+| `sweep/leak_sweep.py` + `build/libgobject-census.so` | which object types does opening and closing this screen leave behind? | yes (isolated session with AT-SPI) |
+| `build/reftrace.so` + `reftrace/reftrace.py` | who holds the object that was left? | yes |
 
-Requisitos: Python ≥ 3.11 (só biblioteca padrão; o driver usa `gi` com Atspi), GLib/GObject e um
-compilador C. `make` constrói as duas bibliotecas; `make check` roda o teste de controle do
-censo e os testes das ferramentas em Python; `make check-gtk` roda o censo por sinal num programa
-GTK de verdade, dentro de `headless-gate.sh` (precisa de `kwin_wayland`).
+Requirements: Python ≥ 3.11 (standard library only; the driver uses `gi` with
+Atspi), GLib/GObject and a C compiler. `make` builds both libraries;
+`make check` runs the census control test and the Python tool tests;
+`make check-gtk` runs the signal-triggered census on a real GTK program inside
+`headless-gate.sh` (needs `kwin_wayland`).
 
-`headless-gate.sh [--accessible] COMANDO...` roda o comando numa sessão KWin virtual e privada,
-com barramento D-Bus próprio; `--accessible` sobe também o barramento de acessibilidade e um
-HOME descartável, que é o que a varredura precisa.
+`headless-gate.sh [--accessible] COMMAND...` runs the command in a private
+virtual KWin session with its own D-Bus bus; `--accessible` also starts the
+accessibility bus and a throwaway HOME, which is what the sweep needs.
 
-## 1. Verificador estático
+## 1. Static checker
 
-    static/leak_lint.py [--json] [--no-icons] [--errors-only] CAMINHO...
+    static/leak_lint.py [--json] [--no-icons] [--errors-only] PATH...
 
-Erros (saída 1): `unparent()` dentro do `closed` do próprio popover, fechar janela detectando
-`destroy`, `set_parent` sem `unparent`, `teardown` que lê o filho do item de lista, ícone com
-imagem embutida (nos temas instalados na máquina que roda o verificador). Avisos: handler que segura o próprio widget ou um ancestral (também através de
-uma closure guardada em `Rc`, de um filho posto por builder ou de um controlador), irmãos que se
-seguram mutuamente, listas de seguidores podadas tarde, handler num objeto que vive o processo
-inteiro (área de transferência do display, `VolumeMonitor`, a aplicação vista de um componente)
-com o id descartado. Lê só arquivos `.rs`; código de teste é ignorado e um arquivo ilegível é
-pulado com aviso.
+Errors (exit 1): `unparent()` inside the popover's own `closed` handler,
+closing a window by watching `destroy`, `set_parent` without `unparent`, a
+`teardown` that reads the list item's child, an icon with an embedded image (in
+the themes installed on the machine running the checker). Warnings: a handler
+that holds its own widget or an ancestor (also through a closure kept in an
+`Rc`, a child set by a builder, or a controller), siblings that hold each
+other, follower lists pruned too late, a handler on an object that lives as
+long as the process (the display clipboard, `VolumeMonitor`, the application
+seen from a component) with its id thrown away. Reads `.rs` files only; test
+code is ignored and an unreadable file is skipped with a warning.
 
-Dispensa, sempre com motivo (sem motivo é erro):
+A finding is waived with a reason; a waiver without one is an error:
 
-    // leak-guard: allow(set-parent-without-unparent) o pai é um GtkOverlay, que desfaz no dispose
+    // leak-guard: allow(set-parent-without-unparent) the parent is a GtkOverlay, which undoes it on dispose
 
-## 2. Varredura por tipo
+## 2. Per-type sweep
 
-    headless-gate.sh --accessible python3 sweep/leak_sweep.py SUPERFICIES.toml \
-        [--only NOME...] [--quick] [--cycles N] [--json SAIDA] [--library CAMINHO]
+    headless-gate.sh --accessible python3 sweep/leak_sweep.py SURFACES.toml \
+        [--only NAME...] [--quick] [--cycles N] [--json OUT] [--library PATH]
 
-O driver inicia o programa com o censo pré-carregado, espera o app no barramento de
-acessibilidade e, para cada superfície: aquece, tira o censo A, abre e fecha N vezes, tira o
-censo B e confirma com uma segunda rodada. Um tipo que ganhou ≥ 1 instância por ciclo é
-vazamento, salvo `[[allow]]` com teto por ciclo e motivo (no arquivo ou na superfície). Uma
-superfície que não fecha de verdade é relatada como tal. Saída 0 limpo, 1 vazamento, 2 não rodou
-(arquivo incompleto, programa ou `gdbus` ausente); `LEAK_SWEEP_DIR` escolhe onde ficam censos e o
-log do programa.
+The driver starts the program with the census preloaded, waits for the app on
+the accessibility bus and, for each surface: warms up, takes census A, opens
+and closes it N times, takes census B and confirms with a second round. A type
+that gained at least one instance per cycle is a leak, unless an `[[allow]]`
+with a per-cycle ceiling and a reason covers it (in the file or in the
+surface). A surface that does not really close is reported as such. Exit 0
+clean, 1 leak, 2 did not run (incomplete file, missing program or `gdbus`);
+`LEAK_SWEEP_DIR` chooses where the censuses and the program log go.
 
-`command` tem de executar o próprio programa GTK: o driver pede o censo por sinal ao processo que
-iniciou, e um script intermediário receberia o sinal no lugar dele. `{workdir}` é o único
-marcador substituído; as sementes de `[program.files]` ficam sempre dentro dele.
+`command` must execute the GTK program itself: the driver asks the process it
+started for a census by signal, and an intermediate script would receive the
+signal instead. `{workdir}` is the only placeholder substituted; the seeds of
+`[program.files]` always live inside it.
 
-Formato do arquivo de superfícies (exemplos completos no bigdesktop, em `scripts/leak-surfaces/`):
+Surface file format:
 
 ```toml
 cycles = 6
 
 [program]
-command = ["target/debug/app", "{workdir}/pasta"]   # {workdir}: diretório descartável
+command = ["target/debug/app", "{workdir}/folder"]  # {workdir}: throwaway directory
 atspi_name = "app"
-dbus_name = "org.exemplo.App"
-window_path = "/org/exemplo/App/window/1"
+dbus_name = "org.example.App"
+window_path = "/org/example/App/window/1"
 
 [program.env]
 XDG_CONFIG_HOME = "{workdir}/config"
 
-[program.files]                                     # sementes dentro de {workdir}
-"pasta/nota.txt" = "um\n"
+[program.files]                                     # seeds inside {workdir}
+"folder/note.txt" = "one\n"
 
 [[allow]]
 type = "AdwBreakpoint"
 per_cycle = 3
-reason = "libadwaita 1.9.3: AdwBreakpointBin nunca solta seus breakpoints"
+reason = "libadwaita 1.9.3: AdwBreakpointBin never releases its breakpoints"
 
 [[surface]]
-name = "preferências"
+name = "preferences"
 quick = true
 open = [{ do = "action", name = "preferences", settle = 1.0 }]
 close = [{ do = "dismiss" }]
 ```
 
-Passos: `action` (org.gtk.Actions.Activate), `dbus`, `command`, `toggle`/`click` (por nome
-acessível), `dismiss` (Cancelar/Fechar em diálogos e janelas além da primeira), `close-new`
-(o mesmo, só nas janelas que o ciclo abriu: para um shell que hospeda os apps), `wait`.
+Steps: `action` (org.gtk.Actions.Activate), `dbus`, `command`, `toggle` and
+`click` (by accessible name), `dismiss` (Cancel/Close in dialogs and in windows
+beyond the first), `close-new` (the same, only in the windows the cycle opened:
+for a shell that hosts the apps), `wait`.
 
-O censo serve para qualquer processo GLib, sem o driver:
+The census works on any GLib process, without the driver:
 
-    GOBJECT_CENSUS_OUT=DIR/c LD_PRELOAD=build/libgobject-census.so programa
-    kill -USR2 PID        # escreve DIR/c.PID.1, .2, ...
+    GOBJECT_CENSUS_OUT=DIR/c LD_PRELOAD=build/libgobject-census.so program
+    kill -USR2 PID        # writes DIR/c.PID.1, .2, ...
 
-Cada linha é `contagem Tipo` (e `contagem texture LxA`). A contagem é aproximada: só as
-diferenças entre dois censos do mesmo processo significam algo. Só páginas residentes são lidas:
-um objeto que foi para a swap não é contado. Como conta: o GLib de
-distribuição não é construído com `G_ENABLE_DEBUG`, então `g_type_get_instance_count` dá 0; o
-censo varre a memória anônima do próprio processo procurando ponteiros de classe, e só conta um
-quando há contagem de referências plausível e, com o malloc da glibc, um bloco vivo do tamanho
-exato de dados privados + instância começando no lugar certo. Com outro alocador (jemalloc,
-tcmalloc, mimalloc, ASan) esse último teste não existe: o censo começa com a linha
-`# malloc layout unknown`, e cópias do cabeçalho de um objeto contam como objetos. Diferenças
-continuam valendo; a contagem absoluta fica maior.
+Each line is `count Type` (and `count texture WxH`). Counts are approximate:
+only the difference between two censuses of the same process means something.
+Only resident pages are read, so an object swapped out is not counted.
 
-## 3. Quem segura
+How it counts: distribution GLib is not built with `G_ENABLE_DEBUG`, so
+`g_type_get_instance_count` returns 0. The census scans the process's own
+anonymous memory for class pointers and counts one only when it has a
+plausible reference count and, with glibc malloc, a live block of exactly the
+private data plus instance size starting at the right place. With another
+allocator (jemalloc, tcmalloc, mimalloc, ASan) that last test is unavailable:
+the census starts with the line `# malloc layout unknown`, and copies of an
+object's header count as objects. Differences still hold; absolute counts are
+higher.
 
-    LD_PRELOAD=build/reftrace.so REFTRACE_TYPE=AdwDialog REFTRACE_OUT=DIR/rt programa
-    reftrace/reftrace.py DIR/rt.PID BINARIO --objects        # vivos e liberados
-    reftrace/reftrace.py DIR/rt.PID BINARIO --object N       # sítios que tomaram mais que soltaram
+## 3. Who holds it
 
-Cada evento é `N|R|S|s|U endereço contagem quadros…`, com a contagem de ANTES da operação: `N` é
-a criação (`g_object_new` chamado de fora do libgobject), `s` o afundamento da referência
-flutuante (assume a referência, não soma), `U 1` é a última liberação. Um sobrevivente cujas referências rastreadas se equilibram é segurado por
-quem nunca chamou `g_object_ref` nele: a lista de janelas do GTK (janela nunca destruída) ou um
-valor Rust nunca descartado.
+    LD_PRELOAD=build/reftrace.so REFTRACE_TYPE=AdwDialog REFTRACE_OUT=DIR/rt program
+    reftrace/reftrace.py DIR/rt.PID BINARY --objects        # alive and released
+    reftrace/reftrace.py DIR/rt.PID BINARY --object N       # call sites that took more than they gave back
 
-## Vazamentos conhecidos das bibliotecas
+Each event is `N|R|S|s|U address count frames…`, with the count BEFORE the
+operation: `N` is creation (`g_object_new` called from outside libgobject),
+`s` sinks the floating reference (takes it over, adds nothing), `U 1` is the
+last release. A survivor whose traced references balance is held by something
+that never called `g_object_ref` on it: GTK's window list (a window never
+destroyed) or a Rust value never dropped.
 
-Medidos em 2026-09-26 e 2026-10-02, no GTK 4.22.4, libadwaita 1.9.3 e GtkSourceView 5.20.0; o que o kit
-contorna está na coluna da direita, e o que sobra vira um `[[allow]]` no arquivo de superfícies de quem o encontra.
-Toda exceção leva teto por ciclo (por exemplo `AdwBreakpoint ≤ 3 por ciclo`): exceção sem teto
-esconde regressão.
+## Known library leaks
 
-| Tipo | Crescimento | Origem | No kit |
+Measured on GTK 4.22.4, libadwaita 1.9.3 and GtkSourceView 5.20.0. The right
+column says what the kit works around; whatever remains becomes an `[[allow]]`
+in the surface file of whoever meets it. Every exception carries a per-cycle
+ceiling (for example `AdwBreakpoint ≤ 3 per cycle`): an exception without one
+hides regressions.
+
+| Type | Growth | Cause | In the kit |
 |---|---|---|---|
-| `AdwBreakpoint` | 1 por breakpoint do programa, por janela/diálogo fechado | libadwaita 1.9.3 `adw_breakpoint_bin_init` (array sem função de liberação) | `breakpoint::add` |
-| `AdwBreakpoint` | 3 por abertura de `AdwDialog` adaptativo | o mesmo, nos breakpoints que o diálogo cria para si | inalcançável: `[[allow]]` com teto 3 por ciclo |
-| a árvore inteira do diálogo | por diálogo fechado sobre janela sem foco | libadwaita 1.9 não devolve foco; GTK 4.22 perde a referência do foco adiado | `install()` (foco tirado no `closed`) |
-| `AdwShortcutsSection`, itens, `GtkFilterListModel`, `GtkCustomFilter`, `AdwTimedAnimation` | 1 conjunto por abertura de `AdwShortcutsDialog` | o desmonte do diálogo | `dialog::present_kept` |
-| `GdkWaylandToplevel` | 1 por janela que mostrou popover, menu ou tooltip | GDK 4.22.4 (e `main`): o popup Wayland toma o pai com `g_value_dup_object` e nunca solta | `install()` (solta ao finalizar o popup) |
-| `GMenu` | 1 por seção mostrada, por menu construído | GTK 4.22 `gtk_menu_tracker_add_items` (seção não fundida) | `menu::append_shared_section` |
-| `GSignalGroup` ×3, `GtkAdjustment` ×4 | por `GtkSourceView` com mapa | GtkSourceView 5.20: `GtkSourceCompletion` cria três grupos no init e nunca os libera | inalcançável |
-| `GskVulkanImage`, `GtkCssStaticStyle`, `GtkIconPaintable`, `GskFillNode`/`GskColorNode` | poucos por abertura, estabiliza | caches do GTK | — (cache, não vazamento: memória estável em 20 aberturas) |
-
-## Onde está em uso
-
-- bigdesktop: `scripts/leak-gate.sh` roda o verificador, os censos do projeto e as varreduras
-  (`--full` para todas as superfícies); `clippy.toml` bane as APIs que vazam.
-- Harness: `~/.agents/skills/gtk-ui-ux/SKILL.md`,
-  `~/.agents/skills/linux-ui-a11y/references/memory-leak-checking.md`,
-  `~/.agents/templates/clippy/gtk4-libadwaita.toml`.
+| `AdwBreakpoint` | 1 per program breakpoint, per closed window or dialog | libadwaita 1.9.3 `adw_breakpoint_bin_init` (array without a free function) | `breakpoint::add` |
+| `AdwBreakpoint` | 3 per adaptive `AdwDialog` opening | the same, in the breakpoints the dialog makes for itself | unreachable: `[[allow]]` with a ceiling of 3 per cycle |
+| the dialog's whole tree | per dialog closed over a window without focus | libadwaita 1.9 restores no focus; GTK 4.22 loses the reference of the deferred focus | `install()` (focus taken out on `closed`) |
+| `AdwShortcutsSection`, items, `GtkFilterListModel`, `GtkCustomFilter`, `AdwTimedAnimation` | 1 set per `AdwShortcutsDialog` opening | the dialog's teardown | `dialog::present_kept` |
+| `GdkWaylandToplevel` | 1 per window that showed a popover, menu or tooltip | GDK 4.22.4 (and `main`): the Wayland popup takes its parent with `g_value_dup_object` and never drops it | `install()` (released when the popup finalizes) |
+| `GMenu` | 1 per section shown, per menu built | GTK 4.22 `gtk_menu_tracker_add_items` (unmerged section) | `menu::append_shared_section`, `menu::append_refilled_section` |
+| `GSignalGroup` ×3, `GtkAdjustment` ×4 | per `GtkSourceView` with a map | GtkSourceView 5.20: `GtkSourceCompletion` creates three groups at init and never frees them | unreachable |
+| `GskVulkanImage`, `GtkCssStaticStyle`, `GtkIconPaintable`, `GskFillNode`/`GskColorNode` | a few per opening, then stable | GTK caches | — (a cache, not a leak: memory stable over 20 openings) |

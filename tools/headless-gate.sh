@@ -177,11 +177,11 @@ if [[ "$accessible" == 1 ]]; then
 		HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
 		XDG_STATE_HOME="$home/.local/state" XDG_CACHE_HOME="$home/.cache" \
 		GDK_BACKEND=wayland GSK_RENDERER="${GSK_RENDERER:-cairo}" GTK_A11Y=atspi \
-		BIGAGENTS_RUN_UI_SMOKE=1 LC_NUMERIC=C BIG_A11Y_SESSION="$runtime_dir" \
+		LC_NUMERIC=C BIG_A11Y_SESSION="$runtime_dir" \
 		"$@"
 else
 	XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" DISPLAY='' \
 		GDK_BACKEND=wayland GSK_RENDERER="${GSK_RENDERER:-cairo}" GTK_A11Y=test NO_AT_BRIDGE=1 \
-		BIGAGENTS_RUN_UI_SMOKE=1 LC_NUMERIC=C LC_MESSAGES=C LANGUAGE='' \
+		LC_NUMERIC=C LC_MESSAGES=C LANGUAGE='' \
 		"$@"
 fi
