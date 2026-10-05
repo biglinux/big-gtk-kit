@@ -64,8 +64,10 @@ the program's own.
 |---|---|---|
 | `accessible::relate` | `update_relation` | gtk-rs 0.11 leaks the target list on every call |
 | `alert::choose`, `choose_future` | `AlertDialogExtManual::choose` | libadwaita-rs 0.9 keeps every dialog asked that way |
+| `alert::Alert` | `adw::AlertDialog::new`, `builder` | libadwaita 1.9 leaves three breakpoints of every dialog behind, about 1.8 KB an opening; an `Alert` asks again with a dialog already made; add responses, connect `closed` and downgrade through it (a `WeakAlert` from an earlier question no longer upgrades) |
 | `breakpoint::add` | `add_breakpoint` | libadwaita 1.9 never releases a window's breakpoints |
 | `css::add_provider_for_widget_lifetime` | `style_context_add_provider_for_display` per widget | the display keeps the provider and its rules |
+| `dialog::Dialog` | `adw::Dialog::new`, `builder` | the same three breakpoints per opening; a `Dialog` shows one already made, as `Alert` does; one kept and presented again stays an `adw::Dialog` |
 | `dialog::present_kept` | building `AdwShortcutsDialog` per opening | its sections and models outlive it (libadwaita 1.9) |
 | `menu::append_shared_section`, `append_refilled_section` (items vary per build) | `gio::Menu::append_section` | GTK 4.22's menu tracker keeps every section it shows |
 | `password::password_row` | `PasswordEntryRow::new`, `build()` | libadwaita 1.9 keeps the buffer, and the password |
@@ -74,10 +76,12 @@ the program's own.
 | `switch::set_active` | `Switch::set_active` | GTK 4.22 cancels a click's slide on an unchanged value |
 | `view_switcher::toggles_for` | `AdwViewStack`, `AdwInlineViewSwitcher` | leak their animation and a tree per page |
 
-Not reachable from a program, so left as they are: the three breakpoints an
-adaptive `AdwDialog` makes for itself (about 0.5 KB per opening), breakpoints
-declared in `.ui` files, and GtkSourceView 5.20's completion (3 `GSignalGroup`
-and 4 `GtkAdjustment` per view with its map).
+Not reachable from a program, so left as they are: the three breakpoints of a
+dialog made outside `Alert` and `Dialog` (an `AdwPreferencesDialog`, an
+`AdwAboutDialog`, or one that must stay its own object, such as a Relm4 root
+built per opening), breakpoints declared in `.ui` files, and GtkSourceView
+5.20's completion (3 `GSignalGroup` and 4 `GtkAdjustment` per view with its
+map).
 
 ## Tooltips
 
