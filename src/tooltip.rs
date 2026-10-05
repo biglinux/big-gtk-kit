@@ -40,6 +40,16 @@ const SILENCED_KEY: &str = "big-gtk-kit-tooltip-silenced";
 const ICON_KEY: &str = "big-gtk-kit-tooltip-icon";
 /// `Rc<AreaTips>` on a widget whose tooltip changes across it.
 const AREA_KEY: &str = "big-gtk-kit-tooltip-area";
+// On the default display, not in statics: a program assembled from modules
+// links one copy of this crate per module, and only the copy that installed
+// the cards draws them. A static a module set was never read -- the desktop's
+// bar asked for cards on its never-active surfaces and got none.
+/// `bool` on the display: [`set_show_when_inactive`].
+const SHOW_WHEN_INACTIVE_KEY: &str = "big-gtk-kit-tooltip-show-when-inactive";
+/// `bool` on the display: [`set_follow_pointer`].
+const FOLLOW_POINTER_KEY: &str = "big-gtk-kit-tooltip-follow-pointer";
+/// `Rc<dyn Fn()>` on the display: [`hide_all`] for the copy that draws.
+const HIDE_ALL_KEY: &str = "big-gtk-kit-tooltip-hide-all";
 
 /// The tip at a point of a widget, in its own coordinates: the text and the
 /// area of the widget it covers.
@@ -49,8 +59,6 @@ type Area = Option<(String, gdk::Rectangle)>;
 
 thread_local! {
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
-    static SHOW_WHEN_INACTIVE: Cell<bool> = const { Cell::new(false) };
-    static FOLLOW_POINTER: Cell<bool> = const { Cell::new(false) };
     /// Every engine, for [`hide_all`].
     static ENGINES: RefCell<Vec<Weak<Engine>>> = const { RefCell::new(Vec::new()) };
 }
@@ -82,6 +90,9 @@ pub fn install() {
                 .build();
         }
         provider.load_from_string(include_str!("tooltip.css"));
+        let hide_all: Rc<dyn Fn()> = Rc::new(dismiss_every_card);
+        // SAFETY: HIDE_ALL_KEY holds an `Rc<dyn Fn()>` (see its definition).
+        unsafe { display.set_data(HIDE_ALL_KEY, hide_all) };
         // Process-wide on purpose: the card is the same in every window.
         gtk::style_context_add_provider_for_display(
             &display,
@@ -129,26 +140,53 @@ pub fn set_area_tips(
 }
 
 /// Show cards while the window is not focused, as a panel needs: it is never
-/// the active window. Off by default, matching GTK.
+/// the active window. Off by default, matching GTK. For the whole process,
+/// every module included; call it once the display is open.
 pub fn set_show_when_inactive(show: bool) {
-    SHOW_WHEN_INACTIVE.set(show);
+    set_display_flag(SHOW_WHEN_INACTIVE_KEY, show);
 }
 
 /// Anchor cards at the pointer's column instead of the whole widget, and move
 /// them along as it moves: a panel's wide buttons read better that way. Off by
-/// default.
+/// default. For the whole process, as [`set_show_when_inactive`].
 pub fn set_follow_pointer(follow: bool) {
-    FOLLOW_POINTER.set(follow);
+    set_display_flag(FOLLOW_POINTER_KEY, follow);
 }
 
 /// Close every card now, as a press would: something no input event announced
 /// (a popup, a window preview) is about to take its place.
 pub fn hide_all() {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+    // SAFETY: HIDE_ALL_KEY holds an `Rc<dyn Fn()>` (see its definition).
+    let hide_all = unsafe { display.data::<Rc<dyn Fn()>>(HIDE_ALL_KEY) }
+        .map(|hide_all| unsafe { hide_all.as_ref() }.clone());
+    if let Some(hide_all) = hide_all {
+        hide_all();
+    }
+}
+
+fn dismiss_every_card() {
     ENGINES.with_borrow(|engines| {
         for engine in engines.iter().filter_map(Weak::upgrade) {
             engine.dismiss();
         }
     });
+}
+
+fn set_display_flag(key: &str, value: bool) {
+    if let Some(display) = gdk::Display::default() {
+        // SAFETY: the flag keys hold a `bool` (see their definitions).
+        unsafe { display.set_data(key, value) };
+    }
+}
+
+fn display_flag(key: &str) -> bool {
+    gdk::Display::default().is_some_and(|display| {
+        // SAFETY: the flag keys hold a `bool` (see their definitions).
+        unsafe { display.data::<bool>(key) }.is_some_and(|flag| unsafe { *flag.as_ref() })
+    })
 }
 
 fn attach(native: &gtk::Widget) {
@@ -204,7 +242,7 @@ fn attach(native: &gtk::Widget) {
         let weak = Rc::downgrade(&engine);
         handlers.push(window.connect_is_active_notify(move |window| {
             if !window.is_active()
-                && !SHOW_WHEN_INACTIVE.get()
+                && !display_flag(SHOW_WHEN_INACTIVE_KEY)
                 && let Some(engine) = weak.upgrade()
             {
                 engine.hide();
@@ -302,7 +340,7 @@ impl Engine {
             silence(owner);
         }
         if owner == self.owner() && area == *self.area.borrow() {
-            if FOLLOW_POINTER.get()
+            if display_flag(FOLLOW_POINTER_KEY)
                 && self.shown.get()
                 && let Some(owner) = &owner
                 && let Some(area) = self.anchor(&native, owner)
@@ -368,7 +406,7 @@ impl Engine {
         if self.pressed.get()
             || !owner.is_mapped()
             || menu_open(&owner)
-            || !(SHOW_WHEN_INACTIVE.get() || active(&native))
+            || !(display_flag(SHOW_WHEN_INACTIVE_KEY) || active(&native))
         {
             return false;
         }
@@ -437,7 +475,7 @@ impl Engine {
                 (x, y, bounds.width() as i32, bounds.height() as i32)
             }
         };
-        if !FOLLOW_POINTER.get() {
+        if !display_flag(FOLLOW_POINTER_KEY) {
             return Some(gdk::Rectangle::new(x, y, width, height));
         }
         let column = (self.pointer.get().0 as i32).clamp(x, x + width.max(1) - 1);
@@ -669,6 +707,45 @@ fn menu_open(owner: &gtk::Widget) -> bool {
 mod tests {
     use super::*;
     use crate::testing::{pump, watch};
+
+    /// A module links its own copy of this crate and reaches the copy that
+    /// draws only through the display: what it writes there, under the keys,
+    /// is what the cards obey, and its `hide_all` closes them.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn another_copy_reaches_the_cards_through_the_display() {
+        gtk::init().expect("a display");
+        install();
+        let display = gdk::Display::default().expect("a display");
+        // SAFETY: the flag keys hold a `bool`, as the other copy writes them.
+        unsafe { display.set_data(SHOW_WHEN_INACTIVE_KEY, true) };
+        assert!(display_flag(SHOW_WHEN_INACTIVE_KEY));
+        set_follow_pointer(true);
+        // SAFETY: as above.
+        assert!(
+            unsafe { display.data::<bool>(FOLLOW_POINTER_KEY) }
+                .is_some_and(|flag| unsafe { *flag.as_ref() })
+        );
+
+        let owner = gtk::Button::with_label("Save");
+        owner.set_tooltip_text(Some("Save the document"));
+        let window = gtk::Window::builder().child(&owner).build();
+        window.present();
+        pump();
+        let engine = engine(window.upcast_ref()).expect("attached at realize");
+        engine
+            .owner
+            .replace(Some(owner.upcast_ref::<gtk::Widget>().downgrade()));
+        engine.show(true);
+        pump();
+        assert!(engine.shown.get(), "an inactive window shows its card");
+        hide_all();
+        pump();
+        assert!(!engine.shown.get(), "hide_all closed it");
+        set_follow_pointer(false);
+        window.destroy();
+        pump();
+    }
 
     /// Needs a display: run under `tools/headless-gate.sh`.
     #[gtk::test]

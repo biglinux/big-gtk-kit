@@ -96,6 +96,9 @@ deriving the accessible name and description from the tooltip.
   take its place without an input event.
 - `tooltip::set_area_tips(&view, |view, x, y| ...)` gives a widget that draws
   its own items one tip per item, in place of answering GTK's `query-tooltip`.
+- In a program made of modules, each linking its own copy of the kit, these
+  settings and `hide_all` reach the copy that installed the cards: they live
+  on the display, so call them once it is open.
 
 `cargo run --example tooltip_demo` shows every case (`BIG_DEMO_DARK=1` for the
 dark card, `BIG_DEMO_FOLLOW=1` to follow the pointer).
