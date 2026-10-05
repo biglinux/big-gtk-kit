@@ -573,7 +573,11 @@ fn move_cursor(view: &ItemView, step: Step, ctrl: bool, shift: bool) -> bool {
         return false;
     }
     let from = imp.cursor.get().unwrap_or(0);
-    let Some(target) = imp.metrics.borrow().clone().step(from, step) else {
+    let Some(target) = imp
+        .sections
+        .borrow()
+        .step(&imp.metrics.borrow().clone(), from, step)
+    else {
         return false;
     };
     if shift {

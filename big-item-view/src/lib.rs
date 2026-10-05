@@ -248,6 +248,10 @@ pub struct Geometry {
     pub picture_height: Option<i32>,
     /// Lines the name may take; the cell is as tall as that many lines.
     pub title_lines: u8,
+    /// Where a name too long for its lines loses characters. The middle keeps
+    /// both ends, which is what tells apart names that share a long start
+    /// (`IMG_20260912_…`, `WhatsApp Image 2026-08-17 at …`).
+    pub title_ellipsize: gtk::pango::EllipsizeMode,
     /// Whether room is kept for a subtitle line under the name.
     pub subtitle: bool,
     /// Where a subtitle too long for its line loses characters.
@@ -330,6 +334,7 @@ impl Geometry {
             icon_size,
             picture_height: None,
             title_lines: 2,
+            title_ellipsize: gtk::pango::EllipsizeMode::End,
             subtitle: false,
             subtitle_ellipsize: gtk::pango::EllipsizeMode::End,
             margin: (6, 3),
@@ -355,6 +360,7 @@ impl Geometry {
             icon_size,
             picture_height: None,
             title_lines: 1,
+            title_ellipsize: gtk::pango::EllipsizeMode::End,
             subtitle: false,
             subtitle_ellipsize: gtk::pango::EllipsizeMode::End,
             margin: (0, 2),

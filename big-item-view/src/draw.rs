@@ -575,8 +575,20 @@ fn fitted(natural: (f32, f32), bound: &graphene::Rect) -> graphene::Rect {
     )
 }
 
+/// How far a cover may enlarge its picture's own pixels before it stops
+/// filling the box.
+const COVER_MAX_GROWTH: f32 = 2.0;
+
 fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect) {
     let palette = item.palette;
+    // A small mark keeps the middle half of the box, whether the icon came as
+    // a paintable or was already rendered to a texture.
+    let icon = &if item.content.frame == IconFrame::Small {
+        let (w, h) = (icon.width() / 2.0, icon.height() / 2.0);
+        graphene::Rect::new(icon.x() + w / 2.0, icon.y() + h / 2.0, w, h)
+    } else {
+        *icon
+    };
     match item.picture {
         Picture::None => {}
         Picture::Placeholder => {
@@ -585,12 +597,6 @@ fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect
             snapshot.pop();
         }
         Picture::Paintable(paintable) => {
-            let icon = if item.content.frame == IconFrame::Small {
-                let (w, h) = (icon.width() / 2.0, icon.height() / 2.0);
-                graphene::Rect::new(icon.x() + w / 2.0, icon.y() + h / 2.0, w, h)
-            } else {
-                *icon
-            };
             snapshot.save();
             snapshot.translate(&graphene::Point::new(icon.x(), icon.y()));
             let (w, h) = (f64::from(icon.width()), f64::from(icon.height()));
@@ -606,8 +612,19 @@ fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect
                 (texture.width() as f32).max(1.0),
                 (texture.height() as f32).max(1.0),
             );
-            // Grown until both sides cover the box, centred, and cut to it.
+            // Grown until both sides cover the box, centred, and cut to it --
+            // unless that blows a small picture (an icon, a favicon) up past
+            // twice its own pixels into a blur: then it keeps that size and
+            // sits in the middle of the box, on the placeholder's fill.
             let grow = (icon.width() / natural.0).max(icon.height() / natural.1);
+            let small = grow * scale > COVER_MAX_GROWTH;
+            let grow = if small {
+                (COVER_MAX_GROWTH / scale)
+                    .min(icon.width() / natural.0)
+                    .min(icon.height() / natural.1)
+            } else {
+                grow
+            };
             let (w, h) = (natural.0 * grow, natural.1 * grow);
             let cover = graphene::Rect::new(
                 icon.x() + (icon.width() - w) / 2.0,
@@ -616,6 +633,9 @@ fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect
                 h,
             );
             snapshot.push_rounded_clip(&rounded(icon, 8.0));
+            if small {
+                snapshot.append_color(&palette.get(Role::PlaceholderFill), icon);
+            }
             append_texture(snapshot, texture, &cover, scale);
             snapshot.pop();
         }
@@ -707,12 +727,20 @@ fn draw_words(snapshot: &gtk::Snapshot, item: &Item<'_>) {
 }
 
 fn draw_badge(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect, badge: &Badge) {
+    // A row's picture is 16 to 24 pixels: a third of that is a dot whose
+    // letter nobody reads. A row's mark keeps a size a letter survives at and
+    // hangs further off the corner, into the row's margin, so the picture
+    // under it still shows.
+    let (smallest, hang) = match item.geometry.composition {
+        Composition::Inline => (14.0, 0.4),
+        Composition::Stacked => (11.0, 0.25),
+    };
     let d = if badge.corner == Corner::Trailing {
         TRAILING_BADGE
     } else {
-        (icon.width() * 0.36).clamp(11.0, 22.0)
+        (icon.width() * 0.36).clamp(smallest, 22.0)
     };
-    let inset = d * 0.25;
+    let inset = d * hang;
     let start = !item.rtl;
     let left = |at_start: bool| {
         if at_start == start {
@@ -855,7 +883,7 @@ pub(crate) fn title_layout(
     let layout = pango::Layout::new(context);
     layout.set_text(text);
     layout.set_width((width.max(1.0) * pango::SCALE as f32) as i32);
-    layout.set_ellipsize(pango::EllipsizeMode::End);
+    layout.set_ellipsize(geometry.title_ellipsize);
     if geometry.title_lines > 1 {
         layout.set_wrap(pango::WrapMode::WordChar);
         layout.set_height(-i32::from(geometry.title_lines));

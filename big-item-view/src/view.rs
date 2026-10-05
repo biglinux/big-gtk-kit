@@ -674,12 +674,10 @@ mod imp {
         /// Where the runs of items start, when they get headings.
         pub(crate) fn find_sections(&self) {
             let mut starts = Vec::new();
-            let one_per_line = matches!(
-                self.geometry.borrow().flow,
-                Flow::RowMajor { max_columns: 1, .. }
-            );
+            // A column flow reads down and across; a heading has no line there.
+            let rows = matches!(self.geometry.borrow().flow, Flow::RowMajor { .. });
             if self.sectioned.get()
-                && one_per_line
+                && rows
                 && let Some(model) = self.model()
                 && let Some(sectioned) = model.dynamic_cast_ref::<gtk::SectionModel>()
             {
@@ -844,9 +842,12 @@ mod imp {
         /// grid whose names may take several lines.
         fn fitted_rows(&self, metrics: Metrics) -> Metrics {
             let geometry = self.geometry.borrow().clone();
+            // Under headings every line is the cell's height: the runs are
+            // laid out by `layout::Sections`, which does not fit rows.
             if !matches!(geometry.flow, Flow::RowMajor { .. })
                 || geometry.composition != Composition::Stacked
                 || geometry.title_lines < 2
+                || !self.sections.borrow().starts.is_empty()
             {
                 return metrics;
             }
@@ -1170,9 +1171,21 @@ mod imp {
                         )),
                     })
                     .collect();
-                entry.subtitle = entry.content.subtitle.as_deref().map(|text| {
-                    draw::subtitle_layout(&probes.caption_context(), &geometry, text, words.width())
-                });
+                // Only where the shape keeps a line for it: a caption drawn in
+                // a cell with no room for one lands on the next row.
+                entry.subtitle = entry
+                    .content
+                    .subtitle
+                    .as_deref()
+                    .filter(|_| geometry.subtitle)
+                    .map(|text| {
+                        draw::subtitle_layout(
+                            &probes.caption_context(),
+                            &geometry,
+                            text,
+                            words.width(),
+                        )
+                    });
                 entry.layouts_for = layouts_for;
             }
             let picture = match (&entry.content.icon, &icon_state) {
@@ -1839,7 +1852,8 @@ impl ItemView {
     }
 
     /// Give each run of items a heading ([`ItemPresenter::section_title`]),
-    /// when the model has sections. A list of one item per line only.
+    /// when the model has sections. In a grid every run starts a line of its
+    /// own; a column flow has no headings.
     pub fn set_sections(&self, sectioned: bool) {
         let imp = self.imp();
         if imp.sectioned.replace(sectioned) != sectioned {
