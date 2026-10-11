@@ -199,10 +199,13 @@ impl Alert {
         dialog.set_close_response("close");
         dialog.set_title("");
         dialog.set_can_close(true);
-        dialog.set_follows_content_size(false);
+        // An alert's own defaults (adw-alert-dialog.ui), not `AdwDialog`'s:
+        // sized to its content and floating. With `AdwDialog`'s it opens a few
+        // pixels tall, its heading cut and its body scrolled away.
+        dialog.set_follows_content_size(true);
         dialog.set_content_width(-1);
         dialog.set_content_height(-1);
-        dialog.set_presentation_mode(adw::DialogPresentationMode::Auto);
+        dialog.set_presentation_mode(adw::DialogPresentationMode::Floating);
         FREE.with_borrow_mut(|free| free.push(self));
     }
 
@@ -344,6 +347,8 @@ impl Deref for Alert {
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::testing::{init, pump, watch};
@@ -383,6 +388,15 @@ mod tests {
                     "the last question's default is gone"
                 );
             }
+            assert!(
+                alert.follows_content_size(),
+                "sized to its content like a new alert"
+            );
+            assert_eq!(
+                alert.presentation_mode(),
+                adw::DialogPresentationMode::Floating,
+                "floating like a new alert"
+            );
             if question > 0 {
                 let last = format!("delete-{}", question - 1);
                 assert!(
@@ -511,6 +525,44 @@ mod tests {
         assert!(next.parent().is_some(), "presented in a window of its own");
         next.force_close();
         pump();
+    }
+
+    /// Closed in a window of its own, as the shell asks with no parent, and
+    /// asked again without libadwaita setting a parent on what has one.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn parentless_alerts_ask_again_cleanly() {
+        init();
+        let criticals = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&criticals);
+        let handler = glib::log_set_handler(
+            Some("Gtk"),
+            glib::LogLevels::LEVEL_CRITICAL,
+            false,
+            false,
+            move |_, _, message| {
+                eprintln!("{message}");
+                counted.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        for _ in 0..2 {
+            let alert = Alert::new(Some("End?"), None);
+            alert.present(gtk::Widget::NONE);
+            pump();
+            let shown = alert.dialog().downgrade();
+            assert!(alert.close());
+            drop(alert);
+            while shown
+                .upgrade()
+                .is_some_and(|dialog| dialog.parent().is_some())
+            {
+                pump();
+            }
+            pump();
+            assert!(shown.upgrade().is_none(), "let go with its window");
+        }
+        glib::log_remove_handler(Some("Gtk"), handler);
+        assert_eq!(criticals.load(Ordering::Relaxed), 0);
     }
 
     /// A dialog never presented is let go with its last handle.

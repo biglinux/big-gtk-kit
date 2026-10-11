@@ -79,7 +79,8 @@ pub(crate) struct Opening {
     handlers: RefCell<Vec<glib::SignalHandlerId>>,
     controllers: RefCell<Vec<gtk::EventController>>,
     number: Cell<u64>,
-    closed: Cell<bool>,
+    /// Closed over a window, so it may go back once it leaves it.
+    reusable: Cell<bool>,
 }
 
 impl Opening {
@@ -109,7 +110,7 @@ impl Opening {
         for controller in self.controllers.take() {
             dialog.remove_controller(&controller);
         }
-        self.closed.set(false);
+        self.reusable.set(false);
         self.number.set(self.number.get() + 1);
     }
 }
@@ -119,9 +120,10 @@ impl Opening {
 /// closing starts and before the `response` that closed an alert; in an idle,
 /// because one closing without animation leaves before that `response` too.
 ///
-/// One that left without `closed` is not given back: `force_close` of a dialog
-/// in a window of its own says none, and libadwaita 1.9.3 then keeps pointing
-/// at that destroyed window.
+/// One presented in a window of its own is never given back: libadwaita 1.9.3
+/// leaves its content parented to it and sets that parent again at the next
+/// presentation, which GTK reports as a critical. Its `force_close` says no `closed` either, and
+/// libadwaita then keeps pointing at that destroyed window.
 pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
     dialog: &D,
     opening: &Rc<Opening>,
@@ -130,11 +132,15 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
     let closing = Rc::clone(opening);
     dialog
         .upcast_ref::<adw::Dialog>()
-        .connect_closed(move |_| closing.closed.set(true));
+        .connect_closed(move |dialog| {
+            let windowed =
+                WidgetExt::parent(dialog).is_some_and(|parent| parent.is::<gtk::Window>());
+            closing.reusable.set(!windowed);
+        });
     let give_back = Rc::new(give_back);
     let leaving = Rc::clone(opening);
     dialog.connect_notify_local(Some("parent"), move |dialog, _| {
-        if WidgetExt::parent(dialog).is_some() || !leaving.closed.get() {
+        if WidgetExt::parent(dialog).is_some() || !leaving.reusable.get() {
             return;
         }
         // Held from here: the window was its last owner.
