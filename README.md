@@ -6,7 +6,7 @@ program or backed by a measurement, and it depends on nothing but GTK and
 libadwaita: no code of any application.
 
 When GTK or libadwaita gets something wrong, the fix lives here, as a different
-way of doing the same thing — never as a patch to the library. Each workaround
+way of doing the same thing, never as a patch to the library. Each workaround
 checks for the faulty state first, so a fixed library leaves it idle.
 
 Built for the GTK 4.22 and libadwaita 1.9 BigLinux ships; older libraries are
@@ -53,7 +53,7 @@ This turns on what needs no change at the call sites:
 - releasing the parent surface of every Wayland popup: GDK never drops the
   reference a popup takes on it, so every window that showed a popover, menu or
   tooltip kept its surface after closing, 25 of 25 measured (GTK 4.22.4, still
-  so on `main`; limited to those versions).
+  so on `main`; limited to GTK before 4.22.5).
 
 ## Workarounds
 
@@ -86,8 +86,8 @@ map).
 ## Tooltips
 
 After `install()`, every `tooltip-text` and `tooltip-markup` of the program shows as
-the BigLinux card — set in code, builders, relm4 `view!` or `.ui` files alike —
-in light, dark and high contrast, with no change at the call sites. GTK keeps
+the BigLinux card, whether set in code, builders, relm4 `view!` or `.ui`
+files, in light, dark and high contrast, with no change at the call sites. GTK keeps
 deriving the accessible name and description from the tooltip.
 
 - One card per window or popover, made on first hover; widgets carry nothing.

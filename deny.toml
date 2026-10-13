@@ -1,4 +1,4 @@
-# cargo-deny — policy: advisories (CVEs), licenses, bans, sources.
+# cargo-deny policy: advisories (CVEs), licenses, bans, sources.
 # Run: cargo deny check
 
 [graph]
