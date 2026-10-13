@@ -959,7 +959,7 @@ mod tests {
     /// A child row is pushed in one step per level past its expander, in
     /// either reading direction, and its expander sits at its own level.
     #[test]
-    fn tree_rows_are_pushed_in_by_their_depth() {
+    fn tree_rows_indent_by_depth() {
         let geometry = Geometry::rows(16);
         let outer = (0.0, (300.0, 30.0));
         assert_eq!(

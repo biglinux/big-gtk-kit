@@ -12,8 +12,8 @@ use gtk::glib;
 /// libadwaita 1.9 (`adw_password_entry_row_init`) passes a fresh
 /// `gtk_password_entry_buffer_new ()` straight to `gtk_text_set_buffer`, which
 /// takes a reference of its own, so the creation reference is never dropped:
-/// every row left a `GtkPasswordEntryBuffer` — and the password typed into it —
-/// behind after it closed. The release is conditional, so a libadwaita that
+/// every row leaves a `GtkPasswordEntryBuffer`, and the password typed into it,
+/// behind after it closes. The release is conditional, so a libadwaita that
 /// fixes this is left alone instead of being unreferenced twice.
 pub fn password_row(builder: adw::builders::PasswordEntryRowBuilder) -> adw::PasswordEntryRow {
     #[allow(

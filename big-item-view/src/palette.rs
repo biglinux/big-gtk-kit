@@ -5,7 +5,7 @@
 //!
 //! GTK has no public call that answers "what is the selected background in this
 //! theme"; the answer only exists as the computed style of a CSS node. So the
-//! view keeps one tiny invisible child per colour it draws with — a *probe* — and
+//! view keeps one tiny invisible child per colour it draws with, a *probe*, and
 //! reads the probe's `color`. Every themable colour is written in CSS as a
 //! `color:` value, which GTK resolves with `var()`, `alpha()` and `color-mix()`
 //! like any other; a consumer restyles its view with ordinary selectors such as
@@ -13,7 +13,7 @@
 //!
 //! The probes are mapped and allocated 0×0, never drawn. Mapped matters: a theme,
 //! accent or contrast change restyles them, their redraw marks the view as
-//! needing one, and the next frame reads the new colours — no style-manager
+//! needing one, and the next frame reads the new colours, with no style-manager
 //! signal to connect and to disconnect again in a process that runs for months.
 
 use std::cell::RefCell;
@@ -236,9 +236,9 @@ impl Probes {
 
     /// Snapshot every probe: nothing is drawn, but it is what clears GTK's
     /// `draw_needed` on them. `gtk_widget_queue_draw` stops climbing at the first
-    /// widget that already needs a draw, so a probe never snapshotted kept that
-    /// flag forever and its restyle — a theme, accent or contrast change — never
-    /// reached the view: measured, the colours changed and nothing was redrawn.
+    /// widget that already needs a draw, so a probe never snapshotted keeps that
+    /// flag forever and its restyle (a theme, accent or contrast change) never
+    /// reaches the view: the colours change and nothing is redrawn.
     pub(crate) fn snapshot(&self, parent: &impl IsA<gtk::Widget>, snapshot: &gtk::Snapshot) {
         for probe in self.colors.iter().chain([&self.title, &self.caption]) {
             parent.snapshot_child(probe, snapshot);

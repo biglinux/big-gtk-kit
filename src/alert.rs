@@ -14,7 +14,7 @@
 //! `AlertDialogExtManual::choose` in libadwaita-rs 0.9 hands `self` to
 //! `adw_alert_dialog_choose` with `into_glib_ptr`, a reference the C function never
 //! takes (`self` is transfer-none there), so every dialog asked that way stayed in
-//! memory after it closed — measured in the file manager as a whole `AdwAlertDialog`,
+//! memory after it closed: in the file manager, a whole `AdwAlertDialog`,
 //! its entry and ~200 widgets for every "New Folder" opened. `choose_future` goes
 //! through the same call. These two do what the binding means to, from a borrow.
 
@@ -81,7 +81,7 @@ pub fn choose_future(
 ///
 /// An `Alert` kept past its closing may hold the dialog while it asks
 /// something else: its [`close`](Self::close) then does nothing, and a
-/// [`WeakAlert`] no longer upgrades. Everything else reached through the
+/// [`WeakAlert`] stops upgrading. Everything else reached through the
 /// deref acts on whatever the dialog asks now.
 #[derive(Clone)]
 pub struct Alert {
@@ -357,7 +357,7 @@ mod tests {
     /// handlers, and lets go of what the last one showed.
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn alerts_ask_again_with_nothing_of_the_last_question() {
+    fn reused_alert_forgets_last_question() {
         init();
         crate::dialog::install();
         let window = adw::Window::new();
@@ -443,7 +443,7 @@ mod tests {
     /// animation, and the dialog stays as it was until it has left its window.
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn a_chosen_response_reaches_the_program_and_the_dialog_goes_back_whole() {
+    fn chosen_response_returns_whole_dialog() {
         init();
         crate::dialog::install();
         let settings = gtk::Settings::default().expect("settings");
@@ -509,7 +509,7 @@ mod tests {
     /// libadwaita still points at that window: it is not asked again.
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn an_alert_forced_shut_in_its_own_window_is_not_asked_again() {
+    fn force_closed_alert_is_retired() {
         init();
         let first = Alert::new(Some("Once"), None);
         first.present(gtk::Widget::NONE);

@@ -68,7 +68,7 @@ fn shown(n: u32) -> (gtk::Window, ItemView, Rc<Counting>, gtk::MultiSelection) {
 
 #[gtk::test]
 #[ignore = "needs a display"]
-fn only_what_is_on_screen_is_asked_for_even_when_the_whole_listing_is_replaced() {
+fn only_visible_items_are_asked() {
     let (window, view, presenter, model) = shown(5000);
     let on_screen = view.visible_range().len() as u32;
     assert!(
@@ -100,7 +100,7 @@ fn only_what_is_on_screen_is_asked_for_even_when_the_whole_listing_is_replaced()
 
 #[gtk::test]
 #[ignore = "needs a display"]
-fn scrolling_to_an_item_selects_focuses_and_shows_it() {
+fn scroll_to_selects_and_focuses() {
     let (window, view, _, model) = shown(5000);
     view.scroll_to(
         4000,
@@ -119,7 +119,7 @@ fn scrolling_to_an_item_selects_focuses_and_shows_it() {
 
 #[gtk::test]
 #[ignore = "needs a display"]
-fn the_cursor_follows_its_item_when_items_are_added_before_it() {
+fn cursor_follows_its_item() {
     let (window, view, _, model) = shown(100);
     view.scroll_to(50, gtk::ListScrollFlags::FOCUS);
     let list = model.model().and_downcast::<gtk::StringList>().unwrap();
@@ -164,7 +164,7 @@ fn proxy_at(view: &ItemView, position: u32) -> Option<gtk::Accessible> {
 /// and the bounds a screen reader is given move with them.
 #[gtk::test]
 #[ignore = "needs a display"]
-fn item_bounds_follow_a_scroll_that_keeps_the_same_items() {
+fn bounds_follow_scroll() {
     let (window, view, _, _) = shown(1000);
     let before = proxy_at(&view, 10).expect("a proxy for an item on screen");
     let adjustment = view.vadjustment().expect("scrolled");
@@ -183,7 +183,7 @@ fn item_bounds_follow_a_scroll_that_keeps_the_same_items() {
 /// reader holds on to.
 #[gtk::test]
 #[ignore = "needs a display"]
-fn an_item_keeps_its_proxy_when_an_item_arrives_before_it() {
+fn items_keep_proxy_on_insert() {
     let (window, view, _, model) = shown(100);
     let before = proxy_at(&view, 10).expect("a proxy for an item on screen");
     let list = model.model().and_downcast::<gtk::StringList>().unwrap();
@@ -215,7 +215,7 @@ fn items_are_placed_where_they_are_hit() {
 /// of the cell is background, where a rubber band starts.
 #[gtk::test]
 #[ignore = "needs a display"]
-fn only_what_an_item_draws_is_hit_when_asked() {
+fn hits_only_drawn_parts() {
     let (window, view, _, _) = shown(100);
     view.set_geometry(Geometry {
         hit_drawn_only: true,
@@ -241,7 +241,7 @@ fn only_what_an_item_draws_is_hit_when_asked() {
 /// the list scrolls, and the editor goes when the edit ends.
 #[gtk::test]
 #[ignore = "needs a display"]
-fn an_editor_lies_over_the_name_it_edits() {
+fn editor_covers_edited_name() {
     let (window, view, _, _) = shown(1000);
     let entry = gtk::Entry::new();
     view.begin_editing(3, &entry);

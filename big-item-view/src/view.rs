@@ -142,8 +142,8 @@ mod imp {
         pub(crate) sectioned: Cell<bool>,
         pub(crate) sections: RefCell<layout::Sections>,
         sections_handler: RefCell<Option<glib::SignalHandlerId>>,
-        /// The item whose name is being edited — where it was last seen, and
-        /// the item itself, which a change to the model may move — and the
+        /// The item whose name is being edited (where it was last seen, and
+        /// the item itself, which a change to the model may move) and the
         /// editor laid over it.
         pub(super) editing: RefCell<Option<(Cell<u32>, glib::Object, gtk::Widget)>>,
         /// How wide each item would like to be, by position, in a column flow:
@@ -834,7 +834,7 @@ mod imp {
             }
         }
 
-        /// What the items measured of themselves no longer holds.
+        /// Drops what the items measured of themselves; it is stale.
         fn forget_measures(&self) {
             self.natural_widths.replace(None);
             self.titles.replace(None);
@@ -1370,11 +1370,11 @@ mod imp {
                 return;
             }
             self.last_range.set((range.start, range.end));
-            // A window of a fixed size — the lines a screenful can touch, plus one
-            // either side — so the proxies are replaced only when the view is
-            // resized. Sized by what is visible now, a scroll that showed one more
-            // partial line rebuilt every proxy, and a screen reader holding the
-            // old ones found them gone.
+            // A window of a fixed size (the lines a screenful can touch, plus one
+            // either side), so the proxies are replaced only when the view is
+            // resized. Sized by what is visible, a scroll that shows one more
+            // partial line would rebuild every proxy, and a screen reader holding
+            // the old ones would find them gone.
             let lanes = metrics.items_per_line().max(1);
             let (pitch_x, pitch_y) = metrics.cell_size();
             let page_lines = match self.geometry.borrow().flow {

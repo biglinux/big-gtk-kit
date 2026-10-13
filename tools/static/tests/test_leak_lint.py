@@ -68,7 +68,7 @@ class ErrorRules(unittest.TestCase):
         """),
         )
 
-    def test_destroy_that_only_cleans_itself_up_is_fine(self):
+    def test_self_cleaning_destroy_is_fine(self):
         self.assertEqual(
             lint("""
             fn wire(button: &gtk::Button, job: Job) {
@@ -78,7 +78,7 @@ class ErrorRules(unittest.TestCase):
             [],
         )
 
-    def test_set_parent_with_nothing_detaching_it_is_an_error(self):
+    def test_undetached_set_parent_is_an_error(self):
         self.assertIn(
             ("set-parent-without-unparent", "error"),
             lint("""
@@ -88,7 +88,7 @@ class ErrorRules(unittest.TestCase):
         """),
         )
 
-    def test_set_parent_detached_here_or_by_a_helper_is_fine(self):
+    def test_detached_set_parent_is_fine(self):
         self.assertEqual(
             lint("""
             fn tile(menu: &gtk::Popover, tile: &gtk::Button) {
@@ -124,7 +124,7 @@ class ErrorRules(unittest.TestCase):
         """),
         )
 
-    def test_icon_with_an_embedded_bitmap_is_an_error(self):
+    def test_embedded_bitmap_icon_is_an_error(self):
         self.assertIn(
             ("embedded-image-icon", "error"),
             lint(
@@ -137,7 +137,7 @@ class ErrorRules(unittest.TestCase):
             ),
         )
 
-    def test_the_same_name_outside_an_icon_is_fine(self):
+    def test_name_outside_icon_is_fine(self):
         self.assertEqual(
             lint(
                 """
@@ -202,7 +202,7 @@ class WarningRules(unittest.TestCase):
             [],
         )
 
-    def test_clone_of_the_handler_argument_is_not_a_capture(self):
+    def test_handler_argument_clone_captures_nothing(self):
         self.assertEqual(
             lint("""
             fn show(popover: &gtk::Popover) {
@@ -215,7 +215,7 @@ class WarningRules(unittest.TestCase):
             [],
         )
 
-    def test_names_in_strings_fields_and_if_let_are_not_captures(self):
+    def test_strings_and_fields_capture_nothing(self):
         self.assertEqual(
             lint("""
             fn dialog(entry: &gtk::Entry) {
@@ -269,7 +269,7 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
-    def test_rebinding_inside_the_body_still_captures_the_outer_name(self):
+    def test_rebinding_captures_outer_name(self):
         self.assertIn(
             ("mutual-siblings", "warning"),
             lint("""
@@ -291,7 +291,7 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
-    def test_followers_kept_as_weak_anchor_and_strong_closure_warn(self):
+    def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
             ("lazy-followers", "warning"),
             lint("""
@@ -324,7 +324,7 @@ class HeldThroughShapes(unittest.TestCase):
         """),
         )
 
-    def test_a_child_placed_by_a_builder_and_a_controller_are_inside(self):
+    def test_builder_child_and_controller_inside(self):
         self.assertIn(
             self.HOLDS,
             lint("""
@@ -382,7 +382,7 @@ class HeldThroughShapes(unittest.TestCase):
             [],
         )
 
-    def test_a_field_is_not_the_local_of_the_same_name(self):
+    def test_field_differs_from_same_local(self):
         self.assertEqual(
             lint("""
             fn present(properties: &Properties) {
@@ -398,11 +398,11 @@ class HeldThroughShapes(unittest.TestCase):
 
 
 class ProcessObjectHandlers(unittest.TestCase):
-    """Handlers on objects that outlive every window (hosted desktop, 2026-09-26)."""
+    """Handlers on objects that outlive every window."""
 
     RULE = ("process-object-handler", "warning")
 
-    def test_a_discarded_id_on_the_display_clipboard_or_the_app_is_reported(self):
+    def test_discarded_process_handler_is_reported(self):
         self.assertIn(
             self.RULE,
             lint("""
@@ -420,7 +420,7 @@ class ProcessObjectHandlers(unittest.TestCase):
         """),
         )
 
-    def test_a_kept_id_and_a_program_s_own_main_are_fine(self):
+    def test_kept_id_and_main_are_fine(self):
         self.assertEqual(
             lint("""
             fn install(parent: &gtk::Widget) {

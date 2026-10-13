@@ -38,7 +38,7 @@ mod tests {
 
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn closing_keeps_the_parent_until_idle_then_finalizes() {
+    fn parent_finalizes_after_idle() {
         gtk::init().expect("a display");
         let finalized = Rc::new(Cell::new(0));
         for cycle in 1..=25 {

@@ -95,7 +95,7 @@ mod tests {
 
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn windows_that_showed_a_popover_release_their_surface() {
+    fn popover_windows_release_surface() {
         gtk::init().expect("a display");
         install();
         let finalized = Rc::new(Cell::new(0));

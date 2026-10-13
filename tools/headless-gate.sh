@@ -2,14 +2,14 @@
 # SPDX-FileCopyrightText: 2026 BigLinux contributors
 # SPDX-License-Identifier: MIT
 #
-# headless-gate.sh — run any command under a PRIVATE virtual KWin session (pure
+# headless-gate.sh: run any command under a private virtual KWin session (pure
 # software GTK by default; KWin may still use the GPU). Tests run invisibly here
 # instead of mapping windows on the developer's live desktop.
 #
 # KWin's virtual backend, not weston headless: weston headless exposes a seat
 # with no capabilities, so GTK can never grab for a popover and nothing ever
 # takes keyboard focus. Menu and focus tests then fail on correct widgets.
-# Weston's --fake-seat is not a way out — it segfaults libweston 15 on the first
+# Weston's --fake-seat is no way out: it segfaults libweston 15 on the first
 # popup grab.
 #
 # Usage: tools/headless-gate.sh [--accessible] <command> [args…]
@@ -53,7 +53,7 @@ fi
 #
 # `/dev/shm` rather than /tmp, and 8 bytes keeps the budget: a real
 # XDG_RUNTIME_DIR allows execution, and a distribution that mounts /tmp `noexec`
-# — BigLinux does — makes every test that runs a stub it wrote itself silently
+# (BigLinux does) makes every test that runs a stub it wrote itself silently
 # run the installed program instead. /dev/shm is the one short tmpfs that is
 # always present and never noexec.
 runtime_dir="$(mktemp -d /dev/shm/bg.XXXXXX)"
@@ -71,9 +71,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Activation-restricted private session bus: the EMPTY servicedir means no
-# desktop service (portals, gvfs, at-spi, kwallet) can be D-Bus-activated —
-# the honest headless baseline, and no daemons leak past the run. The bus comes
+# Activation-restricted private session bus: the empty servicedir means no
+# desktop service (portals, gvfs, at-spi, kwallet) can be D-Bus-activated:
+# the headless baseline, and no daemons leak past the run. The bus comes
 # first because the compositor needs it.
 mkdir -p "$runtime_dir/services"
 cat >"$runtime_dir/session.conf" <<EOF
@@ -125,7 +125,7 @@ fi
 # The accessibility bus, when asked for. `at-spi-bus-launcher` owns `org.a11y.Bus`
 # and hands out the address every GTK application's bridge asks for; the registry is
 # what turns a pile of applications into one tree a screen reader can walk. Both are
-# started by hand because the private bus has an EMPTY servicedir on purpose — the
+# started by hand because the private bus has an empty servicedir: the
 # baseline is "nothing is activatable", and an accessibility session says which two
 # daemons it wants rather than opening the door to all of them.
 if [[ "$accessible" == 1 ]]; then
@@ -155,8 +155,8 @@ fi
 # LC_MESSAGES=C (and an empty LANGUAGE, which gettext prefers) keeps assertions
 # on user-visible strings comparing against the msgid the source declares
 # instead of whatever translation the developer's session happens to install.
-# GSK_RENDERER defaults to cairo -- software, reproducible, no GPU needed on a
-# build machine -- but an explicit one from the caller wins, because measuring
+# GSK_RENDERER defaults to cairo (software, reproducible, no GPU needed on a
+# build machine), but an explicit one from the caller wins, because measuring
 # what a renderer costs on the GPU is impossible against a renderer that never
 # touches it.
 if [[ "$accessible" == 1 ]]; then

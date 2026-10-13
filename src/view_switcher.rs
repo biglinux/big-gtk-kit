@@ -7,9 +7,9 @@
 //! libadwaita 1.9's `AdwInlineViewSwitcher` gives every page's `AdwToggle` a custom
 //! child, and `AdwToggle` takes that child with `g_object_ref_sink` and never lets it
 //! go: its finalize frees the strings and nothing else. Every switcher built therefore
-//! kept one small widget tree per page for the rest of the session — measured on the
-//! desktop as 24 widgets for every opening of the calendar card, which is rebuilt each
-//! time it opens. A toggle with a label or an icon and no child keeps nothing.
+//! keeps one small widget tree per page for the rest of the session: on the desktop,
+//! 24 widgets for every opening of the calendar card, which is rebuilt each time it
+//! opens. A toggle with a label or an icon and no child keeps nothing.
 //!
 //! A `GtkStack` rather than an `AdwViewStack` for the same reason: `AdwViewStack`
 //! creates its transition animation at init and never releases it.

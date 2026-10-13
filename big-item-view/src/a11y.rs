@@ -4,8 +4,8 @@
 //! The items, as assistive technology sees them.
 //!
 //! Each item on screen is an [`ItemProxy`]: a plain GObject that implements
-//! `GtkAccessible` — a role, a name, a place in the set, a selected state, bounds
-//! — and no widget behind it. The view offers them as its accessible children,
+//! `GtkAccessible` (a role, a name, a place in the set, a selected state, bounds)
+//! and has no widget behind it. The view offers them as its accessible children,
 //! the way `GtkStack` offers its pages.
 //!
 //! **A window, not the whole model.** The proxies cover the items on screen and a

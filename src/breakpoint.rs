@@ -6,8 +6,8 @@
 use adw::prelude::*;
 use gtk::glib;
 
-/// Add `breakpoint` to `owner` — an `AdwWindow`, `AdwApplicationWindow`,
-/// `AdwDialog` or `AdwBreakpointBin` — and let go of it when `owner` is
+/// Add `breakpoint` to `owner` (an `AdwWindow`, `AdwApplicationWindow`,
+/// `AdwDialog` or `AdwBreakpointBin`) and let go of it when `owner` is
 /// destroyed.
 ///
 /// libadwaita 1.9 keeps a window's breakpoints in a `GPtrArray` made without a

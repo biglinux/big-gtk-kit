@@ -38,9 +38,6 @@ DEFAULT_LIBRARY = HERE.parent / "build" / "libgobject-census.so"
 DISMISS_NAMES = ("Cancelar", "Fechar", "Cancel", "Close")
 
 
-# ---------------------------------------------------------------- census files
-
-
 def parse_census(text: str) -> dict[str, int]:
     """`count TypeName` and `count texture WxH` lines into one mapping."""
     counts: dict[str, int] = {}
@@ -75,9 +72,6 @@ def verdict(
     return leaks, tolerated
 
 
-# ------------------------------------------------------------------ the program
-
-
 def with_workdir(text: str, workdir) -> str:
     """`{workdir}` replaced, and nothing else: other braces are the program's own."""
     return text.replace("{workdir}", str(workdir))
@@ -100,7 +94,8 @@ class Program:
         preload = env.get("LD_PRELOAD", "")
         env["LD_PRELOAD"] = f"{library}:{preload}" if preload else str(library)
         env["GOBJECT_CENSUS_OUT"] = str(self.prefix)
-        self.log = open(workdir / "program.log", "w")  # noqa: SIM115 -- lives as long as the program
+        # The log lives as long as the program.
+        self.log = open(workdir / "program.log", "w")  # noqa: SIM115
         self.process = subprocess.Popen(
             [with_workdir(arg, workdir) for arg in spec["command"]],
             env=env,
@@ -134,9 +129,6 @@ class Program:
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.log.close()
-
-
-# ---------------------------------------------------------------- accessibility
 
 
 def atspi():
@@ -217,9 +209,6 @@ def dismiss(app, first_frame: int = 1) -> int:
                 pressed += press(node)
                 break
     return pressed
-
-
-# ---------------------------------------------------------------------- steps
 
 
 def run_step(step: dict, program_spec: dict, app_name: str):

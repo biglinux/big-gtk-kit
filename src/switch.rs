@@ -9,7 +9,7 @@
 /// flips the switch when the slide ends. `gtk_switch_set_active` stops that
 /// slide first, even when the value it is given is the one already shown
 /// (GTK 4.22). A refresh that re-applies the current state during those
-/// 100 ms — a Bluetooth or network signal, a settings reload — swallows the
+/// 100 ms (a Bluetooth or network signal, a settings reload) swallows the
 /// click, and the person has to click again. `AdwSwitchRow` guards its own
 /// setter the same way.
 pub fn set_active(switch: &gtk::Switch, active: bool) {
@@ -33,7 +33,7 @@ mod tests {
     /// A click's slide survives a refresh that shows the same state, and lands.
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn a_refresh_with_the_shown_state_keeps_the_click() {
+    fn same_state_refresh_keeps_click() {
         gtk::init().expect("a display");
         let switch = gtk::Switch::new();
         let window = gtk::Window::builder().child(&switch).build();

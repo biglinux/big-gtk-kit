@@ -4,7 +4,7 @@
 //! Where every item goes, as arithmetic.
 //!
 //! Every item of a view has the same size, so the place of item `n`, the item
-//! under a point and the items on screen are each a few divisions — O(1) for a
+//! under a point and the items on screen are each a few divisions: O(1) for a
 //! folder of ten or ten thousand entries. Nothing here touches GTK, which is what
 //! lets it be tested without a display.
 
@@ -852,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn headings_push_their_runs_down_and_are_not_items() {
+    fn headings_push_runs_down() {
         let rows = Metrics::compute(
             Flow::RowMajor {
                 min_columns: 1,
@@ -904,7 +904,7 @@ mod tests {
     /// A photo library by month: every run starts a line of its own under its
     /// heading, so a month's short last line leaves the rest of it empty.
     #[test]
-    fn a_grid_starts_each_run_on_a_line_of_its_own() {
+    fn grid_runs_start_new_lines() {
         // 10 columns of 100, rows of 120, headings 40; runs of 12, 3 and 10.
         let metrics = grid(25);
         let runs = Sections {
@@ -955,7 +955,7 @@ mod tests {
     /// Up and Down keep the column across a heading, the way the items are
     /// drawn, and a short line takes the cursor to its last item.
     #[test]
-    fn keys_cross_a_heading_in_the_same_column() {
+    fn keys_cross_headings_in_column() {
         let metrics = grid(25);
         let runs = Sections {
             starts: vec![0, 12, 15],
@@ -996,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grid_places_row_by_row_and_measures_its_rows() {
+    fn grid_places_row_by_row() {
         let metrics = grid(25);
         assert_eq!(metrics.rect(0).unwrap().x, 0.0);
         let r = metrics.rect(12).unwrap();
@@ -1008,7 +1008,7 @@ mod tests {
     /// Dolphin's compact view: a column is as wide as its widest name, so a
     /// column of short names takes little room and a long one is read whole.
     #[test]
-    fn fitted_columns_are_as_wide_as_their_widest_item() {
+    fn fitted_columns_fit_widest_item() {
         // 20 rows: items 0..20 in the first column, 20..40 in the second.
         let widths = |position: u32| if position == 25 { 300.0 } else { 80.0 };
         let fitted = flow(45).fit_columns(widths);
@@ -1042,7 +1042,7 @@ mod tests {
     /// A grid row as tall as its tallest item: a row of one-line names does
     /// not keep the room three lines take.
     #[test]
-    fn fitted_rows_are_as_tall_as_their_tallest_item() {
+    fn fitted_rows_fit_tallest_item() {
         // 10 columns of 100 in 1000 wide, cells up to 120 tall.
         let heights = |position: u32| if position == 12 { 120.0 } else { 80.0 };
         let fitted = grid(25).fit_rows(heights);
@@ -1070,7 +1070,7 @@ mod tests {
     }
 
     #[test]
-    fn a_column_flow_places_column_by_column_and_scrolls_sideways() {
+    fn column_flow_scrolls_sideways() {
         let metrics = flow(45);
         assert_eq!(metrics.items_per_line(), 20);
         let r = metrics.rect(21).unwrap();
@@ -1079,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn the_item_under_a_point_is_found_and_gaps_are_nothing() {
+    fn point_finds_item_or_gap() {
         let metrics = grid(25);
         assert_eq!(metrics.position_at(250.0, 130.0), Some(12));
         assert_eq!(
@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_move_the_cursor_the_way_the_items_are_drawn() {
+    fn keys_follow_drawn_order() {
         let metrics = grid(25);
         assert_eq!(metrics.step(12, Step::Next), Some(13));
         assert_eq!(metrics.step(12, Step::Down), Some(22));

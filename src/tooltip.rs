@@ -5,7 +5,7 @@
 //!
 //! Call [`install`] once, after GTK is initialised and before the first window
 //! is realized. From then on a widget's own `tooltip-text` or `tooltip-markup`
-//! — set in code, by a builder, in a relm4 `view!` or in a `.ui` file — shows as
+//! (set in code, by a builder, in a relm4 `view!` or in a `.ui` file) shows as
 //! the BigLinux card instead of GTK's tooltip window. Call sites do not change,
 //! and the accessible name and description GTK derives from the tooltip stay.
 //!
@@ -42,8 +42,8 @@ const ICON_KEY: &str = "big-gtk-kit-tooltip-icon";
 const AREA_KEY: &str = "big-gtk-kit-tooltip-area";
 // On the default display, not in statics: a program assembled from modules
 // links one copy of this crate per module, and only the copy that installed
-// the cards draws them. A static a module set was never read -- the desktop's
-// bar asked for cards on its never-active surfaces and got none.
+// the cards draws them. A static set by another module is never read, so the
+// desktop's bar would ask for cards on its never-active surfaces and get none.
 /// `bool` on the display: [`set_show_when_inactive`].
 const SHOW_WHEN_INACTIVE_KEY: &str = "big-gtk-kit-tooltip-show-when-inactive";
 /// `bool` on the display: [`set_follow_pointer`].
@@ -713,7 +713,7 @@ mod tests {
     /// is what the cards obey, and its `hide_all` closes them.
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn another_copy_reaches_the_cards_through_the_display() {
+    fn other_copy_reaches_cards() {
         gtk::init().expect("a display");
         install();
         let display = gdk::Display::default().expect("a display");

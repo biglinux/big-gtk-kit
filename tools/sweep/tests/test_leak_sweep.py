@@ -29,10 +29,10 @@ class Verdict(unittest.TestCase):
         self.assertEqual(leaks, {"GtkLabel": 6})
         self.assertEqual(tolerated, {})
 
-    def test_less_than_one_per_cycle_is_warming_up(self):
+    def test_slower_growth_is_warming_up(self):
         self.assertEqual(leak_sweep.verdict({"GtkCssStaticStyle": 5}, 6, {}), ({}, {}))
 
-    def test_an_allowed_type_is_tolerated_up_to_its_cap(self):
+    def test_allowed_type_tolerated_to_cap(self):
         allow = {"AdwBreakpoint": 3}
         self.assertEqual(
             leak_sweep.verdict({"AdwBreakpoint": 18}, 6, allow),
@@ -85,20 +85,20 @@ class Spec(unittest.TestCase):
         with self.assertRaises(ValueError):
             leak_sweep.load_spec(self.write('[program]\natspi_name = "x"\n'))
 
-    def test_a_command_given_as_one_string_is_refused(self):
+    def test_string_command_is_refused(self):
         self.refused('[program]\ncommand = "prog --flag"\natspi_name = "x"\n')
 
     def test_a_seed_outside_the_workdir_is_refused(self):
         for name in ("/etc/passwd", "../outside"):
             self.refused(PROGRAM + f'[program.files]\n"{name}" = "x"\n')
 
-    def test_an_allow_without_a_reason_or_a_cap_is_refused(self):
+    def test_bare_allow_is_refused(self):
         self.refused(PROGRAM + '[[allow]]\ntype = "AdwBreakpoint"\nper_cycle = 3\n')
         self.refused(
             PROGRAM + '[[allow]]\ntype = "AdwBreakpoint"\nreason = "upstream"\n'
         )
 
-    def test_an_action_without_its_bus_name_or_path_is_refused(self):
+    def test_incomplete_action_is_refused(self):
         self.refused(
             PROGRAM
             + '[[surface]]\nname = "a"\nopen = [{ do = "action", name = "a" }]\n'

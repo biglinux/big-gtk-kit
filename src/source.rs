@@ -28,7 +28,7 @@ mod tests {
 
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn removes_a_pending_source_and_ignores_one_that_already_ran() {
+    fn removes_only_pending_sources() {
         let context = glib::MainContext::default();
         let ran = glib::timeout_add_local_once(Duration::ZERO, || {});
         while context.iteration(false) {}

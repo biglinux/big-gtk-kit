@@ -1008,7 +1008,7 @@ mod tests {
     /// star rates the item with that star.
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn a_tree_opens_and_closes_and_a_star_rates() {
+    fn tree_toggles_and_star_rates() {
         let presenter = Rc::new(Named::default());
         let mut geometry = Geometry::rows(16);
         geometry.columns = vec![

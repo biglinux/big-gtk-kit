@@ -269,7 +269,7 @@ pub struct Geometry {
     /// The columns of a list with columns ([`Flow::RowMajor`], one item per
     /// line), in the order they are shown; empty for every other shape.
     pub columns: Vec<Column>,
-    /// Whether only what an item draws — its picture, its words, its tick —
+    /// Whether only what an item draws (its picture, its words, its tick)
     /// is the item, rather than its whole cell. The rest of the cell is
     /// background: a press there starts a rubber band, as in a file manager.
     pub hit_drawn_only: bool,

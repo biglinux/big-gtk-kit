@@ -73,7 +73,7 @@ pub fn present_kept<D: IsA<adw::Dialog>>(
 }
 
 /// What one opening of a reused dialog connected to it, and which opening is
-/// the dialog's now: a handle kept from an earlier one no longer reaches it.
+/// current: a handle kept from an earlier one does not reach it.
 #[derive(Default)]
 pub(crate) struct Opening {
     handlers: RefCell<Vec<glib::SignalHandlerId>>,
@@ -162,7 +162,7 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
 ///
 /// A `Dialog` kept past its closing may hold the dialog while it shows
 /// something else: its [`close`](Self::close) then does nothing, and a
-/// [`WeakDialog`] no longer upgrades. Everything else reached through the
+/// [`WeakDialog`] stops upgrading. Everything else reached through the
 /// deref acts on whatever the dialog shows now.
 #[derive(Clone)]
 pub struct Dialog {
@@ -365,7 +365,7 @@ mod tests {
     /// handlers, and lets go of what the last one showed.
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn dialogs_show_again_with_nothing_of_the_last_opening() {
+    fn reused_dialog_forgets_last_opening() {
         init();
         install();
         let window = adw::Window::new();
@@ -445,7 +445,7 @@ mod tests {
 
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn a_kept_dialog_is_built_once_per_window() {
+    fn kept_dialog_built_once_per_window() {
         init();
         let window = adw::Window::new();
         window.present();

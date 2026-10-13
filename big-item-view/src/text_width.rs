@@ -79,7 +79,7 @@ mod tests {
 
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn a_summed_width_is_the_laid_out_width_give_or_take_kerning() {
+    fn summed_width_matches_layout() {
         let layout = gtk::Label::new(None).create_pango_layout(None);
         let exact = |text: &str| logical_width(&layout, text) as f32 / pango::SCALE as f32;
         let mut widths = CharWidths::default();
