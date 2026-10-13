@@ -25,6 +25,8 @@ pub(crate) struct State {
     pub(crate) focus_visible: bool,
     pub(crate) view_focused: bool,
     pub(crate) drop_target: bool,
+    /// One of the shaded rows of a striped list.
+    pub(crate) striped: bool,
     /// An editor is laid over the name, which is therefore not drawn.
     pub(crate) editing: bool,
     /// In a tree: the row's depth, and whether it is expanded when it can be.
@@ -321,6 +323,8 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         Some(palette.get(Role::CursorFill))
     } else if state.hovered {
         Some(palette.get(Role::HoverFill))
+    } else if state.striped {
+        Some(palette.get(Role::StripeFill))
     } else {
         None
     };

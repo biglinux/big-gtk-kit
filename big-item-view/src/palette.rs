@@ -28,6 +28,7 @@ pub(crate) enum Role {
     Text,
     TextDim,
     HoverFill,
+    StripeFill,
     SelectedFill,
     SelectedFocusRing,
     FocusRing,
@@ -48,10 +49,11 @@ pub(crate) enum Role {
     Accent,
 }
 
-pub(crate) const ROLES: [Role; 21] = [
+pub(crate) const ROLES: [Role; 22] = [
     Role::Text,
     Role::TextDim,
     Role::HoverFill,
+    Role::StripeFill,
     Role::SelectedFill,
     Role::SelectedFocusRing,
     Role::FocusRing,
@@ -78,6 +80,7 @@ impl Role {
             Self::Text => "text",
             Self::TextDim => "text-dim",
             Self::HoverFill => "hover-fill",
+            Self::StripeFill => "stripe-fill",
             Self::SelectedFill => "selected-fill",
             Self::SelectedFocusRing => "selected-focus-ring",
             Self::FocusRing => "focus-ring",
@@ -110,6 +113,7 @@ const DEFAULT_CSS: &str = "
 itemview > probe { min-width: 0; min-height: 0; }
 itemview > probe.text-dim { color: alpha(currentColor, 0.7); }
 itemview > probe.hover-fill { color: alpha(currentColor, 0.06); }
+itemview > probe.stripe-fill { color: alpha(currentColor, 0.04); }
 itemview > probe.selected-fill { color: alpha(var(--accent-bg-color), 0.22); }
 itemview > probe.selected-focus-ring { color: var(--accent-bg-color); }
 itemview > probe.focus-ring { color: var(--accent-color); }

@@ -120,6 +120,8 @@ mod imp {
         pub(crate) band: Cell<Option<layout::Rect>>,
         pub(crate) pending: Cell<Option<Pending>>,
         pub(crate) single_click: Cell<bool>,
+        /// Every other row shaded, for a long list of rows read across.
+        pub(crate) stripes: Cell<bool>,
         pub(crate) rubberband: Cell<bool>,
         pub(super) cache: RefCell<Cache>,
         probes: RefCell<Option<Probes>>,
@@ -187,6 +189,7 @@ mod imp {
                 band: Cell::new(None),
                 pending: Cell::new(None),
                 single_click: Cell::new(false),
+                stripes: Cell::new(false),
                 rubberband: Cell::new(true),
                 cache: RefCell::new(Cache::default()),
                 probes: RefCell::new(None),
@@ -1045,6 +1048,7 @@ mod imp {
                         || obj.state_flags().contains(gtk::StateFlags::FOCUS_VISIBLE)),
                 view_focused: focused,
                 drop_target: self.drop_target.get() == Some(position),
+                striped: self.stripes.get() && position % 2 == 1,
                 editing: self
                     .editing
                     .borrow()
@@ -1548,6 +1552,13 @@ impl ItemView {
     /// Activate on a single click instead of a double one.
     pub fn set_single_click_activate(&self, single: bool) {
         self.imp().single_click.set(single);
+    }
+
+    /// Shade every other row, which a long list of rows with columns needs for
+    /// the eye to follow a line across.
+    pub fn set_stripes(&self, stripes: bool) {
+        self.imp().stripes.set(stripes);
+        self.queue_draw();
     }
 
     /// Select by dragging a rectangle over the items from empty space.
