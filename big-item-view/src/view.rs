@@ -164,8 +164,9 @@ mod imp {
         /// How many lines each name takes at the width it was last laid out
         /// in: that width, and the counts.
         title_lines: RefCell<Option<(i32, std::rc::Rc<[u8]>)>>,
-        /// The scrolled window the wheel is turned sideways on (`input::install_wheel`).
-        pub(crate) wheel_on: glib::WeakRef<gtk::ScrolledWindow>,
+        /// The controller `input::install_wheel` put on the enclosing
+        /// scrolled window.
+        pub(crate) wheel: RefCell<Option<gtk::EventControllerScroll>>,
     }
 
     impl Default for ItemView {
@@ -214,7 +215,7 @@ mod imp {
                 title_chars: RefCell::default(),
                 caption_chars: RefCell::default(),
                 title_lines: RefCell::new(None),
-                wheel_on: glib::WeakRef::new(),
+                wheel: RefCell::new(None),
             }
         }
     }
@@ -313,6 +314,11 @@ mod imp {
             }
             self.parent_map();
             crate::input::install_wheel(&self.obj());
+        }
+
+        fn unroot(&self) {
+            crate::input::remove_wheel(&self.obj());
+            self.parent_unroot();
         }
 
         fn unmap(&self) {

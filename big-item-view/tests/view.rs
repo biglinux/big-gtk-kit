@@ -283,6 +283,22 @@ fn a_view_that_goes_keeps_nothing_alive() {
     );
 }
 
+#[gtk::test]
+#[ignore = "needs a display"]
+fn replaced_view_takes_its_wheel() {
+    let (window, view, _, _) = shown(10);
+    let scroller = view.parent().and_downcast::<gtk::ScrolledWindow>().unwrap();
+    let controllers = || scroller.observe_controllers().n_items();
+    let with_one = controllers();
+    for _ in 0..3 {
+        let next = ItemView::new(Rc::new(Counting::default()), Geometry::grid(100, 48));
+        scroller.set_child(Some(&next));
+        assert!(pump_until(|| next.is_mapped()), "the view never showed");
+    }
+    assert_eq!(controllers(), with_one);
+    window.destroy();
+}
+
 fn pump() {
     let context = glib::MainContext::default();
     let mut guard = 0;

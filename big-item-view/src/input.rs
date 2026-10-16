@@ -55,10 +55,15 @@ pub(crate) fn install_wheel(view: &ItemView) {
         return;
     };
     let imp = view.imp();
-    if imp.wheel_on.upgrade().as_ref() == Some(&scroller) {
+    let on = imp
+        .wheel
+        .borrow()
+        .as_ref()
+        .and_then(EventControllerExt::widget);
+    if on.as_ref() == Some(scroller.upcast_ref()) {
         return;
     }
-    imp.wheel_on.set(Some(&scroller));
+    remove_wheel(view);
     let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
     let weak = view.downgrade();
@@ -89,7 +94,18 @@ pub(crate) fn install_wheel(view: &ItemView) {
         adjustment.set_value((adjustment.value() + delta_y * step).clamp(adjustment.lower(), top));
         glib::Propagation::Stop
     });
-    scroller.add_controller(scroll);
+    scroller.add_controller(scroll.clone());
+    imp.wheel.replace(Some(scroll));
+}
+
+/// Take the wheel off its scrolled window when the view leaves the tree: the
+/// window outlives the views it holds.
+pub(crate) fn remove_wheel(view: &ItemView) {
+    if let Some(scroll) = view.imp().wheel.take()
+        && let Some(scroller) = scroll.widget()
+    {
+        scroller.remove_controller(&scroll);
+    }
 }
 
 fn modifiers(controller: &impl IsA<gtk::EventController>) -> (bool, bool) {
