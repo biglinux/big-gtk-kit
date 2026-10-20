@@ -8,6 +8,11 @@
 //! laid out where the view draws its columns and move with its sideways scroll.
 //! The header only asks: sorting, resizing and moving a column are the
 //! consumer's to decide and to remember, and each is a signal.
+//!
+//! The keyboard does on a focused heading what the pointer does: Enter or
+//! Space sorts, Alt with an arrow narrows or widens the column, Alt+Shift with
+//! an arrow moves it, and Menu or Shift+F10 asks for the columns' menu. The
+//! arrows follow the reading direction.
 
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
@@ -24,6 +29,11 @@ const EDGE: f64 = 5.0;
 const CARRY: f64 = 8.0;
 /// The narrowest a column can be made.
 const NARROWEST: i32 = 48;
+/// How much Alt with an arrow narrows or widens a column.
+const KEY_STEP: f64 = 16.0;
+/// What a heading's keys are, for assistive technology (`aria-keyshortcuts`).
+const KEY_SHORTCUTS: &str = "Alt+ArrowLeft Alt+ArrowRight Alt+Shift+ArrowLeft \
+                             Alt+Shift+ArrowRight Shift+F10";
 
 #[derive(Clone, Copy, Debug)]
 enum Drag {
@@ -265,6 +275,15 @@ impl ColumnHeader {
             self.queue_allocate();
             return;
         }
+        // A heading moved by the keyboard keeps the focus in its new place.
+        let focused = self
+            .imp()
+            .buttons
+            .borrow()
+            .iter()
+            .zip(self.imp().built_for.borrow().iter())
+            .find(|(button, _)| button.has_focus())
+            .map(|(_, (id, _, _))| *id);
         for button in self.imp().buttons.take() {
             button.unparent();
         }
@@ -296,6 +315,7 @@ impl ColumnHeader {
             button.update_property(&[
                 gtk::accessible::Property::Label(&column.title),
                 gtk::accessible::Property::Sort(sort),
+                gtk::accessible::Property::KeyShortcuts(KEY_SHORTCUTS),
             ]);
             let (weak, id) = (self.downgrade(), column.id);
             button.connect_clicked(move |_| {
@@ -303,10 +323,15 @@ impl ColumnHeader {
                     header.emit_by_name::<()>("sort-requested", &[&id]);
                 }
             });
-            // The column's menu from the keyboard, on the heading that has it.
             let keys = gtk::EventControllerKey::new();
             let (weak, id) = (self.downgrade(), column.id);
             keys.connect_key_pressed(move |controller, key, _, state| {
+                if let Some(header) = weak.upgrade()
+                    && header.key_on_heading(id, key, state)
+                {
+                    return glib::Propagation::Stop;
+                }
+                // The column's menu from the keyboard, on the heading that has it.
                 let menu = key == gtk::gdk::Key::Menu
                     || (key == gtk::gdk::Key::F10
                         && state.contains(gtk::gdk::ModifierType::SHIFT_MASK));
@@ -329,11 +354,73 @@ impl ColumnHeader {
             });
             button.add_controller(keys);
             button.set_parent(self);
+            if focused == Some(column.id) {
+                button.grab_focus();
+            }
             buttons.push(button);
         }
         self.imp().buttons.replace(buttons);
         self.imp().built_for.replace(wanted);
         self.queue_resize();
+    }
+
+    /// Alt with an arrow on the heading of column `id`: narrow or widen it,
+    /// or with Shift move it one place. Whether the key was one of those.
+    fn key_on_heading(&self, id: u32, key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
+        use gtk::gdk::{Key, ModifierType};
+        let Some(view) = self.imp().view.upgrade() else {
+            return false;
+        };
+        let rtl = view.direction() == gtk::TextDirection::Rtl;
+        // Towards the column's end: its far edge, or the place after it.
+        let onward = match key {
+            Key::Right | Key::KP_Right => !rtl,
+            Key::Left | Key::KP_Left => rtl,
+            _ => return false,
+        };
+        let modifiers = state
+            & (ModifierType::ALT_MASK
+                | ModifierType::SHIFT_MASK
+                | ModifierType::CONTROL_MASK
+                | ModifierType::SUPER_MASK);
+        let columns = view.geometry().columns;
+        let Some(index) = columns.iter().position(|column| column.id == id) else {
+            return false;
+        };
+        if modifiers == ModifierType::ALT_MASK {
+            let width = view
+                .column_spans()
+                .get(index)
+                .map_or(columns[index].width as f32, |span| span.1);
+            let step = if onward { KEY_STEP } else { -KEY_STEP };
+            if let Some((id, width)) = self.resize(&view, index, f64::from(width) + step) {
+                self.emit_by_name::<()>("column-resized", &[&id, &width]);
+            }
+            return true;
+        }
+        if modifiers == ModifierType::ALT_MASK | ModifierType::SHIFT_MASK {
+            let to = if onward {
+                Some(index + 1)
+            } else {
+                index.checked_sub(1)
+            };
+            if let Some(to) = to.filter(|to| *to < columns.len()) {
+                self.emit_by_name::<()>("column-moved", &[&id, &(to as u32)]);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Make column `index` of `view` `width` pixels wide, never narrower than
+    /// [`NARROWEST`]: its id and the width it got.
+    fn resize(&self, view: &ItemView, index: usize, width: f64) -> Option<(u32, i32)> {
+        let mut geometry = view.geometry();
+        let column = geometry.columns.get_mut(index)?;
+        column.width = (width.round() as i32).max(NARROWEST);
+        let resized = (column.id, column.width);
+        view.set_geometry(geometry);
+        Some(resized)
     }
 
     /// The index of the column under `x`, in the header's coordinates, and
@@ -442,11 +529,7 @@ impl ColumnHeader {
             match header.imp().drag.get() {
                 Some(Drag::Resize { index, width }) => {
                     let grown = if rtl { -dx } else { dx };
-                    let mut geometry = view.geometry();
-                    if let Some(column) = geometry.columns.get_mut(index) {
-                        column.width = ((f64::from(width) + grown).round() as i32).max(NARROWEST);
-                        view.set_geometry(geometry);
-                    }
+                    header.resize(&view, index, f64::from(width) + grown);
                 }
                 Some(Drag::Carry {
                     index, carrying, ..

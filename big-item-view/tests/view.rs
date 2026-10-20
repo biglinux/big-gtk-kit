@@ -6,9 +6,12 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use big_item_view::{Geometry, IconSource, ItemContent, ItemPresenter, ItemView};
+use big_item_view::{
+    Column, ColumnHeader, ColumnShows, Geometry, IconSource, ItemContent, ItemPresenter, ItemView,
+};
+use gtk::glib::translate::IntoGlib;
 use gtk::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 
 /// Counts how often the view asks about an item.
 #[derive(Default)]
@@ -333,6 +336,121 @@ fn replaced_view_takes_its_wheel() {
         assert!(pump_until(|| next.is_mapped()), "the view never showed");
     }
     assert_eq!(controllers(), with_one);
+    window.destroy();
+}
+
+/// The heading's title, the label inside its button.
+fn heading_title(button: &gtk::Widget) -> Option<String> {
+    let label = button.first_child()?.first_child()?;
+    Some(label.downcast_ref::<gtk::Label>()?.label().to_string())
+}
+
+/// Press `key` with `state` on the focused heading, as the keyboard does.
+fn press(heading: &gtk::Widget, key: gdk::Key, state: gdk::ModifierType) -> bool {
+    let keys = heading
+        .observe_controllers()
+        .into_iter()
+        .filter_map(Result::ok)
+        .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .expect("the heading's keys");
+    keys.emit_by_name::<bool>("key-pressed", &[&key.into_glib(), &0_u32, &state])
+}
+
+/// Alt with an arrow widens the focused column and Alt+Shift moves it, and
+/// the heading keeps the focus in its new place, as the pointer would.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn headings_resize_and_move_by_keys() {
+    let column = |id, title: &str, shows, expand| Column {
+        id,
+        title: title.into(),
+        shows,
+        width: 100,
+        expand,
+        xalign: 0.0,
+        sort: None,
+    };
+    let geometry = Geometry {
+        columns: vec![
+            column(0, "Name", ColumnShows::Primary, true),
+            column(1, "Size", ColumnShows::Cell(0), false),
+            column(2, "Kind", ColumnShows::Cell(1), false),
+        ],
+        ..Geometry::rows(22)
+    };
+    let view = ItemView::new(Rc::new(Counting::default()), geometry);
+    view.set_model(Some(&gtk::MultiSelection::new(Some(strings(10)))));
+    let header = ColumnHeader::new(&view);
+    let resized = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&resized);
+    header.connect_column_resized(move |_, id, width| seen.borrow_mut().push((id, width)));
+    let weak = view.downgrade();
+    header.connect_column_moved(move |_, id, to| {
+        let Some(view) = weak.upgrade() else { return };
+        let mut geometry = view.geometry();
+        let from = geometry.columns.iter().position(|c| c.id == id).unwrap();
+        let moved = geometry.columns.remove(from);
+        geometry.columns.insert(to as usize, moved);
+        view.set_geometry(geometry);
+    });
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    page.append(&header);
+    page.append(
+        &gtk::ScrolledWindow::builder()
+            .child(&view)
+            .vexpand(true)
+            .build(),
+    );
+    let window = gtk::Window::builder()
+        .default_width(600)
+        .default_height(400)
+        .child(&page)
+        .build();
+    window.present();
+    assert!(
+        pump_until(|| header.width() > 0),
+        "the header was never shown"
+    );
+    let headings = || {
+        let mut found = Vec::new();
+        let mut child = header.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            found.push(widget);
+        }
+        found
+    };
+    let size = headings()[1].clone();
+    assert_eq!(heading_title(&size).as_deref(), Some("Size"));
+    assert!(gtk::test_accessible_has_property(
+        size.upcast_ref::<gtk::Accessible>(),
+        gtk::AccessibleProperty::KeyShortcuts
+    ));
+    size.grab_focus();
+
+    assert!(press(&size, gdk::Key::Right, gdk::ModifierType::ALT_MASK));
+    assert_eq!(view.geometry().columns[1].width, 116);
+    assert_eq!(*resized.borrow(), [(1, 116)]);
+    assert!(press(&size, gdk::Key::Left, gdk::ModifierType::ALT_MASK));
+    assert_eq!(view.geometry().columns[1].width, 100);
+
+    let both = gdk::ModifierType::ALT_MASK | gdk::ModifierType::SHIFT_MASK;
+    assert!(press(&size, gdk::Key::Right, both));
+    pump();
+    let order: Vec<u32> = view.geometry().columns.iter().map(|c| c.id).collect();
+    assert_eq!(order, [0, 2, 1]);
+    let focused = gtk::prelude::GtkWindowExt::focus(&window).expect("a focused heading");
+    assert_eq!(heading_title(&focused).as_deref(), Some("Size"));
+    assert_eq!(headings()[2], focused, "the moved heading kept the focus");
+    assert!(
+        press(&focused, gdk::Key::Right, both),
+        "the last place is an edge"
+    );
+    assert!(!press(
+        &focused,
+        gdk::Key::Right,
+        gdk::ModifierType::CONTROL_MASK
+    ));
     window.destroy();
 }
 
