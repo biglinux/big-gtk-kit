@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 BigLinux contributors
+// SPDX-License-Identifier: MIT
+
 use std::cell::RefCell;
 use std::rc::Rc;
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 BigLinux contributors
+// SPDX-License-Identifier: MIT
+
 use super::*;
 
 const GRID: Flow = Flow::RowMajor {

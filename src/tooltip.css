@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 BigLinux contributors
+   SPDX-License-Identifier: MIT */
+
 /* The BigLinux tooltip card. Shown by `tooltip.rs` in place of GTK's own
    tooltip window, so every program draws the same card. */
 
