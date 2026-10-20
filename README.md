@@ -24,10 +24,12 @@ big-gtk-kit = { git = "https://github.com/biglinux/big-gtk-kit" }
 organisation only.
 
 `big-item-view/` is a second crate in this workspace: one drawn, virtualized
-widget for an icon grid, a column flow or rows with columns. A list of 5 000
-items is 44 widgets instead of a `GtkColumnView`'s 2 903 (+1.6 MiB against
-+10.0 MiB). Coloured icons come from the caller's `IconLoader`, else GTK's icon
-theme draws them.
+widget for an icon grid, a column flow or rows with columns. Five thousand rows
+with three columns and their headings, in a 1100×760 window, are 46 widgets for
+the whole window, as are none; a `GtkColumnView` with the same columns makes
+1 460, one row widget and three cells for every row it builds (GTK 4.22.5,
+counted by the `tools/` census). Coloured icons come from the caller's
+`IconLoader`, else GTK's icon theme draws them.
 
 ```toml
 big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
