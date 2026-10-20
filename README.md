@@ -52,8 +52,8 @@ This turns on what needs no change at the call sites:
   takes), 22 of 25 measured, every `AdwShortcutsDialog` over 120 objects;
 - releasing the parent surface of every Wayland popup: GDK never drops the
   reference a popup takes on it, so every window that showed a popover, menu or
-  tooltip kept its surface after closing, 25 of 25 measured (GTK 4.22.4, still
-  so on `main`; limited to GTK before 4.22.5).
+  tooltip kept its surface after closing, 25 of 25 measured (GTK 4.22.4 and
+  4.22.5, still so on `main`; limited to GTK before 4.22.6).
 
 ## Workarounds
 

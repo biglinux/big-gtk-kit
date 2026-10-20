@@ -24,11 +24,11 @@ const PARENT_KEY: &str = "big-gtk-kit-surface-parent";
 /// (`gdkpopup-wayland.c`) and nothing ever drops that reference
 /// (`gdk_surface_finalize` only unlinks the popup from the parent's children),
 /// so a window that showed one popover, menu or tooltip kept its
-/// `GdkWaylandToplevel` after it closed (GTK 4.22.4, still so on `main`). The
-/// release is limited to GTK before 4.22.5, so a GTK that fixes it is not
-/// unreferenced twice.
+/// `GdkWaylandToplevel` after it closed (GTK 4.22.4 and 4.22.5, still so on
+/// `main`). The release is limited to GTK before 4.22.6, so a GTK that fixes it
+/// is not unreferenced twice.
 pub(crate) fn install() {
-    if INSTALLED.replace(true) || gtk::check_version(4, 22, 5).is_none() {
+    if INSTALLED.replace(true) || gtk::check_version(4, 22, 6).is_none() {
         return;
     }
     crate::on_every_emission("realize", |widget: gtk::Widget| {

@@ -139,7 +139,7 @@ hides regressions.
 | `AdwBreakpoint` | 3 per adaptive `AdwDialog` opening | the same, in the breakpoints the dialog makes for itself | unreachable: `[[allow]]` with a ceiling of 3 per cycle |
 | the dialog's whole tree | per dialog closed over a window without focus | libadwaita 1.9 restores no focus; GTK 4.22 loses the reference of the deferred focus | `install()` (focus taken out on `closed`) |
 | `AdwShortcutsSection`, items, `GtkFilterListModel`, `GtkCustomFilter`, `AdwTimedAnimation` | 1 set per `AdwShortcutsDialog` opening | the dialog's teardown | `dialog::present_kept` |
-| `GdkWaylandToplevel` | 1 per window that showed a popover, menu or tooltip | GDK 4.22.4 (and `main`): the Wayland popup takes its parent with `g_value_dup_object` and never drops it | `install()` (released when the popup finalizes) |
+| `GdkWaylandToplevel` | 1 per window that showed a popover, menu or tooltip | GDK 4.22.4 and 4.22.5 (and `main`): the Wayland popup takes its parent with `g_value_dup_object` and never drops it | `install()` (released when the popup finalizes) |
 | `GMenu` | 1 per section shown, per menu built | GTK 4.22 `gtk_menu_tracker_add_items` (unmerged section) | `menu::append_shared_section`, `menu::append_refilled_section` |
 | `GSignalGroup` ×3, `GtkAdjustment` ×4 | per `GtkSourceView` with a map | GtkSourceView 5.20: `GtkSourceCompletion` creates three groups at init and never frees them | unreachable |
 | `GskVulkanImage`, `GtkCssStaticStyle`, `GtkIconPaintable`, `GskFillNode`/`GskColorNode` | a few per opening, then stable | GTK caches | — (a cache, not a leak: memory stable over 20 openings) |
