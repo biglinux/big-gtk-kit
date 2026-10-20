@@ -27,8 +27,8 @@ organisation only.
 widget for an icon grid, a column flow or rows with columns. Five thousand rows
 with three columns and their headings, in a 1100×760 window, are 46 widgets for
 the whole window, as are none; a `GtkColumnView` with the same columns makes
-1 460, one row widget and three cells for every row it builds (GTK 4.22.5,
-counted by the `tools/` census). Coloured icons come from the caller's
+1 460, a row, three cells and three labels for each row it builds (GTK
+4.22.5, counted by the `tools/` census). Coloured icons come from the caller's
 `IconLoader`, else GTK's icon theme draws them.
 
 ```toml
