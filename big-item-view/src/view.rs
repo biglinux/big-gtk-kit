@@ -1004,10 +1004,9 @@ mod imp {
                     let Some(item) = model.item(position) else {
                         return 1.0;
                     };
-                    let title = title_chars.measure(
-                        &title_layout,
-                        &presenter.title(position, &crate::view::presented(&item)),
-                    );
+                    let item = crate::view::presented(&item);
+                    let title =
+                        title_chars.measure(&title_layout, &presenter.title(position, &item));
                     let subtitle = if geometry.subtitle {
                         presenter
                             .subtitle(position, &item)
