@@ -12,10 +12,10 @@ executable, built with debug info. Each event is attributed to the deepest frame
 whose function matches --crate, with its file:line.
 
 Reading the log: each line is `N|R|S|s|U address count frames…`, and `count` is
-the reference count BEFORE the operation. `N` is the creation, `s` a sink of the
+the reference count before the operation. `N` is the creation, `s` a sink of the
 floating reference (it takes that reference over and adds none), and `U 1` is the
-last release: the object was finalised there. An address can be reused by another object afterwards; a live
-check has to confirm the type (the census does).
+last release: the object was finalised there. An address can be reused by another
+object afterwards; a live check has to confirm the type (the census does).
 """
 
 import argparse

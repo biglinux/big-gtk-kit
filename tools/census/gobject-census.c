@@ -11,7 +11,7 @@
 // The environment is left alone, so a wrapper in between (a shell, a session
 // script) passes it on; each process that loads it names its files by its pid.
 //
-// or called directly: `gobject_census_write (path)` (declared in gobject-census.h).
+// Or call it directly: `gobject_census_write (path)` (declared in gobject-census.h).
 //
 // Why not g_type_get_instance_count(): it only counts when GLib is built with
 // G_ENABLE_DEBUG, and distributions do not build it that way. Why not a debugger:
@@ -28,7 +28,7 @@
 // opened and freed six times left six records holding its class pointer and
 // stack addresses, and they were counted as six live dialogs. With another
 // allocator that test is off and the census says so in its first line. Counts are
-// approximate; what is meaningful is the DIFFERENCE between two censuses of the
+// approximate; what is meaningful is the difference between two censuses of the
 // same process.
 #define _GNU_SOURCE
 #include <fcntl.h>

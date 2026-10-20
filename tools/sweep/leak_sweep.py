@@ -10,9 +10,9 @@ Run it inside a graphical session with an accessibility bus, such as
 `tools/headless-gate.sh --accessible python3 tools/sweep/leak_sweep.py ...`.
 It starts the program itself, preloaded with libgobject-census, and asks for a
 census by signal, so `command` must exec the GTK program directly: a wrapper
-script would receive the signal instead. For each surface: warm-up cycles, census A, N cycles, census B.
-A type that gained at least one instance per cycle is a leak, unless the surfaces
-file allows it with a per-cycle cap and a reason.
+script would receive the signal instead. For each surface: warm-up cycles,
+census A, N cycles, census B. A type that gained at least one instance per cycle
+is a leak, unless the surfaces file allows it with a per-cycle cap and a reason.
 
 A surface that does not really close is reported as such, not as a leak: windows
 stacking up look exactly like one.

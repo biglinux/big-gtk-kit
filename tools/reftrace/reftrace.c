@@ -15,7 +15,7 @@
 //
 //   make build/reftrace.so
 //   LD_PRELOAD=$PWD/build/reftrace.so REFTRACE_TYPE=AdwApplicationWindow
-//       REFTRACE_OUT=/some/dir/trace target/debug/examples/terminal_window_census
+//       REFTRACE_OUT=/some/dir/trace program
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -76,7 +76,7 @@ static void record(char kind, gpointer object) {
         int count = backtrace(frames, 24);
         // One line per event even when several threads trace at once.
         flockfile(out);
-        // The count BEFORE the operation; a creation has nothing before it.
+        // The count before the operation; a creation has nothing before it.
         fprintf(out, "%c %p %u", kind, object,
                 kind == 'N' ? 0 : (guint)g_atomic_int_get(&((GObject *)object)->ref_count));
         for (int i = 2; i < count; i++) fprintf(out, " %p", frames[i]);

@@ -3,7 +3,7 @@
 """Each rule on the shape that leaked, and on the shapes it must leave alone.
 
 The bad cases are the leaks measured on the BigLinux desktop, reduced to their
-shape; the good cases are the false positives the rules produced along the way.
+shape; the good cases are look-alike shapes that do not leak.
 """
 
 import sys

@@ -151,7 +151,7 @@ class Source:
                 brace = self.text.find("{", m.end())
                 semi = self.text.find(";", m.end())
                 if brace < 0 or (0 <= semi < brace):
-                    continue  # `#[cfg(test)] mod tests;` or `use` -- the body is elsewhere
+                    continue  # `#[cfg(test)] mod tests;` or `use`: the body is elsewhere
                 end = brace + len(call_argument(self.text, brace)) + 1
                 self._test_lines.update(
                     range(self.line_of(m.start()) - 1, self.line_of(end))
@@ -189,8 +189,8 @@ def rule_window_close_by_destroy(src: Source):
                 src.line_of(m.start()),
                 (
                     "a window's close detected with `connect_destroy`: GTK emits `destroy` from "
-                    "dispose, which waits for the last reference -- often the very controller this "
-                    "handler would release. Detect the close with `connect_application_notify` "
+                    "dispose, which waits for the last reference, often held by the very controller "
+                    "this handler would release. Detect the close with `connect_application_notify` "
                     "(`application().is_none()`) or `connect_close_request`."
                 ),
             )
@@ -427,7 +427,7 @@ def handler_captures(
 ) -> set[str]:
     """Names the handler whose `(` ends at `connect_end` keeps alive, by their source name.
 
-    Only what the closure CAPTURES counts: a clone made inside its body runs when
+    Only what the closure captures counts: a clone made inside its body runs when
     the handler runs and is dropped with it; the handler's parameters are its own."""
     return closure_captures(
         call_argument(body_text, connect_end - 1), before, values or {}
@@ -630,8 +630,8 @@ def rule_lazy_followers(src: Source):
         yield (
             src.line_of(m.start()),
             (
-                "followers kept as (weak anchor, strong closure): the closure -- and every widget it "
-                "holds -- lives until the list is next pruned, which for a quiet service is hours. "
+                "followers kept as (weak anchor, strong closure): the closure, and every widget it "
+                "holds, lives until the list is next pruned, which for a quiet service is hours. "
                 "Keep the closure on the anchor and only a weak handle in the list."
             ),
         )

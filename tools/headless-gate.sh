@@ -19,8 +19,7 @@
 #
 # `--accessible` swaps the test AT context for the real AT-SPI bridge and starts a
 # registry on the private bus, which is what an accessibility walk or a screen reader
-# needs and what a unit test must not have: the two modes are mutually exclusive, and
-# both were needed by the same session harness.
+# needs and what a unit test must not have, so one run is either one or the other.
 set -Eeuo pipefail
 
 accessible=0
@@ -47,7 +46,7 @@ if [[ "$accessible" == 1 && ! -x "$registry" ]]; then
 	exit 2
 fi
 
-# The name is terse on purpose: this stands in for XDG_RUNTIME_DIR, and an SSH
+# The name is terse because it stands in for XDG_RUNTIME_DIR, and an SSH
 # control socket under it must fit a 108-byte sun_path. `/run/user/1000` is 14
 # bytes, and anything past 19 leaves an SSH client without connection reuse.
 #
@@ -160,24 +159,21 @@ fi
 # what a renderer costs on the GPU is impossible against a renderer that never
 # touches it.
 if [[ "$accessible" == 1 ]]; then
-	# **A home of its own, because this mode runs the PRODUCT and not a test binary.**
-	# Without it a desktop shell read and wrote the developer's real configuration and
-	# notification history: a walk here showed a banner from a probe two runs earlier,
-	# kept under `~/.local/state`.
-	# A session that edits the state of the person running it cannot be run twice and
-	# mean the same thing.
+	# A home of its own: this mode runs a program, not a test binary, and a program
+	# reads and writes its configuration and state (a desktop shell keeps its
+	# notification history under `~/.local/state`). A run that edits the state of
+	# the person running it cannot be repeated and mean the same thing.
 	home="$runtime_dir/home"
 	mkdir -p "$home"/{.config,.local/share,.local/state,.cache}
 
-	# The real bridge, and the language the product ships in rather than the msgids:
+	# The real bridge, and the language the program ships in rather than the msgids:
 	# an accessibility walk is about what a person hears, and a person hears their own
-	# language. `BIG_A11Y_SESSION` is how the walk finds the session's own directory
-	# for the logs it wants to keep.
+	# language.
 	XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" DISPLAY='' \
 		HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
 		XDG_STATE_HOME="$home/.local/state" XDG_CACHE_HOME="$home/.cache" \
 		GDK_BACKEND=wayland GSK_RENDERER="${GSK_RENDERER:-cairo}" GTK_A11Y=atspi \
-		LC_NUMERIC=C BIG_A11Y_SESSION="$runtime_dir" \
+		LC_NUMERIC=C \
 		"$@"
 else
 	XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" DISPLAY='' \
