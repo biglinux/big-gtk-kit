@@ -35,7 +35,7 @@ pub fn append_shared_section(
             let section = build();
             SECTIONS.with_borrow_mut(|sections| sections.entry(key).or_insert(section).clone())
         });
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
         reason = "the one place allowed to add sections"
     )]
@@ -60,7 +60,7 @@ pub fn append_refilled_section(
     section.remove_all();
     fill(&section);
     if section.n_items() > 0 {
-        #[allow(
+        #[expect(
             clippy::disallowed_methods,
             reason = "the one place allowed to add sections"
         )]

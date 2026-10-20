@@ -183,7 +183,7 @@ pub(crate) fn describe(proxy: &ItemProxy, position: u32, facts: &Facts<'_>) {
     let size = i32::try_from(facts.set_size).unwrap_or(i32::MAX);
     // Numbers, not targets: the list `update_relation` leaks exists only for
     // relations that name other accessibles.
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
         reason = "integer relations carry no target list"
     )]

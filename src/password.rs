@@ -16,7 +16,7 @@ use gtk::glib;
 /// behind after it closes. The release is conditional, so a libadwaita that
 /// fixes this is left alone instead of being unreferenced twice.
 pub fn password_row(builder: adw::builders::PasswordEntryRowBuilder) -> adw::PasswordEntryRow {
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
         reason = "the one place allowed to build it"
     )]

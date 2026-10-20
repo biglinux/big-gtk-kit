@@ -14,7 +14,7 @@
 /// setter the same way.
 pub fn set_active(switch: &gtk::Switch, active: bool) {
     if switch.is_active() != active {
-        #[allow(
+        #[expect(
             clippy::disallowed_methods,
             reason = "the one caller that checks first"
         )]

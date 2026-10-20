@@ -22,7 +22,7 @@ use gtk::glib;
 pub fn add(owner: &impl IsA<gtk::Widget>, breakpoint: adw::Breakpoint) {
     let owner = owner.as_ref();
     let weak = breakpoint.downgrade();
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
         reason = "the one place allowed to add them"
     )]
