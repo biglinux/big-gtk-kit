@@ -66,7 +66,7 @@ cannot see.
 |---|---|---|
 | `accessible::relate` | `update_relation` | gtk-rs 0.11 leaks the target list on every call |
 | `alert::choose`, `choose_future` | `AlertDialogExtManual::choose` | libadwaita-rs 0.9 keeps every dialog asked that way |
-| `alert::Alert` | `adw::AlertDialog::new`, `builder` | libadwaita 1.9 leaves three breakpoints of every dialog behind, about 1.8 KB an opening; an `Alert` asks again with a dialog already made; add responses, connect `closed` and downgrade through it (a `WeakAlert` from an earlier question stops upgrading) |
+| `alert::Alert` | `adw::AlertDialog::new`, `builder` | libadwaita 1.9 leaves three breakpoints of every dialog shown as a sheet behind, about 1.8 KB an opening; an `Alert` made for a parent in an `AdwWindow` asks again with a dialog already made; add responses, connect `closed` and downgrade through it (a `WeakAlert` from an earlier question stops upgrading) |
 | `breakpoint::add` | `add_breakpoint` | libadwaita 1.9 never releases a window's breakpoints |
 | `css::add_provider_for_widget_lifetime` | `style_context_add_provider_for_display` per widget | the display keeps the provider and its rules |
 | `dialog::Dialog` | `adw::Dialog::new`, `builder` | the same three breakpoints per opening; a `Dialog` shows one already made, as `Alert` does; one kept and presented again stays an `adw::Dialog` |
@@ -77,6 +77,15 @@ cannot see.
 | `source::remove` | `glib::SourceId::remove` | panics, and so aborts the program, when the source already ran |
 | `switch::set_active` | `Switch::set_active` | GTK 4.22 cancels a click's slide on an unchanged value |
 | `view_switcher::toggles_for` | `AdwViewStack`, `AdwInlineViewSwitcher` | leak their animation and a tree per page |
+
+`Alert` and `Dialog` take the parent when they are made, and
+`present()`, `Alert::choose` and `Alert::choose_future` show them on it. A
+parent inside an `AdwWindow` or `AdwApplicationWindow` gets a dialog already
+made, shown as a sheet, which goes back once it has closed. No parent, or one
+in any other window, gets a dialog of its own that is never reused:
+libadwaita 1.9 cannot show a dialog that was once a sheet in a window of its
+own, and such a dialog leaves no breakpoints behind anyway. Make them once the
+parent is in its window.
 
 Not reachable from a program, so left as they are: the three breakpoints of a
 dialog made outside `Alert` and `Dialog` (an `AdwPreferencesDialog`, an

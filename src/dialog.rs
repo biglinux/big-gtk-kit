@@ -5,8 +5,9 @@
 //! again instead of one left behind per opening.
 //!
 //! libadwaita 1.9 gives every dialog three breakpoints the first time it is
-//! presented in a window and never releases them, about 1.8 KB an opening for
-//! the life of the program; a dialog presented again makes none.
+//! presented as a sheet inside a window and never releases them, about 1.8 KB
+//! an opening for the life of the program; a dialog presented again makes none.
+//! One presented in a window of its own makes none either.
 
 use std::cell::{Cell, RefCell};
 use std::ops::Deref;
@@ -72,8 +73,28 @@ pub fn present_kept<D: IsA<adw::Dialog>>(
     dialog.present(Some(parent));
 }
 
-/// What one opening of a reused dialog connected to it, and which opening is
-/// current: a handle kept from an earlier one does not reach it.
+/// Whether `adw_dialog_present` on `parent` shows the dialog as a sheet inside
+/// the parent's window. Only an `AdwWindow` or `AdwApplicationWindow` holds a
+/// dialog host, and libadwaita gives the dialog a window of its own over a
+/// window that cannot be resized.
+///
+/// A dialog once shown as a sheet cannot be shown in a window of its own:
+/// libadwaita 1.9 sets a parent on its content, which the sheet still holds,
+/// and GTK refuses it with a critical. So the pools take and give back only
+/// dialogs for which this holds.
+pub(crate) fn presents_in_window(parent: Option<&gtk::Widget>) -> bool {
+    parent
+        .and_then(WidgetExt::root)
+        .and_downcast::<gtk::Window>()
+        .is_some_and(|window| {
+            (window.is::<adw::Window>() || window.is::<adw::ApplicationWindow>())
+                && window.is_resizable()
+        })
+}
+
+/// What one opening of a dialog connected to it, where it is presented, and
+/// which opening is current: a handle kept from an earlier one does not reach
+/// it.
 #[derive(Default)]
 pub(crate) struct Opening {
     handlers: RefCell<Vec<glib::SignalHandlerId>>,
@@ -81,9 +102,29 @@ pub(crate) struct Opening {
     number: Cell<u64>,
     /// Closed over a window, so it may go back once it leaves it.
     reusable: Cell<bool>,
+    /// The widget this opening is presented on, held weakly; `None` for one in
+    /// a window of its own.
+    parent: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
 }
 
 impl Opening {
+    /// Start an opening presented on `parent`.
+    pub(crate) fn begin(&self, parent: Option<&gtk::Widget>) {
+        self.parent.replace(parent.map(ObjectExt::downgrade));
+    }
+
+    /// Where opening `number` is presented: `Some(None)` in a window of its
+    /// own, `None` once that opening is over or its parent is gone.
+    pub(crate) fn target(&self, number: u64) -> Option<Option<gtk::Widget>> {
+        if self.number() != number {
+            return None;
+        }
+        match self.parent.borrow().as_ref() {
+            None => Some(None),
+            Some(parent) => parent.upgrade().map(Some),
+        }
+    }
+
     pub(crate) fn keep(&self, handler: glib::SignalHandlerId) {
         self.handlers.borrow_mut().push(handler);
     }
@@ -111,6 +152,7 @@ impl Opening {
             dialog.remove_controller(&controller);
         }
         self.reusable.set(false);
+        self.parent.take();
         self.number.set(self.number.get() + 1);
     }
 }
@@ -120,10 +162,12 @@ impl Opening {
 /// closing starts and before the `response` that closed an alert; in an idle,
 /// because one closing without animation leaves before that `response` too.
 ///
-/// One presented in a window of its own is never given back: libadwaita 1.9.3
-/// leaves its content parented to it and sets that parent again at the next
-/// presentation, which GTK reports as a critical. Its `force_close` says no `closed` either, and
-/// libadwaita then keeps pointing at that destroyed window.
+/// Only for a dialog made for [`presents_in_window`]. One that was shown in a
+/// window of its own all the same (its parent's window changed) is never given
+/// back: libadwaita 1.9.3 leaves its content parented to it and sets that
+/// parent again at the next presentation, which GTK reports as a critical. Its
+/// `force_close` says no `closed` either, and libadwaita then keeps pointing at
+/// that destroyed window.
 pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
     dialog: &D,
     opening: &Rc<Opening>,
@@ -155,10 +199,14 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
     });
 }
 
-/// An `AdwDialog` taken from those already made, or made when none is free; it
-/// goes back once it has closed and left its window, with its child, the
-/// handlers and controllers added through it and what was set on it gone. It
-/// derefs to the `adw::Dialog`.
+/// An `AdwDialog` made for the widget it is presented on. For a parent inside
+/// an `AdwWindow` or `AdwApplicationWindow`, where it shows as a sheet, it is
+/// taken from those already made, or made when none is free, and it goes back
+/// once it has closed and left its window, with its child, the handlers and
+/// controllers added through it and what was set on it gone. For no parent, or
+/// any other, it is made for this opening alone and released with the window
+/// libadwaita makes for it. It derefs to the `adw::Dialog`;
+/// [`present`](Self::present) shows it on the parent it was made for.
 ///
 /// A `Dialog` kept past its closing may hold the dialog while it shows
 /// something else: its [`close`](Self::close) then does nothing, and a
@@ -199,28 +247,39 @@ thread_local! {
 }
 
 impl Dialog {
-    /// An empty dialog, as `adw::Dialog::new`.
-    pub fn new() -> Self {
-        let dialog = FREE.with_borrow_mut(Vec::pop).unwrap_or_else(Self::make);
+    /// An empty dialog to present on `parent`, as `adw::Dialog::new`; `None`
+    /// presents it in a window of its own. `parent` has to be in its window
+    /// already: that window decides whether the dialog is reused.
+    pub fn new(parent: Option<&impl IsA<gtk::Widget>>) -> Self {
+        let parent = parent.map(AsRef::as_ref);
+        let dialog = if presents_in_window(parent) {
+            FREE.with_borrow_mut(Vec::pop)
+                .unwrap_or_else(|| Self::make(true))
+        } else {
+            Self::make(false)
+        };
+        dialog.opening.begin(parent);
         Self {
             number: dialog.opening.number(),
             ..dialog
         }
     }
 
-    fn make() -> Self {
+    fn make(pooled: bool) -> Self {
         #[expect(clippy::disallowed_methods, reason = "the one place dialogs are made")]
         let dialog = adw::Dialog::new();
         let opening = Rc::<Opening>::default();
-        let kept = Rc::clone(&opening);
-        give_back_once_left(&dialog, &opening, move |dialog, number| {
-            Dialog {
-                dialog,
-                opening: Rc::clone(&kept),
-                number,
-            }
-            .give_back();
-        });
+        if pooled {
+            let kept = Rc::clone(&opening);
+            give_back_once_left(&dialog, &opening, move |dialog, number| {
+                Dialog {
+                    dialog,
+                    opening: Rc::clone(&kept),
+                    number,
+                }
+                .give_back();
+            });
+        }
         Self {
             dialog,
             opening,
@@ -228,9 +287,21 @@ impl Dialog {
         }
     }
 
-    /// As `adw::Dialog::builder`, for the properties a dialog here sets.
-    pub fn builder() -> DialogBuilder {
-        DialogBuilder::default()
+    /// As `adw::Dialog::builder`, for the properties a dialog here sets, to
+    /// present on `parent` (see [`Self::new`]).
+    pub fn builder(parent: Option<&impl IsA<gtk::Widget>>) -> DialogBuilder {
+        DialogBuilder {
+            parent: parent.map(|parent| parent.as_ref().clone()),
+            ..DialogBuilder::default()
+        }
+    }
+
+    /// Show this opening on the parent it was made for; nothing once the
+    /// parent is gone or the dialog shows another opening.
+    pub fn present(&self) {
+        if let Some(parent) = self.opening.target(self.number) {
+            self.dialog.present(parent.as_ref());
+        }
     }
 
     /// Forget this opening and wait for the next.
@@ -292,12 +363,6 @@ impl Dialog {
     }
 }
 
-impl Default for Dialog {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Deref for Dialog {
     type Target = adw::Dialog;
 
@@ -310,6 +375,7 @@ impl Deref for Dialog {
 #[derive(Default)]
 #[must_use = "a dialog is made by `build`"]
 pub struct DialogBuilder {
+    parent: Option<gtk::Widget>,
     title: Option<glib::GString>,
     content_width: Option<i32>,
     content_height: Option<i32>,
@@ -338,7 +404,7 @@ impl DialogBuilder {
     }
 
     pub fn build(self) -> Dialog {
-        let dialog = Dialog::new();
+        let dialog = Dialog::new(self.parent.as_ref());
         if let Some(title) = &self.title {
             dialog.set_title(title);
         }
@@ -377,7 +443,7 @@ mod tests {
         for _ in 0..25 {
             let child = gtk::Label::new(Some("hello"));
             watch(&child, &children);
-            let dialog = Dialog::builder()
+            let dialog = Dialog::builder(Some(&window))
                 .title("Properties")
                 .content_width(300)
                 .child(&child)
@@ -389,7 +455,7 @@ mod tests {
             if !dialogs.borrow().contains(dialog.dialog()) {
                 dialogs.borrow_mut().push(dialog.dialog().clone());
             }
-            dialog.present(Some(&window));
+            dialog.present();
             pump();
             dialog.close();
             while dialog.parent().is_some() {

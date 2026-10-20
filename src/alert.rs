@@ -4,12 +4,13 @@
 //! Asking an `AdwAlertDialog` for its answer without keeping the dialog forever,
 //! and without leaving part of one behind at every question.
 //!
-//! [`Alert`] is an `AdwAlertDialog` taken from those already made. libadwaita 1.9
-//! gives every dialog three breakpoints the first time it is presented in a
-//! window and never releases them, about 1.8 KB a question for the life of the
-//! program; a dialog presented again makes none. An `Alert` goes back to be
-//! asked again once it has closed and left its window, with its responses, its
-//! handlers and what was set on it gone.
+//! [`Alert`] is an `AdwAlertDialog` made for the widget it asks over. libadwaita
+//! 1.9 gives every dialog three breakpoints the first time it is presented as a
+//! sheet inside a window and never releases them, about 1.8 KB a question for
+//! the life of the program; a dialog presented again makes none. An `Alert` for
+//! a parent inside an `AdwWindow` is taken from those already made and goes back
+//! to be asked again once it has closed and left its window, with its
+//! responses, its handlers and what was set on it gone.
 //!
 //! `AlertDialogExtManual::choose` in libadwaita-rs 0.9 hands `self` to
 //! `adw_alert_dialog_choose` with `into_glib_ptr`, a reference the C function never
@@ -30,6 +31,7 @@ use gtk::{gio, glib};
 use crate::dialog::Opening;
 
 /// Present `dialog` on `parent` and call `callback` once with the response.
+/// An [`Alert`] asks with [`Alert::choose`], on the parent it was made for.
 pub fn choose(
     dialog: &adw::AlertDialog,
     parent: Option<&impl IsA<gtk::Widget>>,
@@ -59,7 +61,14 @@ pub fn choose_future(
     dialog: &adw::AlertDialog,
     parent: Option<&impl IsA<gtk::Widget>>,
 ) -> impl Future<Output = glib::GString> + 'static {
-    let parent = parent.map(|parent| parent.as_ref().clone());
+    ask(dialog, parent.map(|parent| parent.as_ref().clone()))
+}
+
+/// [`choose_future`] with the parent owned, so the future borrows nothing.
+fn ask(
+    dialog: &adw::AlertDialog,
+    parent: Option<gtk::Widget>,
+) -> impl Future<Output = glib::GString> + 'static {
     gio::GioFuture::new(dialog, move |dialog, cancellable, send| {
         let weak = dialog.downgrade();
         cancellable.connect_cancelled_local(move |_| {
@@ -73,11 +82,18 @@ pub fn choose_future(
     })
 }
 
-/// An `AdwAlertDialog` taken from those already made, or made when none is free;
-/// it goes back once it has closed and left its window. Everything an
-/// `AdwAlertDialog` does goes through it (it derefs to one); the next question
-/// starts with none of the last one's responses, `response` handlers, or
-/// handlers connected through its own `connect_closed`.
+/// An `AdwAlertDialog` made for the widget it asks over. For a parent inside an
+/// `AdwWindow` or `AdwApplicationWindow`, where it shows as a sheet, it is taken
+/// from those already made, or made when none is free, and it goes back once it
+/// has closed and left its window; the next question starts with none of the
+/// last one's responses, `response` handlers, or handlers connected through its
+/// own `connect_closed`. For no parent, or any other, it is made for this
+/// question alone and released with the window libadwaita makes for it.
+///
+/// Everything an `AdwAlertDialog` does goes through it (it derefs to one), but
+/// it is presented only by [`present`](Self::present), [`choose`](Self::choose)
+/// and [`choose_future`](Self::choose_future), on the parent it was made for:
+/// a dialog once shown as a sheet cannot be shown in a window of its own.
 ///
 /// An `Alert` kept past its closing may hold the dialog while it asks
 /// something else: its [`close`](Self::close) then does nothing, and a
@@ -125,9 +141,23 @@ thread_local! {
 }
 
 impl Alert {
-    /// A dialog with `heading` and `body`, as `adw::AlertDialog::new`.
-    pub fn new(heading: Option<&str>, body: Option<&str>) -> Self {
-        let alert = FREE.with_borrow_mut(Vec::pop).unwrap_or_else(Self::make);
+    /// A dialog with `heading` and `body` to ask over `parent`, as
+    /// `adw::AlertDialog::new`; `None` asks in a window of its own. `parent`
+    /// has to be in its window already: that window decides whether the dialog
+    /// is reused. It is held weakly.
+    pub fn new(
+        parent: Option<&impl IsA<gtk::Widget>>,
+        heading: Option<&str>,
+        body: Option<&str>,
+    ) -> Self {
+        let parent = parent.map(AsRef::as_ref);
+        let alert = if crate::dialog::presents_in_window(parent) {
+            FREE.with_borrow_mut(Vec::pop)
+                .unwrap_or_else(|| Self::make(true))
+        } else {
+            Self::make(false)
+        };
+        alert.kept.opening.begin(parent);
         // Never unset once made (libadwaita refuses NULL): empty shows none.
         alert.dialog.set_heading(Some(heading.unwrap_or_default()));
         alert.dialog.set_body(body.unwrap_or_default());
@@ -137,20 +167,22 @@ impl Alert {
         }
     }
 
-    fn make() -> Self {
+    fn make(pooled: bool) -> Self {
         // A dialog the default handler of `response` closes, as a new one.
         #[expect(clippy::disallowed_methods, reason = "the one place alerts are made")]
         let dialog = adw::AlertDialog::new(None, None);
         let kept = Rc::<Kept>::default();
-        let handed = Rc::clone(&kept);
-        crate::dialog::give_back_once_left(&dialog, &kept.opening, move |dialog, number| {
-            Alert {
-                dialog,
-                kept: Rc::clone(&handed),
-                number,
-            }
-            .give_back();
-        });
+        if pooled {
+            let handed = Rc::clone(&kept);
+            crate::dialog::give_back_once_left(&dialog, &kept.opening, move |dialog, number| {
+                Alert {
+                    dialog,
+                    kept: Rc::clone(&handed),
+                    number,
+                }
+                .give_back();
+            });
+        }
         Self {
             dialog,
             kept,
@@ -214,6 +246,40 @@ impl Alert {
         &self.dialog
     }
 
+    /// Show the question on the parent it was made for; nothing once the
+    /// parent is gone or the dialog asks something else.
+    pub fn present(&self) {
+        if let Some(parent) = self.kept.opening.target(self.number) {
+            self.dialog.present(parent.as_ref());
+        }
+    }
+
+    /// Ask on the parent the question was made for and call `callback` once
+    /// with the response, as [`choose`]. Once the parent is gone or the dialog
+    /// asks something else, `callback` runs at once with the close response.
+    pub fn choose(&self, callback: impl FnOnce(glib::GString) + 'static) {
+        match self.kept.opening.target(self.number) {
+            Some(parent) => choose(&self.dialog, parent.as_ref(), callback),
+            None => callback(self.dialog.close_response()),
+        }
+    }
+
+    /// [`Self::choose`] as a future, as [`choose_future`].
+    pub fn choose_future(&self) -> impl Future<Output = glib::GString> + 'static {
+        let asked = self
+            .kept
+            .opening
+            .target(self.number)
+            .map(|parent| ask(&self.dialog, parent));
+        let close = self.dialog.close_response();
+        async move {
+            match asked {
+                Some(answer) => answer.await,
+                None => close,
+            }
+        }
+    }
+
     /// Whether the dialog still asks this question.
     pub fn is_current(&self) -> bool {
         self.kept.opening.number() == self.number
@@ -272,9 +338,13 @@ impl Alert {
         self.kept.opening.keep(self.dialog.connect_closed(f));
     }
 
-    /// As `adw::AlertDialog::builder`, for the properties a question sets.
-    pub fn builder() -> AlertBuilder {
-        AlertBuilder::default()
+    /// As `adw::AlertDialog::builder`, for the properties a question sets, to
+    /// ask over `parent` (see [`Self::new`]).
+    pub fn builder(parent: Option<&impl IsA<gtk::Widget>>) -> AlertBuilder {
+        AlertBuilder {
+            parent: parent.map(|parent| parent.as_ref().clone()),
+            ..AlertBuilder::default()
+        }
     }
 }
 
@@ -282,6 +352,7 @@ impl Alert {
 #[derive(Default)]
 #[must_use = "an alert is made by `build`"]
 pub struct AlertBuilder {
+    parent: Option<gtk::Widget>,
     heading: Option<glib::GString>,
     body: Option<glib::GString>,
     body_use_markup: bool,
@@ -322,7 +393,11 @@ impl AlertBuilder {
     }
 
     pub fn build(self) -> Alert {
-        let alert = Alert::new(self.heading.as_deref(), self.body.as_deref());
+        let alert = Alert::new(
+            self.parent.as_ref(),
+            self.heading.as_deref(),
+            self.body.as_deref(),
+        );
         alert.set_body_use_markup(self.body_use_markup);
         alert.set_extra_child(self.extra_child.as_ref());
         if let Some(id) = &self.default_response {
@@ -371,7 +446,7 @@ mod tests {
             let entry = gtk::Entry::new();
             watch(&entry, &children);
             // Every other question has a default, as most here do.
-            let builder = Alert::builder()
+            let builder = Alert::builder(Some(&window))
                 .heading("Delete?")
                 .extra_child(&entry)
                 .close_response("cancel");
@@ -411,7 +486,7 @@ mod tests {
             if !dialogs.borrow().contains(alert.dialog()) {
                 dialogs.borrow_mut().push(alert.dialog().clone());
             }
-            alert.present(Some(&window));
+            alert.present();
             pump();
             if let Some((stale, weak)) = last.take() {
                 assert!(weak.upgrade().is_none(), "the last question is gone");
@@ -454,7 +529,7 @@ mod tests {
         let mut dialogs = Vec::new();
         for animate in [false, true, false, true] {
             settings.set_gtk_enable_animations(animate);
-            let alert = Alert::builder().heading("Replace?").build();
+            let alert = Alert::builder(Some(&window)).heading("Replace?").build();
             alert.add_responses(&[("cancel", "_Cancel"), ("replace", "_Replace")]);
             let answers = heard.clone();
             alert.connect_response(None, move |_, response| {
@@ -465,7 +540,7 @@ mod tests {
             }
             // Alive in the pool, so an address seen twice is one dialog.
             dialogs.push(alert.dialog().as_ptr() as usize);
-            alert.present(Some(&window));
+            alert.present();
             // Opened, as a person sees it before answering.
             for _ in 0..10 {
                 pump();
@@ -511,28 +586,44 @@ mod tests {
     #[ignore = "needs a display"]
     fn force_closed_alert_is_retired() {
         init();
-        let first = Alert::new(Some("Once"), None);
-        first.present(gtk::Widget::NONE);
+        let first = Alert::new(gtk::Widget::NONE, Some("Once"), None);
+        first.present();
         pump();
         let shown = first.dialog().clone();
         first.force_close();
         drop(first);
         pump();
-        let next = Alert::new(Some("Again"), None);
+        let next = Alert::new(gtk::Widget::NONE, Some("Again"), None);
         assert_ne!(next.dialog(), &shown);
-        next.present(gtk::Widget::NONE);
+        next.present();
         pump();
         assert!(next.parent().is_some(), "presented in a window of its own");
         next.force_close();
         pump();
     }
 
-    /// Closed in a window of its own, as the shell asks with no parent, and
-    /// asked again without libadwaita setting a parent on what has one.
+    /// A question with no parent, as the shell asks, or over a plain
+    /// `GtkWindow` gets a dialog of its own, never one a sheet showed before:
+    /// libadwaita would set a parent on what the sheet still holds.
     #[gtk::test]
     #[ignore = "needs a display"]
     fn parentless_alerts_ask_again_cleanly() {
         init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.present();
+        let sheet = Alert::new(Some(&window), Some("Keep?"), None);
+        let pooled = sheet.dialog().clone();
+        sheet.present();
+        pump();
+        assert!(sheet.close());
+        drop(sheet);
+        while pooled.parent().is_some() {
+            pump();
+        }
+        pump();
+        let plain = gtk::Window::new();
+        plain.present();
         let criticals = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&criticals);
         let handler = glib::log_set_handler(
@@ -545,10 +636,17 @@ mod tests {
                 counted.fetch_add(1, Ordering::Relaxed);
             },
         );
-        for _ in 0..2 {
-            let alert = Alert::new(Some("End?"), None);
-            alert.present(gtk::Widget::NONE);
+        let parents = [None, None, Some(plain.upcast_ref::<gtk::Widget>())];
+        for parent in parents {
+            let alert = Alert::new(parent, Some("End?"), None);
+            assert_ne!(
+                alert.dialog(),
+                &pooled,
+                "the sheet's dialog stays for sheets"
+            );
+            alert.present();
             pump();
+            assert!(alert.root().is_some(), "presented");
             let shown = alert.dialog().downgrade();
             assert!(alert.close());
             drop(alert);
@@ -562,6 +660,9 @@ mod tests {
             assert!(shown.upgrade().is_none(), "let go with its window");
         }
         glib::log_remove_handler(Some("Gtk"), handler);
+        plain.destroy();
+        window.destroy();
+        pump();
         assert_eq!(criticals.load(Ordering::Relaxed), 0);
     }
 
@@ -571,7 +672,7 @@ mod tests {
     fn an_alert_never_presented_is_released() {
         init();
         let finalized = Rc::new(Cell::new(0));
-        let alert = Alert::new(Some("Unasked"), None);
+        let alert = Alert::new(gtk::Widget::NONE, Some("Unasked"), None);
         watch(alert.dialog(), &finalized);
         drop(alert);
         pump();
