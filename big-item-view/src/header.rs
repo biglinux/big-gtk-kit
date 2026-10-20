@@ -220,7 +220,8 @@ impl ColumnHeader {
 
     /// Run `f` with the id of the column a menu was asked for over (the
     /// secondary button, the Menu key or Shift+F10 on a heading), and where, in
-    /// the header's coordinates: the columns' own menu (which are shown).
+    /// the header's coordinates: the menu of the columns themselves, such as
+    /// which of them are shown.
     pub fn connect_context_menu<F: Fn(&Self, u32, f64, f64) + 'static>(
         &self,
         f: F,
@@ -335,8 +336,8 @@ impl ColumnHeader {
         self.queue_resize();
     }
 
-    /// Where the column at `index` sits on screen, and whether `x` is on its
-    /// resizing edge.
+    /// The index of the column under `x`, in the header's coordinates, and
+    /// whether `x` is on its resizing edge.
     fn column_at(&self, x: f64) -> Option<(usize, bool)> {
         let view = self.imp().view.upgrade()?;
         let offset = self

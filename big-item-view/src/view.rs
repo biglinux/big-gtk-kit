@@ -149,13 +149,13 @@ mod imp {
         /// How wide each item would like to be, by position, in a column flow:
         /// what its columns are fitted to. Made when first needed after the
         /// model, the fonts or the geometry change, not at every allocation.
-        natural_widths: RefCell<Option<std::rc::Rc<[f32]>>>,
+        natural_widths: RefCell<Option<Rc<[f32]>>>,
         /// How wide each item's name is on one line, for the grid's rows to
         /// be as tall as their longest name needs. Made when the model, the
         /// fonts or the geometry change. Widths only: the few names too wide
         /// for one line are asked of the presenter again when laid out, and a
         /// copy of every name per open view was most of what this cost.
-        titles: RefCell<Option<std::rc::Rc<[f32]>>>,
+        titles: RefCell<Option<Rc<[f32]>>>,
         /// The widths of the characters names and subtitles are written
         /// with, in the title's and the caption's fonts: kept across changes
         /// of the model, since only the fonts make them wrong.
@@ -163,7 +163,7 @@ mod imp {
         caption_chars: RefCell<crate::text_width::CharWidths>,
         /// How many lines each name takes at the width it was last laid out
         /// in: that width, and the counts.
-        title_lines: RefCell<Option<(i32, std::rc::Rc<[u8]>)>>,
+        title_lines: RefCell<Option<(i32, Rc<[u8]>)>>,
         /// The controller `input::install_wheel` put on the enclosing
         /// scrolled window.
         pub(crate) wheel: RefCell<Option<gtk::EventControllerScroll>>,
@@ -803,14 +803,14 @@ mod imp {
                 added,
                 self.n_items(),
             );
-            self.describe_window(true);
+            self.describe_window();
             self.last_range.set((u32::MAX, 0));
             self.find_sections();
             self.obj().queue_resize();
         }
 
         fn selection_changed(&self) {
-            self.describe_window(true);
+            self.describe_window();
             self.obj().queue_draw();
         }
 
@@ -869,7 +869,7 @@ mod imp {
                 return metrics;
             };
             let (title, caption) = self.line_heights.get();
-            // Tallest first: the height of every count of lines, once.
+            // The height of each count of lines, worked out once.
             let heights: Vec<f32> = (1..=geometry.title_lines)
                 .map(|count| {
                     let mut shape = geometry.clone();
@@ -891,7 +891,7 @@ mod imp {
         /// A name narrower than the width on one line is one line, which is
         /// most names; only the others are laid out at the width, so a window
         /// being resized pays for its long names rather than for all of them.
-        fn lines_at(&self, geometry: &Geometry, width: f32) -> Option<std::rc::Rc<[u8]>> {
+        fn lines_at(&self, geometry: &Geometry, width: f32) -> Option<Rc<[u8]>> {
             let key = width.round() as i32;
             if let Some((at, lines)) = self.title_lines.borrow().as_ref()
                 && *at == key
@@ -905,7 +905,7 @@ mod imp {
                 .borrow()
                 .as_ref()
                 .map_or_else(|| self.obj().pango_context(), Probes::title_context);
-            let lines: std::rc::Rc<[u8]> = (0_u32..)
+            let lines: Rc<[u8]> = (0_u32..)
                 .zip(titles.iter())
                 .map(|(position, single)| {
                     if *single + SUMMED_SHORT_BY <= width {
@@ -924,7 +924,7 @@ mod imp {
         }
 
         /// How wide each item's name is on one line.
-        fn titles(&self) -> Option<std::rc::Rc<[f32]>> {
+        fn titles(&self) -> Option<Rc<[f32]>> {
             if let Some(titles) = self.titles.borrow().clone() {
                 return Some(titles);
             }
@@ -936,7 +936,7 @@ mod imp {
                 .map_or_else(|| self.obj().pango_context(), Probes::title_context);
             let layout = pango::Layout::new(&context);
             let mut widths = self.title_chars.borrow_mut();
-            let titles: std::rc::Rc<[f32]> = (0..model.n_items())
+            let titles: Rc<[f32]> = (0..model.n_items())
                 .map(|position| {
                     model.item(position).map_or(0.0, |item| {
                         widths.measure(
@@ -974,7 +974,7 @@ mod imp {
         }
 
         /// How wide each item would be with its whole name on one line.
-        fn natural_widths(&self) -> Option<std::rc::Rc<[f32]>> {
+        fn natural_widths(&self) -> Option<Rc<[f32]>> {
             if let Some(widths) = self.natural_widths.borrow().clone() {
                 return Some(widths);
             }
@@ -999,7 +999,7 @@ mod imp {
             let caption_layout = pango::Layout::new(&caption_context);
             let mut title_chars = self.title_chars.borrow_mut();
             let mut caption_chars = self.caption_chars.borrow_mut();
-            let widths: std::rc::Rc<[f32]> = (0..model.n_items())
+            let widths: Rc<[f32]> = (0..model.n_items())
                 .map(|position| {
                     let Some(item) = model.item(position) else {
                         return 1.0;
@@ -1319,14 +1319,14 @@ mod imp {
             }
             let window = self.a11y.borrow().range();
             if positions.start < window.end && window.start < positions.end {
-                self.describe_window(true);
+                self.describe_window();
             }
             self.obj().queue_draw();
         }
 
         pub(crate) fn refresh_all(&self) {
             self.cache.borrow_mut().entries.clear();
-            self.describe_window(true);
+            self.describe_window();
             self.obj().queue_draw();
         }
 
@@ -1409,12 +1409,9 @@ mod imp {
             );
         }
 
-        fn describe_window(&self, all: bool) {
-            let positions: Vec<u32> = if all {
-                self.a11y.borrow().range().collect()
-            } else {
-                Vec::new()
-            };
+        /// Describe every proxy again.
+        fn describe_window(&self) {
+            let positions: Vec<u32> = self.a11y.borrow().range().collect();
             self.describe(&positions);
         }
 
@@ -1425,7 +1422,6 @@ mod imp {
                 return;
             };
             let n = model.n_items();
-            let mut content = ItemContent::default();
             for &position in positions {
                 let (Some(item), Some(proxy)) = (
                     model.item(position),
@@ -1433,7 +1429,7 @@ mod imp {
                 ) else {
                     continue;
                 };
-                content = ItemContent::default();
+                let mut content = ItemContent::default();
                 presenter.content(position, &crate::view::presented(&item), &mut content);
                 a11y::describe(
                     &proxy,
@@ -1451,7 +1447,6 @@ mod imp {
                     },
                 );
             }
-            drop(content);
         }
 
         fn cursor_proxy(&self) -> Option<a11y::ItemProxy> {
@@ -1667,8 +1662,6 @@ impl ItemView {
             .then_some(position)
     }
 
-    /// Whether only what an item draws is the item, and the rest of its cell
-    /// the view's background (`Geometry::hit_drawn_only`).
     /// Where the item at `position`, `size` big, draws its picture and name:
     /// the primary span, past a tree row's expander.
     pub(crate) fn primary_of(
@@ -1690,6 +1683,8 @@ impl ItemView {
         }
     }
 
+    /// Whether only what an item draws is the item, and the rest of its cell
+    /// the view's background (`Geometry::hit_drawn_only`).
     pub(crate) fn hits_drawn_only(&self) -> bool {
         let geometry = self.imp().geometry.borrow();
         geometry.hit_drawn_only && geometry.columns.is_empty()

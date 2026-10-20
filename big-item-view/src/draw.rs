@@ -333,37 +333,25 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         snapshot.append_color(&fill, &bg);
         snapshot.pop();
     }
-    if state.editing {
+    // A card around what the item draws is its own mark, as in Dolphin, and a
+    // cover's own frame already marks it: a second ring there is noise.
+    let ring_role = if state.editing {
+        None
     } else if state.drop_target {
-        ring(
-            &snapshot,
-            &bg,
-            geometry.radius,
-            2.0,
-            palette.get(Role::DropRing),
-        );
+        Some(Role::DropRing)
     } else if state.cursor && state.focus_visible {
-        ring(
-            &snapshot,
-            &bg,
-            geometry.radius,
-            2.0,
-            palette.get(Role::FocusRing),
-        );
+        Some(Role::FocusRing)
     } else if state.selected
         && state.view_focused
         && item.content.frame != IconFrame::Cover
         && !geometry.hit_drawn_only
     {
-        // (A card around what the item draws is its own mark, as in Dolphin.)
-        // (A cover's own frame already marks it; a second ring is noise.)
-        ring(
-            &snapshot,
-            &bg,
-            geometry.radius,
-            2.0,
-            palette.get(Role::SelectedFocusRing),
-        );
+        Some(Role::SelectedFocusRing)
+    } else {
+        None
+    };
+    if let Some(role) = ring_role {
+        ring(&snapshot, &bg, geometry.radius, 2.0, palette.get(role));
     }
 
     if let Some((depth, Some(expanded))) = state.tree {
@@ -616,10 +604,10 @@ fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect
                 (texture.width() as f32).max(1.0),
                 (texture.height() as f32).max(1.0),
             );
-            // Grown until both sides cover the box, centred, and cut to it --
-            // unless that blows a small picture (an icon, a favicon) up past
-            // twice its own pixels into a blur: then it keeps that size and
-            // sits in the middle of the box, on the placeholder's fill.
+            // Grown until both sides cover the box, centred, and cut to it.
+            // A small picture (an icon, a favicon) grown past twice its own
+            // pixels is a blur: it keeps that size instead and sits in the
+            // middle of the box, on the placeholder's fill.
             let grow = (icon.width() / natural.0).max(icon.height() / natural.1);
             let small = grow * scale > COVER_MAX_GROWTH;
             let grow = if small {
@@ -722,9 +710,8 @@ fn draw_words(snapshot: &gtk::Snapshot, item: &Item<'_>) {
         // Right under the name, whatever lines it took: a grid row is as tall
         // as its longest name (`Metrics::fit_rows`), and a caption kept under
         // lines a short name does not have would fall outside it.
-        let below = title_h;
         snapshot.save();
-        snapshot.translate(&graphene::Point::new(words.x(), top + below));
+        snapshot.translate(&graphene::Point::new(words.x(), top + title_h));
         snapshot.append_layout(subtitle, &dim(palette.get(Role::TextDim)));
         snapshot.restore();
     }

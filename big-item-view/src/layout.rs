@@ -5,8 +5,10 @@
 //!
 //! Every item of a view has the same size, so the place of item `n`, the item
 //! under a point and the items on screen are each a few divisions: O(1) for a
-//! folder of ten or ten thousand entries. Nothing here touches GTK, which is what
-//! lets it be tested without a display.
+//! folder of ten or ten thousand entries. Lines fitted to their items
+//! ([`Metrics::fit_rows`], [`Metrics::fit_columns`]) turn the step along the
+//! scroll direction into a binary search over where each line starts. Nothing
+//! here touches GTK, which is what lets it be tested without a display.
 
 use std::ops::Range;
 use std::rc::Rc;
