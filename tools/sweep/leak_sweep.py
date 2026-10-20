@@ -80,6 +80,7 @@ def with_workdir(text: str, workdir) -> str:
 class Program:
     def __init__(self, spec: dict, library: Path, workdir: Path):
         self.spec = spec
+        self.workdir = workdir
         self.prefix = workdir / "census"
         env = dict(os.environ)
         # `{workdir}` in the file stands for this run's scratch directory, so a
@@ -211,7 +212,11 @@ def dismiss(app, first_frame: int = 1) -> int:
     return pressed
 
 
-def run_step(step: dict, program_spec: dict, app_name: str):
+def run_step(
+    step: dict, program_spec: dict, app_name: str, workdir: Path, frames_at_open: int
+):
+    """One step; `frames_at_open` is how many top-level windows the program had
+    when the cycle began."""
     kind = step["do"]
     if kind == "action":
         target = step.get("path", program_spec.get("window_path"))
@@ -246,7 +251,7 @@ def run_step(step: dict, program_spec: dict, app_name: str):
             capture_output=True,
         )
     elif kind == "command":
-        argv = [with_workdir(arg, WORKDIR[0]) for arg in step["argv"]]
+        argv = [with_workdir(arg, workdir) for arg in step["argv"]]
         subprocess.run(argv, check=False, capture_output=True, timeout=30)
     elif kind in ("toggle", "click"):
         app = application(app_name)
@@ -266,7 +271,7 @@ def run_step(step: dict, program_spec: dict, app_name: str):
         # first" would close the desktop itself.
         app = application(app_name)
         if app is not None:
-            dismiss(app, first_frame=FRAMES_AT_OPEN[0])
+            dismiss(app, first_frame=frames_at_open)
     elif kind == "wait":
         pass
     else:
@@ -274,21 +279,13 @@ def run_step(step: dict, program_spec: dict, app_name: str):
     time.sleep(float(step.get("settle", 1.0)))
 
 
-# How many top-level windows the program had when the current cycle began.
-FRAMES_AT_OPEN = [1]
-# This run's scratch directory, for `{workdir}` in a command step.
-WORKDIR = [""]
-
-
-def cycle(surface: dict, program_spec: dict, app_name: str) -> bool:
+def cycle(surface: dict, program_spec: dict, app_name: str, workdir: Path) -> bool:
     """Open and close once. True when the surface really closed again."""
     app = application(app_name)
-    FRAMES_AT_OPEN[0] = app.get_child_count() if app is not None else 1
+    frames = app.get_child_count() if app is not None else 1
     before = open_surfaces(app)
-    for step in surface["open"]:
-        run_step(step, program_spec, app_name)
-    for step in surface.get("close", [{"do": "dismiss"}]):
-        run_step(step, program_spec, app_name)
+    for step in surface["open"] + surface.get("close", [{"do": "dismiss"}]):
+        run_step(step, program_spec, app_name, workdir, frames)
     deadline = time.monotonic() + float(surface.get("close_timeout", 5))
     while time.monotonic() < deadline:
         if open_surfaces(application(app_name)) <= before:
@@ -304,11 +301,11 @@ def sweep_surface(
     warm = int(surface.get("warm", spec.get("warm", 2)))
     unclosed = 0
     for _ in range(warm):
-        unclosed += not cycle(surface, spec, app_name)
+        unclosed += not cycle(surface, spec, app_name, program.workdir)
     time.sleep(1)
     before = program.census()
     for _ in range(cycles):
-        unclosed += not cycle(surface, spec, app_name)
+        unclosed += not cycle(surface, spec, app_name, program.workdir)
     time.sleep(float(surface.get("after", 1.5)))
     after = program.census()
     local_allow = {
@@ -320,7 +317,7 @@ def sweep_surface(
         # Confirm: a leak grows again over a second round; a banner that happened to
         # appear, or a cache filling once, does not.
         for _ in range(cycles):
-            unclosed += not cycle(surface, spec, app_name)
+            unclosed += not cycle(surface, spec, app_name, program.workdir)
         time.sleep(float(surface.get("after", 1.5)))
         again, _ = verdict(grown(after, program.census()), cycles, local_allow)
         leaks = {name: amount for name, amount in leaks.items() if name in again}
@@ -451,7 +448,6 @@ def main(argv=None) -> int:
     workdir = Path(
         tempfile.mkdtemp(prefix="leak-sweep-", dir=os.environ.get("LEAK_SWEEP_DIR"))
     )
-    WORKDIR[0] = str(workdir)
     try:
         program = Program(program_spec, options.library, workdir)
     except OSError as error:
