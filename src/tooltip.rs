@@ -93,7 +93,7 @@ pub fn install() {
         let hide_all: Rc<dyn Fn()> = Rc::new(dismiss_every_card);
         // SAFETY: HIDE_ALL_KEY holds an `Rc<dyn Fn()>` (see its definition).
         unsafe { display.set_data(HIDE_ALL_KEY, hide_all) };
-        // Process-wide on purpose: the card is the same in every window.
+        // Process-wide: the card is the same in every window.
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
@@ -128,8 +128,8 @@ pub fn set_icon(widget: &impl IsA<gtk::Widget>, icon_name: Option<&str>) {
 /// Give `widget` tooltips that change across it, as a view that draws its
 /// items does: `tips` answers for a point in the widget's coordinates with the
 /// text and the area it covers, or `None` where nothing is said. It receives the
-/// widget, so it need not hold it. Replaces answering GTK's `query-tooltip`,
-/// whose window this module does not draw.
+/// widget, so it need not hold it. Use it instead of answering GTK's
+/// `query-tooltip`, whose window this module does not draw.
 pub fn set_area_tips(
     widget: &impl IsA<gtk::Widget>,
     tips: impl Fn(&gtk::Widget, f64, f64) -> Option<(String, gdk::Rectangle)> + 'static,
@@ -747,7 +747,7 @@ mod tests {
         pump();
     }
 
-    /// Needs a display: run under `tools/headless-gate.sh`.
+    /// A closed window lets go of its card and of the widget it was showing.
     #[gtk::test]
     #[ignore = "needs a display"]
     fn closed_windows_release_their_card_and_owner() {

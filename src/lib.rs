@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! GTK4 building blocks shared by the BigLinux programs. Each one replaces a
-//! toolkit behaviour that was measured to leak, stall or look different from
+//! GTK4 building blocks shared by the BigLinux programs. Each one stands in for
+//! a toolkit behaviour that was measured to leak, stall or look different from
 //! program to program, without patching GTK or libadwaita: a fixed library
 //! version leaves every workaround here idle.
 

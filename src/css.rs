@@ -39,7 +39,7 @@ mod tests {
         for cycle in 1..=25 {
             let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
             let provider = gtk::CssProvider::new();
-            provider.load_from_string(".audit-provider { color: red; }");
+            provider.load_from_string(".kit-test-provider { color: red; }");
             watch(&provider, &finalized);
             add_provider_for_widget_lifetime(
                 &widget,

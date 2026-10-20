@@ -110,8 +110,6 @@ mod tests {
         assert_eq!((built.get(), finalized.get()), (1, 25));
     }
 
-    /// A context menu rebuilt with 0, 5 and 25 items keeps one section, and
-    /// every menu that showed it finalizes.
     /// A section built from shared sections of its own: building must not
     /// hold the table the inner sections are kept in.
     #[test]
@@ -125,6 +123,8 @@ mod tests {
         assert_eq!(menu.n_items(), 1);
     }
 
+    /// A context menu rebuilt with 0, 5 and 25 items keeps one section, and
+    /// every menu that showed it finalizes.
     #[gtk::test]
     #[ignore = "needs a display"]
     fn a_refilled_section_is_kept_once() {

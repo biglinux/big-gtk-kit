@@ -57,14 +57,16 @@ This turns on what needs no change at the call sites:
 
 ## Workarounds
 
-Clippy enforces them: copy the entries of this repository's `clippy.toml` into
-the program's own.
+Clippy enforces the ones that stand in for a single call: copy the entries of
+this repository's `clippy.toml` into the program's own. `css`,
+`dialog::present_kept` and `popover` change how a call is used, which a lint
+cannot see.
 
 | Use | Instead of | Why (measured) |
 |---|---|---|
 | `accessible::relate` | `update_relation` | gtk-rs 0.11 leaks the target list on every call |
 | `alert::choose`, `choose_future` | `AlertDialogExtManual::choose` | libadwaita-rs 0.9 keeps every dialog asked that way |
-| `alert::Alert` | `adw::AlertDialog::new`, `builder` | libadwaita 1.9 leaves three breakpoints of every dialog behind, about 1.8 KB an opening; an `Alert` asks again with a dialog already made; add responses, connect `closed` and downgrade through it (a `WeakAlert` from an earlier question no longer upgrades) |
+| `alert::Alert` | `adw::AlertDialog::new`, `builder` | libadwaita 1.9 leaves three breakpoints of every dialog behind, about 1.8 KB an opening; an `Alert` asks again with a dialog already made; add responses, connect `closed` and downgrade through it (a `WeakAlert` from an earlier question stops upgrading) |
 | `breakpoint::add` | `add_breakpoint` | libadwaita 1.9 never releases a window's breakpoints |
 | `css::add_provider_for_widget_lifetime` | `style_context_add_provider_for_display` per widget | the display keeps the provider and its rules |
 | `dialog::Dialog` | `adw::Dialog::new`, `builder` | the same three breakpoints per opening; a `Dialog` shows one already made, as `Alert` does; one kept and presented again stays an `adw::Dialog` |
