@@ -852,15 +852,6 @@ fn install_focus(view: &ItemView) {
                 .unwrap_or(0);
             imp.set_cursor(Some(first));
         }
-        imp.sync_focus();
-        view.queue_draw();
-    });
-    let weak = view.downgrade();
-    focus.connect_leave(move |_| {
-        if let Some(view) = weak.upgrade() {
-            view.imp().sync_focus();
-            view.queue_draw();
-        }
     });
     view.add_controller(focus);
 }

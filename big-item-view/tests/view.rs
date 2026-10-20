@@ -196,6 +196,43 @@ fn items_keep_proxy_on_insert() {
     window.destroy();
 }
 
+/// Tab into the view gives the cursor item the focus a screen reader sees:
+/// GTK marks the view as focused only after the focus has moved in.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn tab_focuses_the_cursor_item() {
+    let (window, view, _, _) = shown(100);
+    let scroller = view.parent().expect("scrolled");
+    let before = gtk::Button::with_label("before");
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    window.set_child(Some(&column));
+    column.append(&before);
+    column.append(&scroller);
+    scroller.set_vexpand(true);
+    // Tab follows the layout: the view has to be placed below the button.
+    let below = || {
+        view.compute_point(&before, &gtk::graphene::Point::zero())
+            .is_some_and(|point| point.y() > 0.0)
+    };
+    assert!(
+        pump_until(|| window.is_active() && below()),
+        "the view was never laid out below the button"
+    );
+    before.grab_focus();
+    assert!(window.child_focus(gtk::DirectionType::TabForward));
+    pump();
+    assert!(view.has_focus(), "Tab did not reach the view");
+    let cursor = view.cursor().expect("Tab puts the cursor on an item");
+    let focused: Vec<gtk::Accessible> = proxies(&view)
+        .into_iter()
+        .filter(|proxy| proxy.platform_state(gtk::AccessiblePlatformState::Focused))
+        .collect();
+    assert_eq!(focused.len(), 1, "one focused item, not {}", focused.len());
+    assert_eq!(proxy_at(&view, cursor).as_ref(), focused.first());
+    assert!(!view.platform_state(gtk::AccessiblePlatformState::Focused));
+    window.destroy();
+}
+
 #[gtk::test]
 #[ignore = "needs a display"]
 fn items_are_placed_where_they_are_hit() {
