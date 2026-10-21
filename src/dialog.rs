@@ -161,6 +161,8 @@ impl Opening {
 /// end of its closing, or with its window. Not at `closed`, which comes as the
 /// closing starts and before the `response` that closed an alert; in an idle,
 /// because one closing without animation leaves before that `response` too.
+/// From its second map on it takes the focus, which libadwaita gives a dialog
+/// only the first time.
 ///
 /// Only for a dialog made for [`presents_in_window`]. One that was shown in a
 /// window of its own all the same (its parent's window changed) is never given
@@ -180,6 +182,17 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
             let windowed =
                 WidgetExt::parent(dialog).is_some_and(|parent| parent.is::<gtk::Window>());
             closing.reusable.set(!windowed);
+        });
+    // libadwaita takes the focus into a dialog only the first time it maps and
+    // when it is presented while shown, so one asked again opens with none: Esc
+    // and Enter do nothing until a Tab. The first map is left to libadwaita.
+    let mapped_before = Cell::new(false);
+    dialog
+        .upcast_ref::<adw::Dialog>()
+        .connect_map(move |dialog| {
+            if mapped_before.replace(true) && dialog.focus().is_none() {
+                dialog.grab_focus();
+            }
         });
     let give_back = Rc::new(give_back);
     let leaving = Rc::clone(opening);

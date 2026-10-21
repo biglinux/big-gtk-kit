@@ -580,6 +580,46 @@ mod tests {
         assert_eq!(dialogs.len(), 1, "one dialog asked them all");
     }
 
+    /// A dialog asked again after a button answered it opens with the focus
+    /// on its default response, as the first time.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn answered_alert_reopens_focused() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.present();
+        for round in 0..3 {
+            let alert = Alert::builder(Some(&window))
+                .heading("Delete?")
+                .default_response("cancel")
+                .build();
+            alert.add_responses(&[("cancel", "_Cancel"), ("delete", "_Delete")]);
+            alert.present();
+            for _ in 0..10 {
+                pump();
+            }
+            let cancel = buttons(alert.dialog().upcast_ref())
+                .into_iter()
+                .find(|button| button.label().as_deref() == Some("_Cancel"))
+                .expect("the response's button");
+            assert_eq!(
+                GtkWindowExt::focus(&window).as_ref(),
+                Some(cancel.upcast_ref()),
+                "round {round}: the default response lacks the focus"
+            );
+            let shown = alert.dialog().clone();
+            drop(alert);
+            cancel.emit_clicked();
+            while shown.parent().is_some() {
+                pump();
+            }
+            pump();
+        }
+        window.destroy();
+        pump();
+    }
+
     /// One shut by `force_close` in a window of its own says no `closed`, and
     /// libadwaita still points at that window: it is not asked again.
     #[gtk::test]
