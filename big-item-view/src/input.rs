@@ -859,6 +859,30 @@ fn install_focus(view: &ItemView) {
 /// A spring-load timer: its source, the item it waits on, where the pointer was.
 type Dwell = (glib::SourceId, u32, (f64, f64));
 
+/// The one action enter and motion answer with: GTK refuses a set. Always the
+/// move, whatever the drop stands at: the compositor applies Ctrl and Shift
+/// over the preference (GDK drag events carry no modifier state), so an answer
+/// that echoed its pick would stick on a copy. Only the drop reads the pick,
+/// through `drop.actions()`.
+const PREFERRED_ACTION: gdk::DragAction = gdk::DragAction::MOVE;
+
+/// The action the drop in progress stands at, `None` outside one.
+fn selected_action(target: &gtk::DropTarget) -> Option<gdk::DragAction> {
+    target.current_drop().map(|drop| drop.actions())
+}
+
+/// Whether the view takes a drop at `(x, y)`.
+fn takes_drop_at(view: &ItemView, x: f64, y: f64) -> bool {
+    let presenter = view.imp().presenter.borrow().clone();
+    let Some(presenter) = presenter else {
+        return false;
+    };
+    match view.position_at(x, y) {
+        Some(p) if presenter.accepts_drop(Some(p)) => true,
+        _ => presenter.accepts_drop(None),
+    }
+}
+
 /// Accept drops on the view; the presenter decides which items take them.
 pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::DragAction) {
     let imp = view.imp();
@@ -914,10 +938,15 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             spring.replace(Some((source, position, (x, y))));
         }
         if under.is_some() || presenter.accepts_drop(None) {
-            gdk::DragAction::COPY | gdk::DragAction::MOVE
+            PREFERRED_ACTION
         } else {
             gdk::DragAction::empty()
         }
+    });
+    let weak = view.downgrade();
+    target.connect_enter(move |_, x, y| match weak.upgrade() {
+        Some(view) if takes_drop_at(&view, x, y) => PREFERRED_ACTION,
+        _ => gdk::DragAction::empty(),
     });
     let weak = view.downgrade();
     let spring = Rc::clone(&dwell);
@@ -945,15 +974,14 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
         let Some(presenter) = presenter else {
             return false;
         };
-        let want_move = target.current_event().is_some_and(|event| {
-            event
-                .modifier_state()
-                .contains(gdk::ModifierType::SHIFT_MASK)
-        });
         let under = view
             .position_at(x, y)
             .filter(|p| presenter.accepts_drop(Some(*p)));
-        presenter.receive_drop(under, value, want_move)
+        presenter.receive_drop(
+            under,
+            value,
+            selected_action(target).unwrap_or(gdk::DragAction::empty()),
+        )
     });
     view.add_controller(target);
 }

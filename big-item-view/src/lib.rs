@@ -97,9 +97,16 @@ pub trait ItemPresenter: 'static {
         false
     }
 
-    /// Take a drop on `target` (the view itself when `None`). `want_move` is
-    /// Shift held. Returns whether the drop was taken.
-    fn receive_drop(&self, _target: Option<u32>, _value: &glib::Value, _want_move: bool) -> bool {
+    /// Take a drop on `target` (the view itself when `None`). `action` is
+    /// the one the compositor picked for the drop: a copy when the person
+    /// held Ctrl or the source offers nothing else, otherwise a move. Returns
+    /// whether the drop was taken.
+    fn receive_drop(
+        &self,
+        _target: Option<u32>,
+        _value: &glib::Value,
+        _action: gdk::DragAction,
+    ) -> bool {
         false
     }
 }

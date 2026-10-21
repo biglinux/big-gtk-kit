@@ -185,3 +185,76 @@ fn tree_toggles_and_star_rates() {
     drop(seen);
     window.destroy();
 }
+
+/// Drags and drops over rows; every row can be picked up and dropped on.
+struct Draggable;
+
+impl ItemPresenter for Draggable {
+    fn content(&self, _position: u32, item: &glib::Object, out: &mut ItemContent) {
+        out.title = item
+            .downcast_ref::<gtk::StringObject>()
+            .map(|name| name.string().to_string())
+            .unwrap_or_default();
+    }
+
+    fn drag_content(&self, positions: &[u32]) -> Option<gdk::ContentProvider> {
+        Some(gdk::ContentProvider::for_value(
+            &format!("{positions:?}").to_value(),
+        ))
+    }
+
+    fn accepts_drop(&self, _target: Option<u32>) -> bool {
+        true
+    }
+}
+
+fn shown_view() -> (ItemView, gtk::MultiSelection, gtk::Window) {
+    let view = ItemView::new(Rc::new(Draggable), Geometry::rows(16));
+    let selection = gtk::MultiSelection::new(Some(gtk::StringList::new(&["a", "b", "c"])));
+    view.set_model(Some(&selection));
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(300)
+        .child(&view)
+        .build();
+    window.present();
+    pump();
+    (view, selection, window)
+}
+
+fn controller<T: IsA<gtk::EventController> + IsA<glib::Object>>(view: &ItemView) -> T {
+    view.observe_controllers()
+        .into_iter()
+        .filter_map(Result::ok)
+        .find_map(|controller| controller.downcast::<T>().ok())
+        .expect("the view has the controller")
+}
+
+/// The middle of the row at `position`.
+fn middle(view: &ItemView, position: u32) -> (f64, f64) {
+    let rect = view.item_rect(position).expect("the row is shown");
+    (
+        f64::from(rect.x() + rect.width() / 2.0),
+        f64::from(rect.y() + rect.height() / 2.0),
+    )
+}
+
+/// Enter and motion over a row both answer the move.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn enter_and_motion_prefer_move() {
+    let (view, _selection, window) = shown_view();
+    view.set_drop_types(
+        &[String::static_type()],
+        gdk::DragAction::COPY | gdk::DragAction::MOVE,
+    );
+    let target: gtk::DropTarget = controller(&view);
+    let (x, y) = middle(&view, 0);
+    let entered: gdk::DragAction = target.emit_by_name("enter", &[&x, &y]);
+    let moved: gdk::DragAction = target.emit_by_name("motion", &[&x, &y]);
+    assert_eq!(
+        (entered, moved),
+        (gdk::DragAction::MOVE, gdk::DragAction::MOVE)
+    );
+    window.destroy();
+}
