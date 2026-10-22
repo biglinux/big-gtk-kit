@@ -135,6 +135,56 @@ impl WeakAlert {
     }
 }
 
+/// The scroll pane the template puts around the body and extra child.
+fn body_pane(widget: &gtk::Widget) -> Option<gtk::ScrolledWindow> {
+    if widget.has_css_class("body-scrolled-window") {
+        return widget.downcast_ref().cloned();
+    }
+    let mut child = widget.first_child();
+    while let Some(each) = child {
+        if let Some(pane) = body_pane(&each) {
+            return Some(pane);
+        }
+        child = each.next_sibling();
+    }
+    None
+}
+
+/// Whether a widget inside `widget` takes the focus, or will once shown and
+/// enabled.
+fn holds_stop(widget: &gtk::Widget) -> bool {
+    if !widget.can_focus() {
+        return false;
+    }
+    if widget.is_focusable() {
+        return true;
+    }
+    let mut child = widget.first_child();
+    while let Some(each) = child {
+        if holds_stop(&each) {
+            return true;
+        }
+        child = each.next_sibling();
+    }
+    false
+}
+
+/// Keep the body's pane in the Tab chain for what it holds. GtkScrolledWindow
+/// takes the focus itself when nothing inside it can, which here is a nameless
+/// Tab stop, and with `focusable` off it still claims that Tab and focuses
+/// nothing. So the pane is a stop of its own only while its content is taller
+/// than it, for the keys to scroll it, and nameless then too: GTK gives its
+/// `generic` role no name. Otherwise it stays in the chain only for a stop
+/// inside: an entry, a link in the heading or body. With `can-focus` off
+/// nothing under it takes the focus, not even on a click, so a hidden or
+/// insensitive entry counts as a stop: it may be shown or enabled later.
+fn follow_body(pane: &gtk::ScrolledWindow) {
+    let adjustment = pane.vadjustment();
+    let scrolls = adjustment.upper() > adjustment.page_size();
+    pane.set_focusable(scrolls);
+    pane.set_can_focus(scrolls || pane.child().is_some_and(|child| holds_stop(&child)));
+}
+
 thread_local! {
     /// Dialogs closed and ready to ask again: as many as were ever open at once.
     static FREE: RefCell<Vec<Alert>> = const { RefCell::new(Vec::new()) };
@@ -172,6 +222,27 @@ impl Alert {
         #[expect(clippy::disallowed_methods, reason = "the one place alerts are made")]
         let dialog = adw::AlertDialog::new(None, None);
         let kept = Rc::<Kept>::default();
+        if let Some(pane) = dialog.child().as_ref().and_then(body_pane) {
+            let weak = pane.downgrade();
+            pane.vadjustment().connect_changed(move |_| {
+                if let Some(pane) = weak.upgrade() {
+                    follow_body(&pane);
+                }
+            });
+            for property in [
+                "extra-child",
+                "body",
+                "body-use-markup",
+                "heading",
+                "heading-use-markup",
+            ] {
+                let pane = pane.clone();
+                dialog.connect_notify_local(Some(property), move |_, _| follow_body(&pane));
+            }
+            // Ahead of the map handler of `give_back_once_left`: the focus it
+            // gives a reused dialog needs the pane open for an entry.
+            dialog.connect_map(move |_| follow_body(&pane));
+        }
         if pooled {
             let handed = Rc::clone(&kept);
             crate::dialog::give_back_once_left(&dialog, &kept.opening, move |dialog, number| {
@@ -717,6 +788,226 @@ mod tests {
         drop(alert);
         pump();
         assert_eq!(finalized.get(), 1);
+    }
+
+    /// What Tab lands on: a button's label, `"entry"` for the text inside an
+    /// entry, `"link"` for a label, `"body"` for the pane, `None` when nothing
+    /// has the focus.
+    fn tab_stop(window: &adw::Window) -> Option<String> {
+        pump();
+        let focus = GtkWindowExt::focus(window)?;
+        if focus.ancestor(gtk::Entry::static_type()).is_some() {
+            return Some("entry".into());
+        }
+        if focus.is::<gtk::Label>() {
+            return Some("link".into());
+        }
+        if focus.is::<gtk::ScrolledWindow>() {
+            return Some("body".into());
+        }
+        Some(focus.downcast::<gtk::Button>().ok()?.label()?.into())
+    }
+
+    /// Tab, or Shift+Tab, goes round `stops` and never lands on nothing.
+    fn assert_tab_cycles(window: &adw::Window, stops: &[&str], back: bool) {
+        let direction = if back {
+            gtk::DirectionType::TabBackward
+        } else {
+            gtk::DirectionType::TabForward
+        };
+        let mut seen = vec![tab_stop(window).unwrap_or_default()];
+        for _ in 0..2 * stops.len() {
+            window.emit_by_name::<()>("move-focus", &[&direction]);
+            seen.push(tab_stop(window).unwrap_or_default());
+        }
+        let mut order = stops.to_vec();
+        if back {
+            order.reverse();
+        }
+        let start = order
+            .iter()
+            .position(|stop| *stop == seen[0])
+            .expect("a stop");
+        order.rotate_left(start);
+        let expected: Vec<_> = order.iter().cycle().take(seen.len()).copied().collect();
+        assert_eq!(seen, expected);
+    }
+
+    /// The body's scroll pane is no Tab stop: Tab goes over the buttons only.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn tab_skips_the_body_pane() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.present();
+        let alert = Alert::new(Some(&window), Some("Delete?"), Some("It cannot be undone."));
+        alert.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
+        alert.set_default_response(Some("cancel"));
+        alert.present();
+        pump();
+        assert_tab_cycles(&window, &["Cancel", "Delete"], false);
+        assert_tab_cycles(&window, &["Cancel", "Delete"], true);
+        alert.force_close();
+        window.destroy();
+        pump();
+    }
+
+    /// An extra child inside the pane stays a Tab stop.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn tab_reaches_the_extra_child() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        // Room for the entry: in a smaller window the content scrolls, and the
+        // pane is a stop too.
+        window.set_default_size(640, 480);
+        window.present();
+        let entry = gtk::Entry::new();
+        let alert = Alert::builder(Some(&window))
+            .heading("New Folder")
+            .extra_child(&entry)
+            .default_response("create")
+            .build();
+        alert.add_responses(&[("cancel", "Cancel"), ("create", "Create")]);
+        alert.present();
+        pump();
+        assert_tab_cycles(&window, &["Cancel", "Create", "entry"], false);
+        assert_tab_cycles(&window, &["Cancel", "Create", "entry"], true);
+        alert.force_close();
+        window.destroy();
+        pump();
+    }
+
+    /// A reused dialog's entry, shown and enabled later, takes the focus.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn reused_alert_reaches_late_entry() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.set_default_size(640, 480);
+        window.present();
+        let first = Alert::new(Some(&window), Some("Delete?"), None);
+        first.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
+        first.present();
+        pump();
+        let shown = first.dialog().clone();
+        assert!(first.close());
+        drop(first);
+        while shown.parent().is_some() {
+            pump();
+        }
+        let entry = gtk::Entry::new();
+        entry.set_sensitive(false);
+        entry.set_visible(false);
+        let again = Alert::new(Some(&window), Some("Rename"), None);
+        assert_eq!(again.dialog(), &shown);
+        again.set_extra_child(Some(&entry));
+        again.add_responses(&[("cancel", "Cancel"), ("rename", "Rename")]);
+        again.present();
+        pump();
+        entry.set_visible(true);
+        entry.set_sensitive(true);
+        assert!(entry.grab_focus());
+        assert_eq!(tab_stop(&window).as_deref(), Some("entry"));
+        assert_tab_cycles(&window, &["Cancel", "Rename", "entry"], false);
+        again.force_close();
+        window.destroy();
+        pump();
+    }
+
+    /// An extra child with nothing to focus leaves no stop in the pane.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn tab_ignores_an_inert_extra_child() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.present();
+        let alert = Alert::builder(Some(&window))
+            .heading("Replace?")
+            .extra_child(&gtk::Label::new(Some("a.txt")))
+            .default_response("cancel")
+            .build();
+        alert.add_responses(&[("cancel", "Cancel"), ("replace", "Replace")]);
+        alert.present();
+        pump();
+        assert_tab_cycles(&window, &["Cancel", "Replace"], false);
+        assert_tab_cycles(&window, &["Cancel", "Replace"], true);
+        alert.force_close();
+        window.destroy();
+        pump();
+    }
+
+    /// A link in the body is still a Tab stop.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn tab_reaches_a_body_link() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.present();
+        let alert = Alert::builder(Some(&window))
+            .heading("Update")
+            .body("See <a href=\"https://example.org\">the notes</a>.")
+            .body_use_markup(true)
+            .default_response("cancel")
+            .build();
+        alert.add_responses(&[("cancel", "Cancel"), ("ok", "OK")]);
+        alert.present();
+        pump();
+        assert_tab_cycles(&window, &["Cancel", "OK", "link"], false);
+        assert_tab_cycles(&window, &["Cancel", "OK", "link"], true);
+        alert.force_close();
+        window.destroy();
+        pump();
+    }
+
+    /// A link put in the heading after the dialog shows is a Tab stop.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn tab_reaches_a_late_heading_link() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.set_default_size(640, 480);
+        window.present();
+        let alert = Alert::new(Some(&window), Some("Update"), None);
+        alert.add_responses(&[("cancel", "Cancel"), ("ok", "OK")]);
+        alert.set_default_response(Some("cancel"));
+        alert.present();
+        pump();
+        alert.set_heading_use_markup(true);
+        alert.set_heading(Some("See <a href=\"https://example.org\">the notes</a>"));
+        pump();
+        assert_tab_cycles(&window, &["Cancel", "OK", "link"], false);
+        alert.force_close();
+        window.destroy();
+        pump();
+    }
+
+    /// A body taller than the dialog keeps its pane as a stop to scroll.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn tab_reaches_a_long_body() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.set_default_size(360, 240);
+        window.present();
+        let body = vec!["A line of the release notes."; 80].join("\n");
+        let alert = Alert::new(Some(&window), Some("Update"), Some(&body));
+        alert.add_responses(&[("cancel", "Cancel"), ("ok", "OK")]);
+        alert.set_default_response(Some("cancel"));
+        alert.present();
+        pump();
+        assert_tab_cycles(&window, &["Cancel", "OK", "body"], false);
+        assert_tab_cycles(&window, &["Cancel", "OK", "body"], true);
+        alert.force_close();
+        window.destroy();
+        pump();
     }
 
     fn buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {
