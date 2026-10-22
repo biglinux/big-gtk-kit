@@ -175,9 +175,9 @@ fn holds_stop(widget: &gtk::Widget) -> bool {
 /// nothing. So the pane is a stop of its own only while its content is taller
 /// than it, for the keys to scroll it, and nameless then too: GTK gives its
 /// `generic` role no name. Otherwise it stays in the chain only for a stop
-/// inside: an entry, a link in the body. With `can-focus` off nothing under it
-/// takes the focus, not even on a click, so a hidden or insensitive entry
-/// counts as a stop: it may be shown or enabled later.
+/// inside: an entry, a link in the heading or body. With `can-focus` off
+/// nothing under it takes the focus, not even on a click, so a hidden or
+/// insensitive entry counts as a stop: it may be shown or enabled later.
 fn follow_body(pane: &gtk::ScrolledWindow) {
     let adjustment = pane.vadjustment();
     let scrolls = adjustment.upper() > adjustment.page_size();
@@ -229,7 +229,13 @@ impl Alert {
                     follow_body(&pane);
                 }
             });
-            for property in ["extra-child", "body", "body-use-markup"] {
+            for property in [
+                "extra-child",
+                "body",
+                "body-use-markup",
+                "heading",
+                "heading-use-markup",
+            ] {
                 let pane = pane.clone();
                 dialog.connect_notify_local(Some(property), move |_, _| follow_body(&pane));
             }
@@ -954,6 +960,29 @@ mod tests {
         pump();
         assert_tab_cycles(&window, &["Cancel", "OK", "link"], false);
         assert_tab_cycles(&window, &["Cancel", "OK", "link"], true);
+        alert.force_close();
+        window.destroy();
+        pump();
+    }
+
+    /// A link put in the heading after the dialog shows is a Tab stop.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn tab_reaches_a_late_heading_link() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.set_default_size(640, 480);
+        window.present();
+        let alert = Alert::new(Some(&window), Some("Update"), None);
+        alert.add_responses(&[("cancel", "Cancel"), ("ok", "OK")]);
+        alert.set_default_response(Some("cancel"));
+        alert.present();
+        pump();
+        alert.set_heading_use_markup(true);
+        alert.set_heading(Some("See <a href=\"https://example.org\">the notes</a>"));
+        pump();
+        assert_tab_cycles(&window, &["Cancel", "OK", "link"], false);
         alert.force_close();
         window.destroy();
         pump();
