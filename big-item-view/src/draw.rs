@@ -136,6 +136,28 @@ pub(crate) fn icon_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> grap
     mirror(graphene::Rect::new(x, y, w, h), size.0, rtl)
 }
 
+/// The disc an item's tint and rings take with [`Geometry::picture_disc`]:
+/// centred on the picture, `padding` clear of it on every side, and inside the
+/// item's background. `None` when no such disc goes around the whole picture (a
+/// cell too narrow, a picture that is not square): an opaque picture would cover
+/// a smaller one, so the item keeps its background's mark.
+pub(crate) fn picture_disc(
+    geometry: &Geometry,
+    size: (f32, f32),
+    rtl: bool,
+) -> Option<graphene::Rect> {
+    let icon = icon_box(geometry, size, rtl);
+    let bg = background(geometry, size);
+    let (x, y) = (icon.center().x(), icon.center().y());
+    let r = (icon.width().max(icon.height()) / 2.0 + geometry.padding as f32)
+        .min(x - bg.x())
+        .min(bg.x() + bg.width() - x)
+        .min(y - bg.y())
+        .min(bg.y() + bg.height() - y);
+    (r > icon.width().max(icon.height()) / 2.0)
+        .then(|| graphene::Rect::new(x - r, y - r, 2.0 * r, 2.0 * r))
+}
+
 /// Where the words go: their box's origin and width.
 pub(crate) fn text_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> graphene::Rect {
     let bg = background(geometry, size);
@@ -307,6 +329,15 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
     } else {
         background(geometry, item.size)
     };
+    let disc = geometry
+        .picture_disc
+        .then(|| picture_disc(geometry, item.primary.1, item.rtl))
+        .flatten()
+        .map(|disc| disc.offset_r(item.primary.0, 0.0));
+    let (mark, radius) = match disc {
+        Some(disc) => (disc, disc.width() / 2.0),
+        None => (bg, geometry.radius),
+    };
 
     // The tint of the whole item: dropping onto it, selected, hovered. None
     // while its name is being edited: the editor is what the eye must find,
@@ -323,14 +354,15 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         Some(palette.get(Role::CursorFill))
     } else if state.hovered {
         Some(palette.get(Role::HoverFill))
-    } else if state.striped {
-        Some(palette.get(Role::StripeFill))
     } else {
         None
     };
-    if let Some(fill) = fill {
-        snapshot.push_rounded_clip(&rounded(&bg, geometry.radius));
-        snapshot.append_color(&fill, &bg);
+    // A stripe shades the row, whatever shape the item's own mark takes.
+    let stripe = (fill.is_none() && state.striped)
+        .then(|| (palette.get(Role::StripeFill), bg, geometry.radius));
+    if let Some((fill, shape, radius)) = fill.map(|fill| (fill, mark, radius)).or(stripe) {
+        snapshot.push_rounded_clip(&rounded(&shape, radius));
+        snapshot.append_color(&fill, &shape);
         snapshot.pop();
     }
     // A card around what the item draws is its own mark, as in Dolphin, and a
@@ -351,7 +383,7 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         None
     };
     if let Some(role) = ring_role {
-        ring(&snapshot, &bg, geometry.radius, 2.0, palette.get(role));
+        ring(&snapshot, &mark, radius, 2.0, palette.get(role));
     }
 
     if let Some((depth, Some(expanded))) = state.tree {
