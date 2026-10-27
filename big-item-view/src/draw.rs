@@ -137,10 +137,14 @@ pub(crate) fn icon_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> grap
 }
 
 /// The disc an item's tint and rings take with [`Geometry::picture_disc`]:
-/// centred on the picture, `padding` clear of it on every side.
+/// centred on the picture, `padding` clear of it on every side, and never wider
+/// or taller than the item's background, so it stays inside a narrow cell.
 pub(crate) fn picture_disc(geometry: &Geometry, size: (f32, f32), rtl: bool) -> graphene::Rect {
     let icon = icon_box(geometry, size, rtl);
-    let d = icon.width().max(icon.height()) + 2.0 * geometry.padding as f32;
+    let bg = background(geometry, size);
+    let d = (icon.width().max(icon.height()) + 2.0 * geometry.padding as f32)
+        .min(bg.width())
+        .min(bg.height());
     graphene::Rect::new(
         icon.x() + (icon.width() - d) / 2.0,
         icon.y() + (icon.height() - d) / 2.0,

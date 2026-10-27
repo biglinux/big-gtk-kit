@@ -99,3 +99,18 @@ fn picture_disc_circles_the_picture() {
     assert!(disc.x() + disc.width() <= bg.x() + bg.width());
     assert!(disc.y() + disc.height() <= bg.y() + bg.height());
 }
+
+/// In a cell no wider than its picture the disc shrinks to the background
+/// instead of reaching into the next cell.
+#[test]
+fn picture_disc_fits_a_narrow_cell() {
+    let geometry = Geometry {
+        picture_disc: true,
+        ..Geometry::grid(48, 48)
+    };
+    let size = (48.0, 110.0);
+    let disc = picture_disc(&geometry, size, false);
+    let bg = background(&geometry, size);
+    assert_eq!(disc.width(), bg.width());
+    assert!(disc.x() >= bg.x() && disc.x() + disc.width() <= bg.x() + bg.width());
+}
