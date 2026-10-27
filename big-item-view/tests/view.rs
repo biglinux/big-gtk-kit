@@ -140,7 +140,7 @@ fn proxies(view: &ItemView) -> Vec<gtk::Accessible> {
     let mut found = Vec::new();
     let mut next = view.first_accessible_child();
     while let Some(proxy) = next {
-        if proxy.is::<gtk::Widget>() {
+        if proxy.accessible_role() != gtk::AccessibleRole::GridCell {
             break;
         }
         next = proxy.next_accessible_sibling();
@@ -196,6 +196,27 @@ fn items_keep_proxy_on_insert() {
     list.remove(0);
     pump();
     assert_eq!(proxy_at(&view, 10).as_ref(), Some(&before));
+    window.destroy();
+}
+
+/// Assistive technology activates an item through its proxy's action, as
+/// Enter does: GTK's AT-SPI bridge offers a widget's own actions.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn proxy_action_activates_its_item() {
+    let (window, view, _, _) = shown(100);
+    let activated = Rc::new(Cell::new(None));
+    view.connect_activate({
+        let activated = Rc::clone(&activated);
+        move |_, position| activated.set(Some(position))
+    });
+    let proxy = proxy_at(&view, 10)
+        .and_downcast::<gtk::Widget>()
+        .expect("a widget proxy for an item on screen");
+    proxy
+        .activate_action("item.activate", None)
+        .expect("the proxy has the action");
+    assert_eq!(activated.get(), Some(10));
     window.destroy();
 }
 

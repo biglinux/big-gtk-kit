@@ -9,13 +9,13 @@
 //! apiece, and adding each one walked every earlier sibling for the
 //! accessibility bus (O(n²)). A new tab cost 1.4 s of CPU and 50 MiB.
 //!
-//! Here there are no widgets per item. [`ItemView`] lays items out by arithmetic
+//! Here no item has a widget tree. [`ItemView`] lays items out by arithmetic
 //! ([`layout`]), draws the ones on screen into render nodes it keeps and hands
 //! back to GSK unchanged frame after frame (so the renderer's diff damages only
 //! what changed), reads its colours and fonts from CSS through a few invisible
-//! probe widgets, and exposes the items to assistive technology as lightweight
-//! accessible objects over the visible window. What an item shows comes from the
-//! consumer's [`ItemPresenter`].
+//! probe widgets, and exposes the items on screen to assistive technology as one
+//! undrawn widget each, which AT-SPI can activate. What an item shows comes from
+//! the consumer's [`ItemPresenter`].
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
