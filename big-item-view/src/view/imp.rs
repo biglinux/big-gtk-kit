@@ -142,7 +142,7 @@ impl Default for ItemView {
             line_heights: Cell::new((17.0, 15.0)),
             icons: RefCell::new(Icons::default()),
             icon_loader: Cell::new(None),
-            a11y: RefCell::new(a11y::Window::new(gtk::AccessibleRole::GridCell)),
+            a11y: RefCell::default(),
             last_range: Cell::new((u32::MAX, 0)),
             range_idle: RefCell::new(None),
             scratch: RefCell::new(ItemContent::default()),
@@ -355,11 +355,14 @@ impl WidgetImpl for ItemView {
         }
         let obj = self.obj();
         // A popover a consumer parents here (renaming an item, pointing at
-        // its `item_rect`) is placed by its parent's allocation.
+        // its `item_rect`) is placed by its parent's allocation. The item
+        // proxies get a size, zero, so they stay mapped.
         let mut child = obj.first_child();
         while let Some(widget) = child {
             if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
                 popover.present();
+            } else if widget.is::<a11y::ItemProxy>() {
+                widget.allocate(0, 0, -1, None);
             }
             child = widget.next_sibling();
         }
@@ -471,7 +474,7 @@ impl AccessibleImpl for ItemView {
         if let Some(first) = self.a11y.borrow().first() {
             return Some(first.clone().upcast());
         }
-        self.parent_first_accessible_child()
+        a11y::first_real_child(self.obj().upcast_ref()).map(Cast::upcast)
     }
 
     fn platform_state(&self, state: gtk::AccessiblePlatformState) -> bool {
@@ -594,7 +597,10 @@ impl ItemView {
         self.cursor_item.set(None);
         self.anchor.set(None);
         self.hover.set(None);
-        self.a11y.borrow_mut().clear();
+        let gone = self.a11y.borrow_mut().clear();
+        for proxy in gone {
+            proxy.unparent();
+        }
         self.last_range.set((u32::MAX, 0));
         if let Some(model) = model {
             let view = self.obj().downgrade();
@@ -801,13 +807,22 @@ impl ItemView {
             .saturating_sub(lanes)
             .min(metrics.n_items().saturating_sub(capacity));
         let window = start..start + capacity;
-        let stale = self
-            .a11y
-            .borrow_mut()
-            .cover(self.obj().upcast_ref(), window);
-        self.describe(&stale);
+        let obj = self.obj();
+        let cover = self.a11y.borrow_mut().cover(window);
+        for proxy in &cover.gone {
+            proxy.unparent();
+        }
+        // Described before they are parented: a proxy not yet in the tree
+        // tells assistive technology nothing until it is added.
+        self.describe(&cover.stale);
+        // First among the children: the real children's accessible siblings
+        // follow the widget order and must not lead into the ring.
+        for proxy in &cover.added {
+            proxy.insert_after(&*obj, None::<&gtk::Widget>);
+        }
+        self.a11y.borrow().link(obj.upcast_ref());
         self.sync_focus();
-        self.obj().emit_by_name::<()>(
+        obj.emit_by_name::<()>(
             "visible-range-changed",
             &[&range.start, &(range.end - range.start)],
         );
