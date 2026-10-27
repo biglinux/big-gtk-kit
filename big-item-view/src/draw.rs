@@ -354,14 +354,15 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         Some(palette.get(Role::CursorFill))
     } else if state.hovered {
         Some(palette.get(Role::HoverFill))
-    } else if state.striped {
-        Some(palette.get(Role::StripeFill))
     } else {
         None
     };
-    if let Some(fill) = fill {
-        snapshot.push_rounded_clip(&rounded(&mark, radius));
-        snapshot.append_color(&fill, &mark);
+    // A stripe shades the row, whatever shape the item's own mark takes.
+    let stripe = (fill.is_none() && state.striped)
+        .then(|| (palette.get(Role::StripeFill), bg, geometry.radius));
+    if let Some((fill, shape, radius)) = fill.map(|fill| (fill, mark, radius)).or(stripe) {
+        snapshot.push_rounded_clip(&rounded(&shape, radius));
+        snapshot.append_color(&fill, &shape);
         snapshot.pop();
     }
     // A card around what the item draws is its own mark, as in Dolphin, and a
