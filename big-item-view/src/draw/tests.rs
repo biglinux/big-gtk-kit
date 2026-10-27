@@ -78,3 +78,24 @@ fn a_press_finds_the_star_under_it() {
         None
     );
 }
+
+/// The disc is round, centred on the picture and inside the item's
+/// background, so a round tile's tint never spills into its neighbour.
+#[test]
+fn picture_disc_circles_the_picture() {
+    let geometry = Geometry {
+        picture_disc: true,
+        ..Geometry::grid(120, 48)
+    };
+    let size = (120.0, 110.0);
+    let icon = icon_box(&geometry, size, false);
+    let disc = picture_disc(&geometry, size, false);
+    assert_eq!(disc.width(), disc.height());
+    assert_eq!(disc.width(), 48.0 + 2.0 * geometry.padding as f32);
+    assert_eq!(disc.center().x(), icon.center().x());
+    assert_eq!(disc.center().y(), icon.center().y());
+    let bg = background(&geometry, size);
+    assert!(disc.x() >= bg.x() && disc.y() >= bg.y());
+    assert!(disc.x() + disc.width() <= bg.x() + bg.width());
+    assert!(disc.y() + disc.height() <= bg.y() + bg.height());
+}

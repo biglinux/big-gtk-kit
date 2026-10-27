@@ -136,6 +136,19 @@ pub(crate) fn icon_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> grap
     mirror(graphene::Rect::new(x, y, w, h), size.0, rtl)
 }
 
+/// The disc an item's tint and rings take with [`Geometry::picture_disc`]:
+/// centred on the picture, `padding` clear of it on every side.
+pub(crate) fn picture_disc(geometry: &Geometry, size: (f32, f32), rtl: bool) -> graphene::Rect {
+    let icon = icon_box(geometry, size, rtl);
+    let d = icon.width().max(icon.height()) + 2.0 * geometry.padding as f32;
+    graphene::Rect::new(
+        icon.x() + (icon.width() - d) / 2.0,
+        icon.y() + (icon.height() - d) / 2.0,
+        d,
+        d,
+    )
+}
+
 /// Where the words go: their box's origin and width.
 pub(crate) fn text_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> graphene::Rect {
     let bg = background(geometry, size);
@@ -307,6 +320,12 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
     } else {
         background(geometry, item.size)
     };
+    let (mark, radius) = if geometry.picture_disc {
+        let disc = picture_disc(geometry, item.primary.1, item.rtl).offset_r(item.primary.0, 0.0);
+        (disc, disc.width() / 2.0)
+    } else {
+        (bg, geometry.radius)
+    };
 
     // The tint of the whole item: dropping onto it, selected, hovered. None
     // while its name is being edited: the editor is what the eye must find,
@@ -329,8 +348,8 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         None
     };
     if let Some(fill) = fill {
-        snapshot.push_rounded_clip(&rounded(&bg, geometry.radius));
-        snapshot.append_color(&fill, &bg);
+        snapshot.push_rounded_clip(&rounded(&mark, radius));
+        snapshot.append_color(&fill, &mark);
         snapshot.pop();
     }
     // A card around what the item draws is its own mark, as in Dolphin, and a
@@ -351,7 +370,7 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         None
     };
     if let Some(role) = ring_role {
-        ring(&snapshot, &bg, geometry.radius, 2.0, palette.get(role));
+        ring(&snapshot, &mark, radius, 2.0, palette.get(role));
     }
 
     if let Some((depth, Some(expanded))) = state.tree {
