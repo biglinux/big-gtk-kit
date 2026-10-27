@@ -137,20 +137,20 @@ pub(crate) fn icon_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> grap
 }
 
 /// The disc an item's tint and rings take with [`Geometry::picture_disc`]:
-/// centred on the picture, `padding` clear of it on every side, and never wider
-/// or taller than the item's background, so it stays inside a narrow cell.
+/// centred on the picture, `padding` clear of it on every side, and no further
+/// from its centre than the nearest edge of the item's background, so it stays
+/// inside a narrow cell or around a picture that is not square.
 pub(crate) fn picture_disc(geometry: &Geometry, size: (f32, f32), rtl: bool) -> graphene::Rect {
     let icon = icon_box(geometry, size, rtl);
     let bg = background(geometry, size);
-    let d = (icon.width().max(icon.height()) + 2.0 * geometry.padding as f32)
-        .min(bg.width())
-        .min(bg.height());
-    graphene::Rect::new(
-        icon.x() + (icon.width() - d) / 2.0,
-        icon.y() + (icon.height() - d) / 2.0,
-        d,
-        d,
-    )
+    let (x, y) = (icon.center().x(), icon.center().y());
+    let r = (icon.width().max(icon.height()) / 2.0 + geometry.padding as f32)
+        .min(x - bg.x())
+        .min(bg.x() + bg.width() - x)
+        .min(y - bg.y())
+        .min(bg.y() + bg.height() - y)
+        .max(0.0);
+    graphene::Rect::new(x - r, y - r, 2.0 * r, 2.0 * r)
 }
 
 /// Where the words go: their box's origin and width.
@@ -373,7 +373,9 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
     } else {
         None
     };
-    if let Some(role) = ring_role {
+    // Over the picture with a disc: one shrunk to fit a narrow cell is smaller
+    // than the picture, and an opaque one would hide a ring drawn under it.
+    if let Some(role) = ring_role.filter(|_| !geometry.picture_disc) {
         ring(&snapshot, &mark, radius, 2.0, palette.get(role));
     }
 
@@ -438,6 +440,9 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         _ => {}
     }
     snapshot.restore();
+    if let Some(role) = ring_role.filter(|_| geometry.picture_disc) {
+        ring(&snapshot, &mark, radius, 2.0, palette.get(role));
+    }
     draw_cells(&snapshot, item);
     snapshot.to_node()
 }

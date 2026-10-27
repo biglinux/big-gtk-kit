@@ -100,6 +100,22 @@ fn picture_disc_circles_the_picture() {
     assert!(disc.y() + disc.height() <= bg.y() + bg.height());
 }
 
+/// A picture that is not square keeps the disc inside the background above
+/// and below it.
+#[test]
+fn picture_disc_fits_a_flat_picture() {
+    let geometry = Geometry {
+        picture_disc: true,
+        picture_height: Some(24),
+        ..Geometry::grid(120, 48)
+    };
+    let size = (120.0, 110.0);
+    let disc = picture_disc(&geometry, size, false);
+    let bg = background(&geometry, size);
+    assert!(disc.y() >= bg.y() && disc.y() + disc.height() <= bg.y() + bg.height());
+    assert_eq!(disc.width(), disc.height());
+}
+
 /// In a cell no wider than its picture the disc shrinks to the background
 /// instead of reaching into the next cell.
 #[test]
