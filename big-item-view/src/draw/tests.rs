@@ -89,7 +89,7 @@ fn picture_disc_circles_the_picture() {
     };
     let size = (120.0, 110.0);
     let icon = icon_box(&geometry, size, false);
-    let disc = picture_disc(&geometry, size, false);
+    let disc = picture_disc(&geometry, size, false).expect("room for the disc");
     assert_eq!(disc.width(), disc.height());
     assert_eq!(disc.width(), 48.0 + 2.0 * geometry.padding as f32);
     assert_eq!(disc.center().x(), icon.center().x());
@@ -100,33 +100,19 @@ fn picture_disc_circles_the_picture() {
     assert!(disc.y() + disc.height() <= bg.y() + bg.height());
 }
 
-/// A picture that is not square keeps the disc inside the background above
-/// and below it.
+/// Without room for a disc around the whole picture (a narrow cell, a flat
+/// picture) the item keeps its background's mark.
 #[test]
-fn picture_disc_fits_a_flat_picture() {
-    let geometry = Geometry {
+fn no_disc_without_room_around_picture() {
+    let narrow = Geometry {
+        picture_disc: true,
+        ..Geometry::grid(48, 48)
+    };
+    assert!(picture_disc(&narrow, (48.0, 110.0), false).is_none());
+    let flat = Geometry {
         picture_disc: true,
         picture_height: Some(24),
         ..Geometry::grid(120, 48)
     };
-    let size = (120.0, 110.0);
-    let disc = picture_disc(&geometry, size, false);
-    let bg = background(&geometry, size);
-    assert!(disc.y() >= bg.y() && disc.y() + disc.height() <= bg.y() + bg.height());
-    assert_eq!(disc.width(), disc.height());
-}
-
-/// In a cell no wider than its picture the disc shrinks to the background
-/// instead of reaching into the next cell.
-#[test]
-fn picture_disc_fits_a_narrow_cell() {
-    let geometry = Geometry {
-        picture_disc: true,
-        ..Geometry::grid(48, 48)
-    };
-    let size = (48.0, 110.0);
-    let disc = picture_disc(&geometry, size, false);
-    let bg = background(&geometry, size);
-    assert_eq!(disc.width(), bg.width());
-    assert!(disc.x() >= bg.x() && disc.x() + disc.width() <= bg.x() + bg.width());
+    assert!(picture_disc(&flat, (120.0, 110.0), false).is_none());
 }

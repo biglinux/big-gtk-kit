@@ -281,8 +281,9 @@ pub struct Geometry {
     /// background: a press there starts a rubber band, as in a file manager.
     pub hit_drawn_only: bool,
     /// Whether an item's tint and rings are a disc around its picture rather
-    /// than its whole background: a launcher's round tiles. The cell is still
-    /// what a press lands in.
+    /// than its whole background: a launcher's round tiles. An item whose
+    /// background leaves no room for a disc around the whole picture keeps the
+    /// background's mark. The cell is still what a press lands in.
     pub picture_disc: bool,
 }
 

@@ -137,10 +137,15 @@ pub(crate) fn icon_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> grap
 }
 
 /// The disc an item's tint and rings take with [`Geometry::picture_disc`]:
-/// centred on the picture, `padding` clear of it on every side, and no further
-/// from its centre than the nearest edge of the item's background, so it stays
-/// inside a narrow cell or around a picture that is not square.
-pub(crate) fn picture_disc(geometry: &Geometry, size: (f32, f32), rtl: bool) -> graphene::Rect {
+/// centred on the picture, `padding` clear of it on every side, and inside the
+/// item's background. `None` when no such disc goes around the whole picture (a
+/// cell too narrow, a picture that is not square): an opaque picture would cover
+/// a smaller one, so the item keeps its background's mark.
+pub(crate) fn picture_disc(
+    geometry: &Geometry,
+    size: (f32, f32),
+    rtl: bool,
+) -> Option<graphene::Rect> {
     let icon = icon_box(geometry, size, rtl);
     let bg = background(geometry, size);
     let (x, y) = (icon.center().x(), icon.center().y());
@@ -148,9 +153,9 @@ pub(crate) fn picture_disc(geometry: &Geometry, size: (f32, f32), rtl: bool) -> 
         .min(x - bg.x())
         .min(bg.x() + bg.width() - x)
         .min(y - bg.y())
-        .min(bg.y() + bg.height() - y)
-        .max(0.0);
-    graphene::Rect::new(x - r, y - r, 2.0 * r, 2.0 * r)
+        .min(bg.y() + bg.height() - y);
+    (r > icon.width().max(icon.height()) / 2.0)
+        .then(|| graphene::Rect::new(x - r, y - r, 2.0 * r, 2.0 * r))
 }
 
 /// Where the words go: their box's origin and width.
@@ -324,11 +329,14 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
     } else {
         background(geometry, item.size)
     };
-    let (mark, radius) = if geometry.picture_disc {
-        let disc = picture_disc(geometry, item.primary.1, item.rtl).offset_r(item.primary.0, 0.0);
-        (disc, disc.width() / 2.0)
-    } else {
-        (bg, geometry.radius)
+    let disc = geometry
+        .picture_disc
+        .then(|| picture_disc(geometry, item.primary.1, item.rtl))
+        .flatten()
+        .map(|disc| disc.offset_r(item.primary.0, 0.0));
+    let (mark, radius) = match disc {
+        Some(disc) => (disc, disc.width() / 2.0),
+        None => (bg, geometry.radius),
     };
 
     // The tint of the whole item: dropping onto it, selected, hovered. None
@@ -373,9 +381,7 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
     } else {
         None
     };
-    // Over the picture with a disc: one shrunk to fit a narrow cell is smaller
-    // than the picture, and an opaque one would hide a ring drawn under it.
-    if let Some(role) = ring_role.filter(|_| !geometry.picture_disc) {
+    if let Some(role) = ring_role {
         ring(&snapshot, &mark, radius, 2.0, palette.get(role));
     }
 
@@ -440,9 +446,6 @@ pub(crate) fn item_node(item: &Item<'_>) -> Option<gsk::RenderNode> {
         _ => {}
     }
     snapshot.restore();
-    if let Some(role) = ring_role.filter(|_| geometry.picture_disc) {
-        ring(&snapshot, &mark, radius, 2.0, palette.get(role));
-    }
     draw_cells(&snapshot, item);
     snapshot.to_node()
 }
