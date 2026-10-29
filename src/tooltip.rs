@@ -405,7 +405,7 @@ impl Engine {
         };
         if self.pressed.get()
             || !owner.is_mapped()
-            || menu_open(&owner)
+            || popover_open(&native)
             || !(display_flag(SHOW_WHEN_INACTIVE_KEY) || active(&native))
         {
             return false;
@@ -688,17 +688,20 @@ fn active(native: &gtk::Widget) -> bool {
         .is_none_or(|window| window.is_active())
 }
 
-/// A control whose own menu or popover is open shows no card over it.
-fn menu_open(owner: &gtk::Widget) -> bool {
-    if let Some(button) = owner.downcast_ref::<gtk::MenuButton>() {
-        return button.is_active();
-    }
-    let mut child = owner.first_child();
-    while let Some(widget) = child {
-        if widget.is::<gtk::Popover>() && widget.is_visible() {
-            return true;
+/// Whether `native` shows a popover other than the card, wherever in the
+/// window it is parented: a card would cover that menu or panel. Popovers are
+/// not searched, each has its own engine.
+fn popover_open(native: &gtk::Widget) -> bool {
+    let mut pending: Vec<gtk::Widget> = native.first_child().into_iter().collect();
+    while let Some(widget) = pending.pop() {
+        pending.extend(widget.next_sibling());
+        if widget.is::<gtk::Popover>() {
+            if widget.is_visible() && !widget.has_css_class(CARD_CLASS) {
+                return true;
+            }
+            continue;
         }
-        child = widget.next_sibling();
+        pending.extend(widget.first_child());
     }
     false
 }
@@ -791,6 +794,52 @@ mod tests {
             (windows.get(), cards.get(), owners.get()),
             (CYCLES, CYCLES, CYCLES)
         );
+    }
+
+    /// No card over a context menu, whether it is a second popover on a menu
+    /// button (a tray icon) or parented to another widget (a shared menu).
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn open_context_menu_hides_card() {
+        gtk::init().expect("a display");
+        install();
+        set_show_when_inactive(true);
+        let tray = gtk::MenuButton::new();
+        tray.set_tooltip_text(Some("Network"));
+        let applet = gtk::Button::with_label("Volume");
+        applet.set_tooltip_text(Some("Volume: 50 %"));
+        let host = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.append(&tray);
+        row.append(&applet);
+        row.append(&host);
+        let window = gtk::Window::builder().child(&row).build();
+        window.present();
+        pump();
+        let engine = engine(window.upcast_ref()).expect("attached at realize");
+
+        for (owner, parent) in [
+            (
+                tray.upcast_ref::<gtk::Widget>(),
+                tray.upcast_ref::<gtk::Widget>(),
+            ),
+            (applet.upcast_ref(), host.upcast_ref()),
+        ] {
+            let menu = gtk::PopoverMenu::from_model(Some(&gtk::gio::Menu::new()));
+            menu.set_parent(parent);
+            menu.popup();
+            pump();
+            engine.owner.replace(Some(owner.downgrade()));
+            engine.show(true);
+            pump();
+            assert!(!engine.shown.get(), "no card over the menu of {owner:?}");
+            menu.popdown();
+            menu.unparent();
+            pump();
+        }
+        set_show_when_inactive(false);
+        window.destroy();
+        pump();
     }
 
     #[test]
