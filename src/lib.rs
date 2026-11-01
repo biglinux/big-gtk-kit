@@ -11,6 +11,7 @@ pub mod alert;
 pub mod breakpoint;
 pub mod css;
 pub mod dialog;
+pub mod directory;
 pub mod menu;
 pub mod password;
 pub mod popover;
