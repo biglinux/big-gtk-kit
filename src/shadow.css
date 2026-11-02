@@ -1,0 +1,49 @@
+/* SPDX-FileCopyrightText: 2026 BigLinux contributors
+   SPDX-License-Identifier: MIT */
+
+/* libadwaita 1.10's window shadows, with the layer that changes size between
+   focused and backdrop split in two: each layer keeps its blur and spread in
+   both states and only its colour fades, so GTK's Cairo shadow cache sees
+   three corner masks instead of new ones on every frame of the fade. At rest
+   every state draws the same pixels as libadwaita's rules (a transparent layer
+   draws nothing). Loaded by `shadow.rs` above the theme, so each selector
+   libadwaita gives a box-shadow is restated here. */
+
+window.csd {
+  box-shadow: 0 0 14px 5px RGB(0 0 0/15%), 0 0 5px 2px RGB(0 0 0/10%), 0 0 10px 5px transparent, 0 0 0 1px RGB(0 0 0/5%);
+}
+
+@media (prefers-contrast: more) {
+  window.csd {
+    box-shadow: 0 0 14px 5px RGB(0 0 0/15%), 0 0 5px 2px RGB(0 0 0/10%), 0 0 10px 5px transparent, 0 0 0 1px RGB(0 0 0/80%);
+  }
+}
+
+window.csd:backdrop {
+  box-shadow: 0 0 14px 5px transparent, 0 0 5px 2px transparent, 0 0 10px 5px RGB(0 0 0/8%), 0 0 0 1px RGB(0 0 0/5%);
+}
+
+@media (prefers-contrast: more) {
+  window.csd:backdrop {
+    box-shadow: 0 0 14px 5px transparent, 0 0 5px 2px transparent, 0 0 10px 5px RGB(0 0 0/8%), 0 0 0 1px RGB(0 0 0/80%);
+  }
+}
+
+window.csd.dialog.message, window.csd.messagedialog {
+  box-shadow: 0 0 14px 2px RGB(0 0 6/3%), 0 0 5px 2px RGB(0 0 6/10%), 0 0 0 1px RGB(0 0 0/5%);
+}
+
+@media (prefers-contrast: more) {
+  window.csd.dialog.message, window.csd.messagedialog {
+    box-shadow: 0 0 14px 2px RGB(0 0 6/3%), 0 0 5px 2px RGB(0 0 6/10%), 0 0 0 1px RGB(0 0 0/80%);
+  }
+}
+
+window.csd.tiled, window.csd.tiled-top, window.csd.tiled-left, window.csd.tiled-right, window.csd.tiled-bottom,
+window.csd.tiled:backdrop, window.csd.tiled-top:backdrop, window.csd.tiled-left:backdrop, window.csd.tiled-right:backdrop, window.csd.tiled-bottom:backdrop {
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor var(--border-opacity), transparent), 0 0 0 20px transparent;
+}
+
+window.csd.maximized, window.csd.fullscreen {
+  box-shadow: none;
+}

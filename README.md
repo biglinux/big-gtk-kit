@@ -55,7 +55,14 @@ This turns on what needs no change at the call sites:
 - releasing the parent surface of every Wayland popup: GDK never drops the
   reference a popup takes on it, so every window that showed a popover, menu or
   tooltip kept its surface after closing, 25 of 25 measured (GTK 4.22.4 and
-  4.22.5, still so on `main`; limited to GTK before 4.22.6).
+  4.22.5, still so on `main`; limited to GTK before 4.22.6);
+- under the Cairo renderer (`GSK_RENDERER=cairo`), libadwaita's window shadows
+  restated so their fade to backdrop changes colours only: GTK keeps every
+  blurred shadow corner it draws, keyed by blur and size, and each frame of
+  libadwaita's fade has new ones, 2.2 MB a minute for a window losing the
+  focus 70 times a minute without this; every state draws the same pixels
+  (GTK 4.24.1, still so on `main`; libadwaita 1.10, left off once its
+  stylesheet changes these rules).
 
 ## Workarounds
 
