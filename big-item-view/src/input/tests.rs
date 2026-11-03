@@ -239,10 +239,10 @@ fn middle(view: &ItemView, position: u32) -> (f64, f64) {
     )
 }
 
-/// Enter and motion over a row both answer the move.
+/// Before the dragged value loads, enter and motion over a row answer the move.
 #[gtk::test]
 #[ignore = "needs a display"]
-fn enter_and_motion_prefer_move() {
+fn enter_and_motion_move_before_load() {
     let (view, _selection, window) = shown_view();
     view.set_drop_types(
         &[String::static_type()],
@@ -257,4 +257,37 @@ fn enter_and_motion_prefer_move() {
         (gdk::DragAction::MOVE, gdk::DragAction::MOVE)
     );
     window.destroy();
+}
+
+/// Copies what comes from elsewhere, and takes drops on item 1 alone.
+struct Across;
+
+impl ItemPresenter for Across {
+    fn content(&self, _position: u32, _item: &glib::Object, _out: &mut ItemContent) {}
+
+    fn accepts_drop(&self, target: Option<u32>) -> bool {
+        target == Some(1)
+    }
+
+    fn drop_action(&self, _target: Option<u32>, value: &glib::Value) -> gdk::DragAction {
+        if value.get::<&str>() == Ok("elsewhere") {
+            gdk::DragAction::COPY
+        } else {
+            gdk::DragAction::MOVE
+        }
+    }
+}
+
+#[test]
+fn hover_answers_presenter_action() {
+    let elsewhere = "elsewhere".to_value();
+    assert_eq!(
+        answer(&Across, Some(1), Some(&elsewhere)),
+        gdk::DragAction::COPY
+    );
+    assert_eq!(answer(&Across, Some(1), None), gdk::DragAction::MOVE);
+    assert_eq!(
+        answer(&Across, None, Some(&elsewhere)),
+        gdk::DragAction::empty()
+    );
 }

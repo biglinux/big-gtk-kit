@@ -124,8 +124,18 @@ impl ItemView {
     }
 
     /// Accept drops of `types`; the presenter decides where they may land.
+    /// The dragged value is read while the drag hovers, for
+    /// [`ItemPresenter::drop_action`](crate::ItemPresenter::drop_action), so
+    /// `types` should be small ones such as a file list.
     pub fn set_drop_types(&self, types: &[glib::Type], actions: gdk::DragAction) {
         crate::input::install_drop(self, types, actions);
+    }
+
+    /// Ask [`ItemPresenter::drop_action`](crate::ItemPresenter::drop_action)
+    /// again for the drag over the view, when its answer changed while the
+    /// pointer rests.
+    pub fn update_drop_action(&self) {
+        crate::input::update_drop_action(self);
     }
 
     /// Bring the item at `position` on screen, and focus or select it as `flags` say.
