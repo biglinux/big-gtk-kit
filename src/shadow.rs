@@ -106,7 +106,11 @@ mod tests {
     fn adwaita_sheet_is_found_in_use() {
         init();
         let display = gtk::gdk::Display::default().expect("a display");
-        assert!(adwaita_sheet_in_use(&display));
+        // libadwaita leaves a theme named in GTK_THEME in place.
+        assert_eq!(
+            adwaita_sheet_in_use(&display),
+            std::env::var_os("GTK_THEME").is_none()
+        );
     }
 
     #[gtk::test]
