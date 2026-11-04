@@ -209,7 +209,11 @@ impl ItemPresenter for Draggable {
 }
 
 fn shown_view() -> (ItemView, gtk::MultiSelection, gtk::Window) {
-    let view = ItemView::new(Rc::new(Draggable), Geometry::rows(16));
+    shown_view_of(Rc::new(Draggable))
+}
+
+fn shown_view_of(presenter: Rc<dyn ItemPresenter>) -> (ItemView, gtk::MultiSelection, gtk::Window) {
+    let view = ItemView::new(presenter, Geometry::rows(16));
     let selection = gtk::MultiSelection::new(Some(gtk::StringList::new(&["a", "b", "c"])));
     view.set_model(Some(&selection));
     let window = gtk::Window::builder()
@@ -239,10 +243,10 @@ fn middle(view: &ItemView, position: u32) -> (f64, f64) {
     )
 }
 
-/// Enter and motion over a row both answer the move.
+/// Before the dragged value loads, enter and motion over a row answer the move.
 #[gtk::test]
 #[ignore = "needs a display"]
-fn enter_and_motion_prefer_move() {
+fn enter_and_motion_move_before_load() {
     let (view, _selection, window) = shown_view();
     view.set_drop_types(
         &[String::static_type()],
@@ -256,5 +260,98 @@ fn enter_and_motion_prefer_move() {
         (entered, moved),
         (gdk::DragAction::MOVE, gdk::DragAction::MOVE)
     );
+    window.destroy();
+}
+
+/// Copies what comes from elsewhere, and takes drops on item 1 alone.
+struct Across;
+
+impl ItemPresenter for Across {
+    fn content(&self, _position: u32, _item: &glib::Object, _out: &mut ItemContent) {}
+
+    fn accepts_drop(&self, target: Option<u32>) -> bool {
+        target == Some(1)
+    }
+
+    fn drop_action(&self, _target: Option<u32>, value: &glib::Value) -> gdk::DragAction {
+        if value.get::<&str>() == Ok("elsewhere") {
+            gdk::DragAction::COPY
+        } else {
+            gdk::DragAction::MOVE
+        }
+    }
+}
+
+#[test]
+fn hover_answers_presenter_action() {
+    let elsewhere = "elsewhere".to_value();
+    assert_eq!(
+        answer(&Across, Some(1), Some(&elsewhere)),
+        gdk::DragAction::COPY
+    );
+    assert_eq!(answer(&Across, Some(1), None), gdk::DragAction::MOVE);
+    assert_eq!(
+        answer(&Across, None, Some(&elsewhere)),
+        gdk::DragAction::empty()
+    );
+}
+
+/// Without preload the dragged value waits for the drop, whichever of the two
+/// calls comes first.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn preload_is_asked_for() {
+    let (view, _selection, window) = shown_view();
+    view.set_drop_types(&[String::static_type()], gdk::DragAction::MOVE);
+    let target: gtk::DropTarget = controller(&view);
+    assert!(!target.is_preload());
+    view.set_drop_preload(true);
+    assert!(target.is_preload());
+    window.destroy();
+
+    let (view, _selection, window) = shown_view();
+    view.set_drop_preload(true);
+    view.set_drop_types(&[String::static_type()], gdk::DragAction::MOVE);
+    assert!(controller::<gtk::DropTarget>(&view).is_preload());
+    window.destroy();
+}
+
+/// Takes drops on items alone, and counts what reaches it.
+#[derive(Default)]
+struct OnItems {
+    received: std::cell::Cell<u32>,
+}
+
+impl ItemPresenter for OnItems {
+    fn content(&self, _position: u32, _item: &glib::Object, _out: &mut ItemContent) {}
+
+    fn accepts_drop(&self, target: Option<u32>) -> bool {
+        target.is_some()
+    }
+
+    fn receive_drop(
+        &self,
+        _target: Option<u32>,
+        _value: &glib::Value,
+        _action: gdk::DragAction,
+    ) -> bool {
+        self.received.set(self.received.get() + 1);
+        true
+    }
+}
+
+#[gtk::test]
+#[ignore = "needs a display"]
+fn background_refuses_drop() {
+    let presenter = Rc::new(OnItems::default());
+    let (view, _selection, window) = shown_view_of(presenter.clone());
+    view.set_drop_types(&[String::static_type()], gdk::DragAction::MOVE);
+    let target: gtk::DropTarget = controller(&view);
+    // The signal carries the value boxed in a GValue.
+    let value = glib::BoxedValue("x".to_value());
+    let (x, y) = middle(&view, 0);
+    let on_item: bool = target.emit_by_name("drop", &[&value, &x, &y]);
+    let below: bool = target.emit_by_name("drop", &[&value, &x, &250.0f64]);
+    assert_eq!((on_item, below, presenter.received.get()), (true, false, 1));
     window.destroy();
 }

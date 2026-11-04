@@ -11,9 +11,11 @@ pub mod alert;
 pub mod breakpoint;
 pub mod css;
 pub mod dialog;
+pub mod directory;
 pub mod menu;
 pub mod password;
 pub mod popover;
+mod shadow;
 pub mod source;
 mod surface;
 pub mod switch;
@@ -25,7 +27,8 @@ use gtk::glib::translate::IntoGlib;
 use gtk::prelude::*;
 
 /// Turn on what every program gets without changing a call site: the
-/// tooltip card, the closing-dialog focus fix and the popup-parent release.
+/// tooltip card, the closing-dialog focus fix, the popup-parent release and
+/// the Cairo window shadows.
 ///
 /// Call once, after GTK and libadwaita are initialised (an application's
 /// `startup`). Idempotent.
@@ -33,6 +36,7 @@ pub fn install() {
     tooltip::install();
     dialog::install();
     surface::install();
+    shadow::install();
 }
 
 /// Run `callback` with the object of every `signal` emission on `T` and its

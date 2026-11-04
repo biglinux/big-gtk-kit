@@ -97,10 +97,24 @@ pub trait ItemPresenter: 'static {
         false
     }
 
+    /// The action a drop of `value` on `target` (the view itself when `None`)
+    /// makes when no key is held, which the pointer shows while the drag
+    /// hovers; the compositor applies Ctrl and Shift over it. An empty answer
+    /// refuses the drop.
+    ///
+    /// One action, among those given to [`ItemView::set_drop_types`]: GDK
+    /// refuses a set or any other. Asked only with
+    /// [`ItemView::set_drop_preload`], once the value has loaded, and then on
+    /// every motion, so it must not block; an answer found later reaches the
+    /// pointer through [`ItemView::update_drop_action`].
+    fn drop_action(&self, _target: Option<u32>, _value: &glib::Value) -> gdk::DragAction {
+        gdk::DragAction::MOVE
+    }
+
     /// Take a drop on `target` (the view itself when `None`). `action` is
-    /// the one the compositor picked for the drop: a copy when the person
-    /// held Ctrl or the source offers nothing else, otherwise a move. Returns
-    /// whether the drop was taken.
+    /// the one the compositor picked for the drop: [`Self::drop_action`]'s
+    /// answer, a copy when the person held Ctrl, or the one the source
+    /// offers when it offers one alone. Returns whether the drop was taken.
     fn receive_drop(
         &self,
         _target: Option<u32>,

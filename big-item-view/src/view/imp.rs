@@ -4,7 +4,7 @@
 //! The subclass: its state, the GTK virtual methods, the model and the
 //! accessible window.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::OnceLock;
 
@@ -77,7 +77,13 @@ pub struct ItemView {
     pub(super) last_range: Cell<(u32, u32)>,
     range_idle: RefCell<Option<glib::SourceId>>,
     pub(super) scratch: RefCell<ItemContent>,
-    pub(crate) drop_installed: Cell<bool>,
+    pub(crate) drop_controller: OnceCell<gtk::DropTarget>,
+    /// Whether the dragged value is read while the drag hovers.
+    pub(crate) drop_preload: Cell<bool>,
+    /// The dragged value once loaded: reading the target's copies it.
+    pub(crate) drop_value: RefCell<Option<glib::Value>>,
+    /// Where the drag over the view last stood.
+    pub(crate) drop_at: Cell<Option<(f64, f64)>>,
     /// The width a line was last laid out at, for the column headings.
     line_width: Cell<f32>,
     /// Whether runs of items get a heading, and where the runs are.
@@ -146,7 +152,10 @@ impl Default for ItemView {
             last_range: Cell::new((u32::MAX, 0)),
             range_idle: RefCell::new(None),
             scratch: RefCell::new(ItemContent::default()),
-            drop_installed: Cell::new(false),
+            drop_controller: OnceCell::new(),
+            drop_preload: Cell::new(false),
+            drop_value: RefCell::new(None),
+            drop_at: Cell::new(None),
             line_width: Cell::new(0.0),
             sectioned: Cell::new(false),
             sections: RefCell::new(layout::Sections::default()),

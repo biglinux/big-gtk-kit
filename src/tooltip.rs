@@ -71,24 +71,7 @@ pub fn install() {
         return;
     }
     if let Some(display) = gdk::Display::default() {
-        let provider = gtk::CssProvider::new();
-        // An application provider answers `@media` from its own properties,
-        // not from the user's settings as the theme does.
-        let settings = gtk::Settings::for_display(&display);
-        for (setting, preference) in [
-            ("gtk-interface-color-scheme", "prefers-color-scheme"),
-            ("gtk-interface-contrast", "prefers-contrast"),
-            ("gtk-interface-reduced-motion", "prefers-reduced-motion"),
-        ] {
-            // GTK 4.20 added them; an older one keeps the light card.
-            if provider.find_property(preference).is_none() {
-                continue;
-            }
-            settings
-                .bind_property(setting, &provider, preference)
-                .sync_create()
-                .build();
-        }
+        let provider = crate::css::following_settings(&display);
         provider.load_from_string(include_str!("tooltip.css"));
         let hide_all: Rc<dyn Fn()> = Rc::new(dismiss_every_card);
         // SAFETY: HIDE_ALL_KEY holds an `Rc<dyn Fn()>` (see its definition).
@@ -405,7 +388,7 @@ impl Engine {
         };
         if self.pressed.get()
             || !owner.is_mapped()
-            || menu_open(&owner)
+            || popover_open(&native, &owner)
             || !(display_flag(SHOW_WHEN_INACTIVE_KEY) || active(&native))
         {
             return false;
@@ -688,17 +671,38 @@ fn active(native: &gtk::Widget) -> bool {
         .is_none_or(|window| window.is_active())
 }
 
-/// A control whose own menu or popover is open shows no card over it.
-fn menu_open(owner: &gtk::Widget) -> bool {
-    if let Some(button) = owner.downcast_ref::<gtk::MenuButton>() {
-        return button.is_active();
-    }
+/// Whether a card for `owner` would cover an open popover.
+///
+/// A popover parented to `owner`, menu or panel, opens beside it where the
+/// card would. Elsewhere only menus count: popovers that close on a click
+/// outside them. Another control's panel and the card itself stay open and
+/// leave cards shown, though a menu inside a panel counts. Each popover
+/// is a native of its own, so the walk starts at the window that holds
+/// `native`: an owner in a panel sees a menu of the window and the other way
+/// round. A popover off screen shows none of its children.
+fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
     let mut child = owner.first_child();
     while let Some(widget) = child {
-        if widget.is::<gtk::Popover>() && widget.is_visible() {
+        if widget.is::<gtk::Popover>() && widget.is_mapped() {
             return true;
         }
         child = widget.next_sibling();
+    }
+    let Some(root) = native.root() else {
+        return false;
+    };
+    let mut pending: Vec<gtk::Widget> = root.first_child().into_iter().collect();
+    while let Some(widget) = pending.pop() {
+        pending.extend(widget.next_sibling());
+        if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
+            if !popover.is_mapped() {
+                continue;
+            }
+            if popover.is_autohide() {
+                return true;
+            }
+        }
+        pending.extend(widget.first_child());
     }
     false
 }
@@ -791,6 +795,114 @@ mod tests {
             (windows.get(), cards.get(), owners.get()),
             (CYCLES, CYCLES, CYCLES)
         );
+    }
+
+    /// No card over a context menu, whether it is a second popover on a menu
+    /// button (a tray icon) or parented to another widget (a shared menu); a
+    /// panel that stays open leaves cards shown.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn open_context_menu_hides_card() {
+        gtk::init().expect("a display");
+        install();
+        set_show_when_inactive(true);
+        let tray = gtk::MenuButton::new();
+        tray.set_tooltip_text(Some("Network"));
+        let applet = gtk::Button::with_label("Volume");
+        applet.set_tooltip_text(Some("Volume: 50 %"));
+        let host = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.append(&tray);
+        row.append(&applet);
+        row.append(&host);
+        let window = gtk::Window::builder().child(&row).build();
+        window.present();
+        pump();
+        let engine = engine(window.upcast_ref()).expect("attached at realize");
+
+        for (owner, parent) in [
+            (
+                tray.upcast_ref::<gtk::Widget>(),
+                tray.upcast_ref::<gtk::Widget>(),
+            ),
+            (applet.upcast_ref(), host.upcast_ref()),
+        ] {
+            let menu = gtk::PopoverMenu::from_model(Some(&gtk::gio::Menu::new()));
+            menu.set_parent(parent);
+            menu.popup();
+            pump();
+            engine.owner.replace(Some(owner.downgrade()));
+            engine.show(true);
+            pump();
+            assert!(!engine.shown.get(), "no card over the menu of {owner:?}");
+            menu.popdown();
+            menu.unparent();
+            pump();
+        }
+
+        let mixer = gtk::Button::with_label("Mixer");
+        mixer.set_tooltip_text(Some("Mixer"));
+        let panel = gtk::Popover::builder()
+            .autohide(false)
+            .child(&mixer)
+            .build();
+        panel.set_parent(&host);
+        panel.popup();
+        pump();
+        engine
+            .owner
+            .replace(Some(applet.upcast_ref::<gtk::Widget>().downgrade()));
+        engine.show(true);
+        pump();
+        assert!(
+            engine.shown.get(),
+            "another control's panel leaves cards shown"
+        );
+        engine.popdown();
+        pump();
+        // A panel of the owner itself opens where its card would.
+        let own = gtk::Popover::builder().autohide(false).build();
+        own.set_parent(&applet);
+        own.popup();
+        pump();
+        engine.show(true);
+        pump();
+        assert!(!engine.shown.get(), "no card over the owner's own panel");
+        own.popdown();
+        own.unparent();
+        pump();
+
+        // The panel is a native of its own: a menu inside it covers the
+        // window's cards, and a menu of the window covers the panel's.
+        let panel_engine = super::engine(panel.upcast_ref()).expect("attached at realize");
+        for (engine, owner, parent) in [
+            (
+                &engine,
+                applet.upcast_ref::<gtk::Widget>(),
+                mixer.upcast_ref::<gtk::Widget>(),
+            ),
+            (&panel_engine, mixer.upcast_ref(), host.upcast_ref()),
+        ] {
+            let menu = gtk::PopoverMenu::from_model(Some(&gtk::gio::Menu::new()));
+            menu.set_parent(parent);
+            menu.popup();
+            pump();
+            engine.owner.replace(Some(owner.downgrade()));
+            engine.show(true);
+            pump();
+            assert!(
+                !engine.shown.get(),
+                "no card for {owner:?} over the menu of {parent:?}"
+            );
+            menu.popdown();
+            menu.unparent();
+            pump();
+        }
+        panel.popdown();
+        panel.unparent();
+        set_show_when_inactive(false);
+        window.destroy();
+        pump();
     }
 
     #[test]

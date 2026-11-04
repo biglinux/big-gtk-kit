@@ -5,6 +5,29 @@
 
 use gtk::prelude::*;
 
+/// A provider whose `@media` queries follow the user's colour scheme,
+/// contrast and motion settings on `display`, as the theme's do: an
+/// application's provider answers them from its own properties.
+pub(crate) fn following_settings(display: &gtk::gdk::Display) -> gtk::CssProvider {
+    let provider = gtk::CssProvider::new();
+    let settings = gtk::Settings::for_display(display);
+    for (setting, preference) in [
+        ("gtk-interface-color-scheme", "prefers-color-scheme"),
+        ("gtk-interface-contrast", "prefers-contrast"),
+        ("gtk-interface-reduced-motion", "prefers-reduced-motion"),
+    ] {
+        // GTK 4.20 added them; an older one keeps the defaults.
+        if provider.find_property(preference).is_none() {
+            continue;
+        }
+        settings
+            .bind_property(setting, &provider, preference)
+            .sync_create()
+            .build();
+    }
+    provider
+}
+
 /// Register `provider` on `owner`'s display until `owner` is destroyed.
 ///
 /// This scopes the registration's lifetime, not its selectors. The display
@@ -30,6 +53,22 @@ mod tests {
 
     use super::*;
     use crate::testing::watch;
+
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn media_follow_the_settings() {
+        gtk::init().expect("a display");
+        let display = gtk::gdk::Display::default().expect("a display");
+        let provider = following_settings(&display);
+        let settings = gtk::Settings::for_display(&display);
+        for contrast in [
+            gtk::InterfaceContrast::More,
+            gtk::InterfaceContrast::NoPreference,
+        ] {
+            settings.set_gtk_interface_contrast(contrast);
+            assert_eq!(provider.prefers_contrast(), contrast);
+        }
+    }
 
     #[gtk::test]
     #[ignore = "needs a display"]

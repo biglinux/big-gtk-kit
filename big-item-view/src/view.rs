@@ -128,6 +128,31 @@ impl ItemView {
         crate::input::install_drop(self, types, actions);
     }
 
+    /// Read the dragged value while the drag hovers, so that
+    /// [`ItemPresenter::drop_action`](crate::ItemPresenter::drop_action) can
+    /// answer for it. Each hover then transfers a drag from another program,
+    /// and a sandboxed one exports its files through the portal even when
+    /// nothing is dropped: turn it on for small types such as a file list,
+    /// and only for a presenter that answers. Off by default; off, the pointer
+    /// shows a move until the drop.
+    pub fn set_drop_preload(&self, preload: bool) {
+        self.imp().drop_preload.set(preload);
+        if !preload {
+            // GTK's clearing of a value read on hover reaches only a preload.
+            self.imp().drop_value.replace(None);
+        }
+        if let Some(target) = self.imp().drop_controller.get() {
+            target.set_preload(preload);
+        }
+    }
+
+    /// Ask [`ItemPresenter::drop_action`](crate::ItemPresenter::drop_action)
+    /// again for the drag over the view, when its answer changed while the
+    /// pointer rests.
+    pub fn update_drop_action(&self) {
+        crate::input::update_drop_action(self);
+    }
+
     /// Bring the item at `position` on screen, and focus or select it as `flags` say.
     pub fn scroll_to(&self, position: u32, flags: gtk::ListScrollFlags) {
         let imp = self.imp();

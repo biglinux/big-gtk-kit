@@ -16,7 +16,7 @@ use gtk::{gdk, glib, graphene};
 
 use crate::layout::{Rect, Step};
 use crate::view::{ItemView, Pending};
-use crate::{Flow, TickMode};
+use crate::{Flow, ItemPresenter, TickMode};
 
 /// How close to an edge a rubber band has to be for the view to scroll under it.
 const AUTOSCROLL_EDGE: f64 = 24.0;
@@ -859,38 +859,84 @@ fn install_focus(view: &ItemView) {
 /// A spring-load timer: its source, the item it waits on, where the pointer was.
 type Dwell = (glib::SourceId, u32, (f64, f64));
 
-/// The one action enter and motion answer with: GTK refuses a set. Always the
-/// move, whatever the drop stands at: the compositor applies Ctrl and Shift
-/// over the preference (GDK drag events carry no modifier state), so an answer
-/// that echoed its pick would stick on a copy. Only the drop reads the pick,
-/// through `drop.actions()`.
-const PREFERRED_ACTION: gdk::DragAction = gdk::DragAction::MOVE;
+/// The one action enter and motion answer with (GTK refuses a set): the
+/// presenter's [`ItemPresenter::drop_action`] once the dragged value has
+/// loaded, a move until then, nothing where the view takes no drop. The
+/// compositor applies Ctrl and Shift over it (GDK drag events carry no
+/// modifier state), so the answer never echoes its pick; only the drop reads
+/// the pick, through `drop.actions()`.
+fn answer(
+    presenter: &dyn ItemPresenter,
+    under: Option<u32>,
+    value: Option<&glib::Value>,
+) -> gdk::DragAction {
+    if under.is_none() && !presenter.accepts_drop(None) {
+        return gdk::DragAction::empty();
+    }
+    value.map_or(gdk::DragAction::MOVE, |value| {
+        presenter.drop_action(under, value)
+    })
+}
 
 /// The action the drop in progress stands at, `None` outside one.
 fn selected_action(target: &gtk::DropTarget) -> Option<gdk::DragAction> {
     target.current_drop().map(|drop| drop.actions())
 }
 
-/// Whether the view takes a drop at `(x, y)`.
-fn takes_drop_at(view: &ItemView, x: f64, y: f64) -> bool {
-    let presenter = view.imp().presenter.borrow().clone();
-    let Some(presenter) = presenter else {
-        return false;
+/// The item under `(x, y)` that takes a drop, if any.
+fn drop_item_at(view: &ItemView, presenter: &dyn ItemPresenter, x: f64, y: f64) -> Option<u32> {
+    view.position_at(x, y)
+        .filter(|p| presenter.accepts_drop(Some(*p)))
+}
+
+/// Ask the presenter again where the drag stands and tell the source, for an
+/// answer that changed with no motion to carry it.
+pub(crate) fn update_drop_action(view: &ItemView) {
+    let imp = view.imp();
+    let presenter = imp.presenter.borrow().clone();
+    let (Some(presenter), Some(target), Some((x, y))) =
+        (presenter, imp.drop_controller.get(), imp.drop_at.get())
+    else {
+        return;
     };
-    match view.position_at(x, y) {
-        Some(p) if presenter.accepts_drop(Some(p)) => true,
-        _ => presenter.accepts_drop(None),
-    }
+    let Some(drop) = target.current_drop() else {
+        return;
+    };
+    let under = drop_item_at(view, presenter.as_ref(), x, y);
+    let action = answer(presenter.as_ref(), under, imp.drop_value.borrow().as_ref());
+    // An empty answer refuses the drop, as motion does.
+    let actions = if action.is_empty() {
+        gdk::DragAction::empty()
+    } else {
+        target.actions()
+    };
+    drop.status(actions, action);
 }
 
 /// Accept drops on the view; the presenter decides which items take them.
 pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::DragAction) {
-    let imp = view.imp();
-    if imp.drop_installed.replace(true) {
+    if view.imp().drop_controller.get().is_some() {
         return;
     }
     let target = gtk::DropTarget::new(glib::Type::INVALID, actions);
+    view.imp()
+        .drop_controller
+        .set(target.clone())
+        .expect("checked above");
     target.set_types(types);
+    target.set_preload(view.imp().drop_preload.get());
+    let weak = view.downgrade();
+    // Read on hover, the value is set as the drag enters and cleared as it
+    // leaves. Without preload it loads only on release, when the pointer
+    // shows no action any more.
+    target.connect_value_notify(move |target| {
+        if target.is_preload()
+            && let Some(view) = weak.upgrade()
+        {
+            view.imp().drop_value.replace(target.value());
+            update_drop_action(&view);
+        }
+    });
     let dwell: Rc<RefCell<Option<Dwell>>> = Rc::new(RefCell::new(None));
     let weak = view.downgrade();
     let spring = Rc::clone(&dwell);
@@ -902,9 +948,8 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
         let Some(presenter) = presenter else {
             return gdk::DragAction::empty();
         };
-        let under = view
-            .position_at(x, y)
-            .filter(|p| presenter.accepts_drop(Some(*p)));
+        view.imp().drop_at.set(Some((x, y)));
+        let under = drop_item_at(&view, presenter.as_ref(), x, y);
         if view.imp().drop_target.replace(under) != under {
             view.queue_draw();
         }
@@ -937,16 +982,28 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             });
             spring.replace(Some((source, position, (x, y))));
         }
-        if under.is_some() || presenter.accepts_drop(None) {
-            PREFERRED_ACTION
-        } else {
-            gdk::DragAction::empty()
-        }
+        answer(
+            presenter.as_ref(),
+            under,
+            view.imp().drop_value.borrow().as_ref(),
+        )
     });
     let weak = view.downgrade();
-    target.connect_enter(move |_, x, y| match weak.upgrade() {
-        Some(view) if takes_drop_at(&view, x, y) => PREFERRED_ACTION,
-        _ => gdk::DragAction::empty(),
+    target.connect_enter(move |_, x, y| {
+        let Some(view) = weak.upgrade() else {
+            return gdk::DragAction::empty();
+        };
+        let presenter = view.imp().presenter.borrow().clone();
+        let Some(presenter) = presenter else {
+            return gdk::DragAction::empty();
+        };
+        view.imp().drop_at.set(Some((x, y)));
+        let under = drop_item_at(&view, presenter.as_ref(), x, y);
+        answer(
+            presenter.as_ref(),
+            under,
+            view.imp().drop_value.borrow().as_ref(),
+        )
     });
     let weak = view.downgrade();
     let spring = Rc::clone(&dwell);
@@ -956,6 +1013,7 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
         }
         if let Some(view) = weak.upgrade() {
             view.imp().drop_target.set(None);
+            view.imp().drop_at.set(None);
             view.queue_draw();
         }
     });
@@ -969,14 +1027,24 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             return false;
         };
         view.imp().drop_target.set(None);
+        view.imp().drop_at.set(None);
         view.queue_draw();
         let presenter = view.imp().presenter.borrow().clone();
         let Some(presenter) = presenter else {
             return false;
         };
-        let under = view
-            .position_at(x, y)
-            .filter(|p| presenter.accepts_drop(Some(*p)));
+        let under = drop_item_at(&view, presenter.as_ref(), x, y);
+        // As motion does: a release can reach the view before the source
+        // learns that motion refused it.
+        let refused = answer(
+            presenter.as_ref(),
+            under,
+            view.imp().drop_value.borrow().as_ref(),
+        )
+        .is_empty();
+        if refused {
+            return false;
+        }
         presenter.receive_drop(
             under,
             value,

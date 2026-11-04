@@ -55,7 +55,15 @@ This turns on what needs no change at the call sites:
 - releasing the parent surface of every Wayland popup: GDK never drops the
   reference a popup takes on it, so every window that showed a popover, menu or
   tooltip kept its surface after closing, 25 of 25 measured (GTK 4.22.4 and
-  4.22.5, still so on `main`; limited to GTK before 4.22.6).
+  4.22.5, still so on `main`; limited to GTK before 4.22.6);
+- under the Cairo renderer (`GSK_RENDERER=cairo`), libadwaita's window shadows
+  restated so their fade to backdrop changes colours only: GTK keeps every
+  blurred shadow corner it draws, keyed by blur and size, and each frame of
+  libadwaita's fade has new ones, 2.2 MB a minute for a window losing the
+  focus 70 times a minute without this; every state draws the same pixels
+  (GTK 4.24.1, still so on `main`; libadwaita 1.10, left off under
+  `GTK_THEME` or granite, where its stylesheet is not in use, and once that
+  stylesheet changes these rules).
 
 ## Workarounds
 
@@ -73,6 +81,7 @@ cannot see.
 | `css::add_provider_for_widget_lifetime` | `style_context_add_provider_for_display` per widget | the display keeps the provider and its rules |
 | `dialog::Dialog` | `adw::Dialog::new`, `builder` | the same three breakpoints per opening; a `Dialog` shows one already made, as `Alert` does; one kept and presented again stays an `adw::Dialog` |
 | `dialog::present_kept` | building `AdwShortcutsDialog` per opening | its sections and models outlive it (libadwaita 1.9) |
+| `directory::unwatched` | `gtk::DirectoryList::new`, `builder` | GTK 4.22 to 4.24 (still so on `main`) frees a watched list's queued change while its file lookup runs, and the answer reads freed memory: a crash when lists are rebuilt while files arrive; the list does not follow its folder, so make it again when the folder changes |
 | `menu::append_shared_section`, `append_refilled_section` (items vary per build) | `gio::Menu::append_section` | GTK 4.22's menu tracker keeps every section it shows |
 | `password::password_row` | `PasswordEntryRow::new`, `build()` | libadwaita 1.9 keeps the buffer, and the password |
 | `popover::auto_unparent_on_close` | a popover left on `set_parent` | GTK pins it, and its tree, to the widget forever |
