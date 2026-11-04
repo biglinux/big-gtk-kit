@@ -78,6 +78,8 @@ pub struct ItemView {
     range_idle: RefCell<Option<glib::SourceId>>,
     pub(super) scratch: RefCell<ItemContent>,
     pub(crate) drop_controller: OnceCell<gtk::DropTarget>,
+    /// Whether the dragged value is read while the drag hovers.
+    pub(crate) drop_preload: Cell<bool>,
     /// The dragged value once loaded: reading the target's copies it.
     pub(crate) drop_value: RefCell<Option<glib::Value>>,
     /// Where the drag over the view last stood.
@@ -151,6 +153,7 @@ impl Default for ItemView {
             range_idle: RefCell::new(None),
             scratch: RefCell::new(ItemContent::default()),
             drop_controller: OnceCell::new(),
+            drop_preload: Cell::new(false),
             drop_value: RefCell::new(None),
             drop_at: Cell::new(None),
             line_width: Cell::new(0.0),

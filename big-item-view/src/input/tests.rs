@@ -291,3 +291,23 @@ fn hover_answers_presenter_action() {
         gdk::DragAction::empty()
     );
 }
+
+/// Without preload the dragged value waits for the drop, whichever of the two
+/// calls comes first.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn preload_is_asked_for() {
+    let (view, _selection, window) = shown_view();
+    view.set_drop_types(&[String::static_type()], gdk::DragAction::MOVE);
+    let target: gtk::DropTarget = controller(&view);
+    assert!(!target.is_preload());
+    view.set_drop_preload(true);
+    assert!(target.is_preload());
+    window.destroy();
+
+    let (view, _selection, window) = shown_view();
+    view.set_drop_preload(true);
+    view.set_drop_types(&[String::static_type()], gdk::DragAction::MOVE);
+    assert!(controller::<gtk::DropTarget>(&view).is_preload());
+    window.destroy();
+}

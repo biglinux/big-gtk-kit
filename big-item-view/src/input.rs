@@ -920,12 +920,15 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
         .set(target.clone())
         .expect("checked above");
     target.set_types(types);
-    // Read on hover, for the presenter's answer before the drop; GTK clears
-    // it when the drag leaves.
-    target.set_preload(true);
+    target.set_preload(view.imp().drop_preload.get());
     let weak = view.downgrade();
+    // Read on hover, the value is set as the drag enters and cleared as it
+    // leaves. Without preload it loads only on release, when the pointer
+    // shows no action any more.
     target.connect_value_notify(move |target| {
-        if let Some(view) = weak.upgrade() {
+        if target.is_preload()
+            && let Some(view) = weak.upgrade()
+        {
             view.imp().drop_value.replace(target.value());
             update_drop_action(&view);
         }

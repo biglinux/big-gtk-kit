@@ -99,9 +99,14 @@ pub trait ItemPresenter: 'static {
 
     /// The action a drop of `value` on `target` (the view itself when `None`)
     /// makes when no key is held, which the pointer shows while the drag
-    /// hovers; the compositor applies Ctrl and Shift over it. One action: GTK
-    /// refuses a set. Asked on every motion, so it must not block; an answer
-    /// found later reaches the pointer through [`ItemView::update_drop_action`].
+    /// hovers; the compositor applies Ctrl and Shift over it. An empty answer
+    /// refuses the drop.
+    ///
+    /// One action, among those given to [`ItemView::set_drop_types`]: GDK
+    /// refuses a set or any other. Asked only with
+    /// [`ItemView::set_drop_preload`], once the value has loaded, and then on
+    /// every motion, so it must not block; an answer found later reaches the
+    /// pointer through [`ItemView::update_drop_action`].
     fn drop_action(&self, _target: Option<u32>, _value: &glib::Value) -> gdk::DragAction {
         gdk::DragAction::MOVE
     }
