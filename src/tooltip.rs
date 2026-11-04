@@ -388,7 +388,7 @@ impl Engine {
         };
         if self.pressed.get()
             || !owner.is_mapped()
-            || popover_open(&native)
+            || popover_open(&native, &owner)
             || !(display_flag(SHOW_WHEN_INACTIVE_KEY) || active(&native))
         {
             return false;
@@ -671,13 +671,23 @@ fn active(native: &gtk::Widget) -> bool {
         .is_none_or(|window| window.is_active())
 }
 
-/// Whether the window that holds `native` shows a menu: a popover that closes
-/// on a click outside it, which a card would cover. Each popover is a native of
-/// its own, so the walk starts at the window: an owner in a panel sees a menu
-/// of the window and the other way round. A panel that stays open, and the
-/// card itself, close on no click and leave cards shown, though a menu inside
-/// one counts. A hidden popover shows none of its children.
-fn popover_open(native: &gtk::Widget) -> bool {
+/// Whether a card for `owner` would cover an open popover.
+///
+/// A popover parented to `owner`, menu or panel, opens beside it where the
+/// card would. Elsewhere only menus count: popovers that close on a click
+/// outside them. Another control's panel and the card itself stay open and
+/// leave cards shown, though a menu inside a panel counts. Each popover
+/// is a native of its own, so the walk starts at the window that holds
+/// `native`: an owner in a panel sees a menu of the window and the other way
+/// round. A popover off screen shows none of its children.
+fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
+    let mut child = owner.first_child();
+    while let Some(widget) = child {
+        if widget.is::<gtk::Popover>() && widget.is_mapped() {
+            return true;
+        }
+        child = widget.next_sibling();
+    }
     let Some(root) = native.root() else {
         return false;
     };
@@ -685,7 +695,7 @@ fn popover_open(native: &gtk::Widget) -> bool {
     while let Some(widget) = pending.pop() {
         pending.extend(widget.next_sibling());
         if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
-            if !popover.is_visible() {
+            if !popover.is_mapped() {
                 continue;
             }
             if popover.is_autohide() {
@@ -846,9 +856,20 @@ mod tests {
         pump();
         assert!(
             engine.shown.get(),
-            "a panel that stays open leaves cards shown"
+            "another control's panel leaves cards shown"
         );
         engine.popdown();
+        pump();
+        // A panel of the owner itself opens where its card would.
+        let own = gtk::Popover::builder().autohide(false).build();
+        own.set_parent(&applet);
+        own.popup();
+        pump();
+        engine.show(true);
+        pump();
+        assert!(!engine.shown.get(), "no card over the owner's own panel");
+        own.popdown();
+        own.unparent();
         pump();
 
         // The panel is a native of its own: a menu inside it covers the
