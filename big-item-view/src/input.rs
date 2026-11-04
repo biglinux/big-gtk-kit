@@ -904,9 +904,13 @@ pub(crate) fn update_drop_action(view: &ItemView) {
     };
     let under = drop_item_at(view, presenter.as_ref(), x, y);
     let action = answer(presenter.as_ref(), under, imp.drop_value.borrow().as_ref());
-    if !action.is_empty() {
-        drop.status(target.actions(), action);
-    }
+    // An empty answer refuses the drop, as motion does.
+    let actions = if action.is_empty() {
+        gdk::DragAction::empty()
+    } else {
+        target.actions()
+    };
+    drop.status(actions, action);
 }
 
 /// Accept drops on the view; the presenter decides which items take them.
@@ -1030,6 +1034,17 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             return false;
         };
         let under = drop_item_at(&view, presenter.as_ref(), x, y);
+        // As motion does: a release can reach the view before the source
+        // learns that motion refused it.
+        let refused = answer(
+            presenter.as_ref(),
+            under,
+            view.imp().drop_value.borrow().as_ref(),
+        )
+        .is_empty();
+        if refused {
+            return false;
+        }
         presenter.receive_drop(
             under,
             value,
