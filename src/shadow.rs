@@ -36,9 +36,9 @@ const ADWAITA_RULES: [&str; 9] = [
 /// 1.10 fades a window's shadow to a wider, softer one as the window loses the
 /// focus, and every frame of that fade has a new blur and spread, so each
 /// focus change adds about a dozen masks. `shadow.css` reaches the same
-/// shadows by fading colours only. It is loaded once the first window maps
-/// with a Cairo renderer, and only while libadwaita's stylesheet still has the
-/// rules it restates.
+/// shadows by fading colours only, high contrast included. It is loaded once
+/// the first window maps with a Cairo renderer, and only while libadwaita's
+/// stylesheet is the one in use and still has the rules it restates.
 pub(crate) fn install() {
     if INSTALLED.replace(true) {
         return;
@@ -52,18 +52,30 @@ pub(crate) fn install() {
             return;
         }
         CHECKED.set(true);
-        if !adwaita_has_restated_rules() {
+        let display = WidgetExt::display(&window);
+        if !adwaita_sheet_in_use(&display) || !adwaita_has_restated_rules() {
             return;
         }
-        let provider = gtk::CssProvider::new();
+        // Its high-contrast rules answer as libadwaita's do, which writes
+        // the contrast it follows into the settings.
+        let provider = crate::css::following_settings(&display);
         provider.load_from_string(include_str!("shadow.css"));
         // Above libadwaita's sheet (THEME), below the program's own CSS.
         gtk::style_context_add_provider_for_display(
-            &WidgetExt::display(&window),
+            &display,
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_THEME + 1,
         );
     });
+}
+
+/// Whether libadwaita draws `display` with its own stylesheet: it names the
+/// theme `Adwaita-empty` when it does, and leaves `GTK_THEME` or granite's
+/// theme alone otherwise (`adw-style-manager.c`, libadwaita 1.10).
+fn adwaita_sheet_in_use(display: &gtk::gdk::Display) -> bool {
+    gtk::Settings::for_display(display)
+        .gtk_theme_name()
+        .is_some_and(|name| name == "Adwaita-empty")
 }
 
 fn adwaita_has_restated_rules() -> bool {
@@ -87,6 +99,14 @@ mod tests {
     fn adwaita_still_has_restated_rules() {
         init();
         assert!(adwaita_has_restated_rules());
+    }
+
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn adwaita_sheet_is_found_in_use() {
+        init();
+        let display = gtk::gdk::Display::default().expect("a display");
+        assert!(adwaita_sheet_in_use(&display));
     }
 
     #[gtk::test]

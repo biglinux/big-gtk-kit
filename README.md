@@ -61,7 +61,8 @@ This turns on what needs no change at the call sites:
   blurred shadow corner it draws, keyed by blur and size, and each frame of
   libadwaita's fade has new ones, 2.2 MB a minute for a window losing the
   focus 70 times a minute without this; every state draws the same pixels
-  (GTK 4.24.1, still so on `main`; libadwaita 1.10, left off once its
+  (GTK 4.24.1, still so on `main`; libadwaita 1.10, left off under
+  `GTK_THEME` or granite, where its stylesheet is not in use, and once that
   stylesheet changes these rules).
 
 ## Workarounds

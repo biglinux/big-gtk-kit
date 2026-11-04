@@ -71,24 +71,7 @@ pub fn install() {
         return;
     }
     if let Some(display) = gdk::Display::default() {
-        let provider = gtk::CssProvider::new();
-        // An application provider answers `@media` from its own properties,
-        // not from the user's settings as the theme does.
-        let settings = gtk::Settings::for_display(&display);
-        for (setting, preference) in [
-            ("gtk-interface-color-scheme", "prefers-color-scheme"),
-            ("gtk-interface-contrast", "prefers-contrast"),
-            ("gtk-interface-reduced-motion", "prefers-reduced-motion"),
-        ] {
-            // GTK 4.20 added them; an older one keeps the light card.
-            if provider.find_property(preference).is_none() {
-                continue;
-            }
-            settings
-                .bind_property(setting, &provider, preference)
-                .sync_create()
-                .build();
-        }
+        let provider = crate::css::following_settings(&display);
         provider.load_from_string(include_str!("tooltip.css"));
         let hide_all: Rc<dyn Fn()> = Rc::new(dismiss_every_card);
         // SAFETY: HIDE_ALL_KEY holds an `Rc<dyn Fn()>` (see its definition).
