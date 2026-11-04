@@ -20,7 +20,8 @@ disallowed-methods = [
     { path = "libadwaita::AlertDialog::builder", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::alert::Alert::builder`" },
     { path = "libadwaita::Dialog::new", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::new`, which shows one already made" },
     { path = "libadwaita::Dialog::builder", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::builder`" },
-    { path = "gtk4::DirectoryList::new", reason = "a watched list crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`" },
+    { path = "gtk4::DirectoryList::new", reason = "a watched list crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`, and make the list again when the folder changes" },
+    { path = "gtk4::DirectoryList::builder", reason = "a list it builds is watched, and crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`, and make the list again when the folder changes" },
     { path = "gio::Menu::append_section", reason = "GTK 4.22's menu tracker keeps every section it shows; use `big_gtk_kit::menu::append_shared_section`, or `append_refilled_section` for items that vary per build" },
 ]
 disallowed-types = [
