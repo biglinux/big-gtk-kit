@@ -27,8 +27,9 @@ use gtk::glib::translate::IntoGlib;
 use gtk::prelude::*;
 
 /// Turn on what every program gets without changing a call site: the
-/// tooltip card, the closing-dialog focus fix, the popup-parent release and
-/// the Cairo window shadows.
+/// tooltip card, the closing-dialog focus fix, the popup-parent release,
+/// the Cairo window shadows and switches that turn while their window is
+/// not drawn.
 ///
 /// Call once, after GTK and libadwaita are initialised (an application's
 /// `startup`). Idempotent.
@@ -37,6 +38,7 @@ pub fn install() {
     dialog::install();
     surface::install();
     shadow::install();
+    switch::install();
 }
 
 /// Run `callback` with the object of every `signal` emission on `T` and its
