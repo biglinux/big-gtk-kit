@@ -5,12 +5,13 @@ check them. A piece enters only when it is GTK-generic, used by more than one
 program or backed by a measurement, and it depends on nothing but GTK and
 libadwaita: no code of any application.
 
-When GTK or libadwaita gets something wrong, the fix lives here, as a different
-way of doing the same thing, never as a patch to the library. Each workaround
-checks for the faulty state first, so a fixed library leaves it idle.
+When GTK or libadwaita gets something wrong, the kit works around it with a
+different way of doing the same thing; its code never relies on a patched
+library. Each workaround checks for the faulty state first, so a fixed library
+leaves it idle. Fixes to send upstream are kept apart, in `upstream/`.
 
-Built for the GTK 4.22 and libadwaita 1.9 BigLinux ships; older libraries are
-not supported.
+Needs GTK 4.22 and libadwaita 1.9 or newer; BigLinux ships GTK 4.24 and
+libadwaita 1.10. Older libraries are not supported.
 
 ## Use
 
@@ -147,3 +148,9 @@ private KWin session.
 Leak detection for GTK4 programs: a static checker for Rust sources, plus a
 per-type sweep over open/close cycles with a GObject census and a reference
 tracer that work on any GLib process. See `tools/README.md`.
+
+## upstream/
+
+Fixes to the libraries themselves, held until they are sent upstream: a note
+for each fix, with a patch where there is one, and one test package per
+library.
