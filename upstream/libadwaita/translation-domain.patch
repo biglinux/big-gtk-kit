@@ -1,0 +1,172 @@
+From ae3ac11b3afa96e71a5f512da65920e8984780b8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Gon=C3=A7alves?= <bigbruno@gmail.com>
+Date: Wed, 4 Nov 2026 22:10:16 -0300
+Subject: [PATCH] Use gi18n-lib.h wherever strings are translated
+
+With gi18n.h, _() and C_() look strings up in the default text domain,
+which belongs to the application, so these strings were only translated
+when the application's own catalog happened to contain the same string:
+the accessible labels of the sheet close button, the avatar, the split
+button menu and the indicator badges, the shortcut label side markers,
+"No Shortcut" in shortcut rows, the toast announcements and the
+inspector page.
+
+Drop the include where nothing is translated.
+---
+ src/adw-avatar.c            | 2 +-
+ src/adw-indicator-bin.c     | 2 +-
+ src/adw-inspector-page.c    | 2 +-
+ src/adw-sheet-controls.c    | 2 +-
+ src/adw-shortcut-label.c    | 2 +-
+ src/adw-shortcut-row.c      | 2 +-
+ src/adw-shortcuts-section.c | 2 --
+ src/adw-spinner-paintable.c | 1 -
+ src/adw-spinner.c           | 1 -
+ src/adw-split-button.c      | 2 +-
+ src/adw-toast-overlay.c     | 2 +-
+ 11 files changed, 8 insertions(+), 12 deletions(-)
+
+diff --git a/src/adw-avatar.c b/src/adw-avatar.c
+index 831590c4..29131542 100644
+--- a/src/adw-avatar.c
++++ b/src/adw-avatar.c
+@@ -12,7 +12,7 @@
+ 
+ #include "config.h"
+ #include <math.h>
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ 
+ #include "adw-avatar.h"
+ #include "adw-gizmo-private.h"
+diff --git a/src/adw-indicator-bin.c b/src/adw-indicator-bin.c
+index 3200d6a4..54c535af 100644
+--- a/src/adw-indicator-bin.c
++++ b/src/adw-indicator-bin.c
+@@ -7,7 +7,7 @@
+  */
+ 
+ #include "config.h"
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ #include "adw-indicator-bin-private.h"
+ 
+ #include "adw-gizmo-private.h"
+diff --git a/src/adw-inspector-page.c b/src/adw-inspector-page.c
+index b74e643c..352ba5f7 100644
+--- a/src/adw-inspector-page.c
++++ b/src/adw-inspector-page.c
+@@ -7,7 +7,7 @@
+  */
+ 
+ #include "config.h"
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ 
+ #include "adw-inspector-page-private.h"
+ 
+diff --git a/src/adw-sheet-controls.c b/src/adw-sheet-controls.c
+index 6ed9c0e9..8132eb22 100644
+--- a/src/adw-sheet-controls.c
++++ b/src/adw-sheet-controls.c
+@@ -7,7 +7,7 @@
+  */
+ 
+ #include "config.h"
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ 
+ #include "adw-sheet-controls-private.h"
+ 
+diff --git a/src/adw-shortcut-label.c b/src/adw-shortcut-label.c
+index 476710fc..065d7516 100644
+--- a/src/adw-shortcut-label.c
++++ b/src/adw-shortcut-label.c
+@@ -16,7 +16,7 @@
+ #include "adw-widget-utils-private.h"
+ #include "adw-wrap-layout.h"
+ 
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ 
+ #define GETTEXT_PACKAGE_GTK "gtk40"
+ #define GTK_KEY_LABEL(str) (g_dpgettext2 (GETTEXT_PACKAGE_GTK, "keyboard label", (str)))
+diff --git a/src/adw-shortcut-row.c b/src/adw-shortcut-row.c
+index 828cd912..4a6251f2 100644
+--- a/src/adw-shortcut-row.c
++++ b/src/adw-shortcut-row.c
+@@ -18,7 +18,7 @@
+ #include "adw-widget-utils-private.h"
+ #include "adw-wrap-box.h"
+ 
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ 
+ struct _AdwShortcutRow
+ {
+diff --git a/src/adw-shortcuts-section.c b/src/adw-shortcuts-section.c
+index c80cdc2c..1f0b99e7 100644
+--- a/src/adw-shortcuts-section.c
++++ b/src/adw-shortcuts-section.c
+@@ -10,8 +10,6 @@
+ 
+ #include "adw-shortcuts-section.h"
+ 
+-#include <glib/gi18n.h>
+-
+ /**
+  * AdwShortcutsSection:
+  *
+diff --git a/src/adw-spinner-paintable.c b/src/adw-spinner-paintable.c
+index 45cb5d29..12b0499b 100644
+--- a/src/adw-spinner-paintable.c
++++ b/src/adw-spinner-paintable.c
+@@ -5,7 +5,6 @@
+  */
+ 
+ #include "config.h"
+-#include <glib/gi18n.h>
+ 
+ #include "adw-spinner-paintable.h"
+ 
+diff --git a/src/adw-spinner.c b/src/adw-spinner.c
+index 252bc9d0..8ef9acc8 100644
+--- a/src/adw-spinner.c
++++ b/src/adw-spinner.c
+@@ -5,7 +5,6 @@
+  */
+ 
+ #include "config.h"
+-#include <glib/gi18n.h>
+ 
+ #include "adw-spinner.h"
+ 
+diff --git a/src/adw-split-button.c b/src/adw-split-button.c
+index 46add72d..32ff15f5 100644
+--- a/src/adw-split-button.c
++++ b/src/adw-split-button.c
+@@ -5,7 +5,7 @@
+  */
+ 
+ #include "config.h"
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ 
+ #include "adw-split-button.h"
+ 
+diff --git a/src/adw-toast-overlay.c b/src/adw-toast-overlay.c
+index 66e3c5a2..42fdfc09 100644
+--- a/src/adw-toast-overlay.c
++++ b/src/adw-toast-overlay.c
+@@ -5,7 +5,7 @@
+  */
+ 
+ #include "config.h"
+-#include <glib/gi18n.h>
++#include <glib/gi18n-lib.h>
+ 
+ #include "adw-toast-overlay.h"
+ 
+-- 
+2.56.0
+
