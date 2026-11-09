@@ -9,11 +9,12 @@ is one; the patches apply on the GTK release BigLinux ships and on GTK main.
 |---|---|---|
 | [icon-cache-lookup](icon-cache-lookup.md) | a GTK 4 start with a large icon theme takes half the time (papient: 112 → 56 ms, 346 → 165 ms on an Intel HD 3000) | ready, test included |
 | [image-missing-recursion](image-missing-recursion.md) | a missing icon with no `image-missing` in any theme falls back to GTK's own picture instead of overflowing the stack | ready, test included |
+| [glyph-scaled-font-leak](glyph-scaled-font-leak.md) | GPU-rendered programs free the font of each frame of a scale animation (BigFiles' Connect to Server, 100 openings: 982 → 12 fonts, 17 MiB) | ready, test included |
 | [fonts-at-startup](fonts-at-startup.md) | where the font cost of a start goes; cuts for Pango and fontconfig | finding only, no patch |
 
-`package/` builds Arch's `gtk4` 4.24.1 with both patches for testing (same
-split packages and file lists as Arch's). The `.patch` links point at the
-patches above.
+`package/` builds Arch's `gtk4` 4.24.1 with the three patches for testing
+(same split packages and file lists as Arch's). The `.patch` links point at
+the patches above.
 
 ```sh
 cd package && makepkg -s

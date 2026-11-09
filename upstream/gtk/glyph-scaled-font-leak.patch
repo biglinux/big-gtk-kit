@@ -1,0 +1,124 @@
+From d1a53ca64de68968abba913e20cd0345ec821f55 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Gon=C3=A7alves?= <bigbruno@gmail.com>
+Date: Sun, 8 Nov 2026 20:01:10 -0300
+Subject: [PATCH] gpu: Don't leak the scaled font of glyphs without ink
+
+gsk_gpu_cached_glyph_lookup() returns early for a glyph without ink,
+such as a space, and does not drop the font gsk_reload_font() gave it.
+Under a scale transform glyphs are drawn with the font reloaded at that
+scale, so each frame of a scale animation leaves one more font alive
+for the rest of the process. 200 openings of a libadwaita About dialog
+kept 608 to 669 fonts and 6.7 to 7.7 MiB, 100 openings of another
+dialog 982 fonts and 17 MiB.
+
+Drop the font on that path too.
+---
+ gsk/gpu/gskgpucachedglyph.c |  5 ++-
+ testsuite/gsk/misc.c        | 61 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/gsk/gpu/gskgpucachedglyph.c b/gsk/gpu/gskgpucachedglyph.c
+index 223ff28c15..241a61609a 100644
+--- a/gsk/gpu/gskgpucachedglyph.c
++++ b/gsk/gpu/gskgpucachedglyph.c
+@@ -191,7 +191,10 @@ gsk_gpu_cached_glyph_lookup (GskGpuCache            *self,
+   pango_font_get_glyph_extents (scaled_font, glyph, &ink_rect, NULL);
+ 
+   if (ink_rect.width == 0 || ink_rect.height == 0)
+-    return NULL;
++    {
++      g_object_unref (scaled_font);
++      return NULL;
++    }
+ 
+   origin.x = floor (ink_rect.x * 1.0 / PANGO_SCALE + subpixel_x);
+   origin.y = floor (ink_rect.y * 1.0 / PANGO_SCALE + subpixel_y);
+diff --git a/testsuite/gsk/misc.c b/testsuite/gsk/misc.c
+index a1dc9c8274..ede7eb1a4f 100644
+--- a/testsuite/gsk/misc.c
++++ b/testsuite/gsk/misc.c
+@@ -3,6 +3,7 @@
+ #include "gsk/gskbordernodeprivate.h"
+ #include "gsk/gskgradientprivate.h"
+ #include "gsk/gskradialgradientnodeprivate.h"
++#include "gsk/gskprivate.h"
+ 
+ #include <gobject/gvaluecollector.h>
+ 
+@@ -323,6 +324,65 @@ test_radial_gradient_opaque (void)
+   gsk_gradient_free (gradient);
+ }
+ 
++static void
++test_gl_renderer_space_glyph (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  PangoContext *context;
++  PangoLayout *layout;
++  PangoFont *font, *scaled;
++  PangoGlyphItem *run;
++  GskRenderNode *text, *node;
++  GdkTexture *texture;
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  context = pango_font_map_create_context (pango_cairo_font_map_get_default ());
++  layout = pango_layout_new (context);
++  pango_layout_set_text (layout, "a b", -1);
++  run = pango_layout_get_line_readonly (layout, 0)->runs->data;
++  font = run->item->analysis.font;
++  text = gsk_text_node_new (font, run->glyphs, &(GdkRGBA) { 0, 0, 0, 1 }, &GRAPHENE_POINT_INIT (0, 20));
++
++  /* Under a scale transform, glyphs are drawn with the font reloaded at
++   * that scale; the space has no ink and gets no cache entry */
++  node = gsk_transform_node_new (text, gsk_transform_scale (NULL, 1.5, 1.5));
++  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 60, 40));
++  g_object_unref (texture);
++  gsk_render_node_unref (node);
++  gsk_render_node_unref (text);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++
++  scaled = gsk_reload_font (font, 1.5, CAIRO_HINT_METRICS_DEFAULT, CAIRO_HINT_STYLE_DEFAULT, CAIRO_ANTIALIAS_DEFAULT);
++  g_object_add_weak_pointer (G_OBJECT (scaled), (gpointer *) &scaled);
++  /* gsk_reload_font() keeps its last result */
++  g_object_unref (gsk_reload_font (font, 1.0, CAIRO_HINT_METRICS_DEFAULT, CAIRO_HINT_STYLE_DEFAULT, CAIRO_ANTIALIAS_DEFAULT));
++  g_object_unref (scaled);
++  g_assert_null (scaled);
++
++  g_object_unref (layout);
++  g_object_unref (context);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
+ int
+ main (int argc, char *argv[])
+ {
+@@ -337,6 +397,7 @@ main (int argc, char *argv[])
+   g_test_add_func ("/renderer/cairo", test_cairo_renderer);
+   g_test_add_func ("/renderer/gl", test_gl_renderer);
+   g_test_add_func ("/renderer/vulkan", test_vulkan_renderer);
++  g_test_add_func ("/renderer/gl/space-glyph", test_gl_renderer_space_glyph);
+   g_test_add_func ("/gradient/opaque", test_gradient_opaque);
+   g_test_add_func ("/rendernode/radial-gradient/opaque", test_radial_gradient_opaque);
+ 
+-- 
+2.56.0
+
