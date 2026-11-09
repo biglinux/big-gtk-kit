@@ -105,6 +105,14 @@ pub(crate) struct Opening {
     /// The widget this opening is presented on, held weakly; `None` for one in
     /// a window of its own.
     parent: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
+    /// This opening set the content width through [`Dialog`].
+    content_width_set: Cell<bool>,
+    /// This opening set the content height through [`Dialog`].
+    content_height_set: Cell<bool>,
+    /// An earlier opening set the content width, which libadwaita keeps.
+    content_width_kept: Cell<bool>,
+    /// An earlier opening set the content height, which libadwaita keeps.
+    content_height_kept: Cell<bool>,
 }
 
 impl Opening {
@@ -153,6 +161,12 @@ impl Opening {
         }
         self.reusable.set(false);
         self.parent.take();
+        if self.content_width_set.take() {
+            self.content_width_kept.set(true);
+        }
+        if self.content_height_set.take() {
+            self.content_height_kept.set(true);
+        }
         self.number.set(self.number.get() + 1);
     }
 }
@@ -225,6 +239,10 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
 /// something else: its [`close`](Self::close) then does nothing, and a
 /// [`WeakDialog`] stops upgrading. Everything else reached through the
 /// deref acts on whatever the dialog shows now.
+///
+/// Content sizes go through [`Self::set_content_width`],
+/// [`Self::set_content_height`] or [`Self::builder`]: [`present`](Self::present)
+/// may replace one set on the `adw::Dialog` itself.
 #[derive(Clone)]
 pub struct Dialog {
     dialog: adw::Dialog,
@@ -312,8 +330,41 @@ impl Dialog {
     /// Show this opening on the parent it was made for; nothing once the
     /// parent is gone or the dialog shows another opening.
     pub fn present(&self) {
-        if let Some(parent) = self.opening.target(self.number) {
-            self.dialog.present(parent.as_ref());
+        let Some(parent) = self.opening.target(self.number) else {
+            return;
+        };
+        self.dialog.present(parent.as_ref());
+        // libadwaita resolves a content size when it is set, `-1` included,
+        // against the child of that moment, and keeps it for later openings.
+        // A size an earlier opening set and this one did not is measured
+        // again here, with the child in its sheet and styled as it shows; one
+        // never set follows the child.
+        let opening = &self.opening;
+        if opening.content_width_kept.get() && !opening.content_width_set.get() {
+            self.dialog.set_content_width(-1);
+        }
+        if opening.content_height_kept.get() && !opening.content_height_set.get() {
+            self.dialog.set_content_height(-1);
+        }
+    }
+
+    /// As `AdwDialogExt::set_content_width`, when the dialog still shows this
+    /// opening. [`Self::present`] sizes the dialog to its child where the
+    /// opening sets no size.
+    pub fn set_content_width(&self, width: i32) {
+        if self.is_current() {
+            self.opening.content_width_set.set(true);
+            self.dialog.set_content_width(width);
+        }
+    }
+
+    /// As `AdwDialogExt::set_content_height`, when the dialog still shows this
+    /// opening. [`Self::present`] sizes the dialog to its child where the
+    /// opening sets no size.
+    pub fn set_content_height(&self, height: i32) {
+        if self.is_current() {
+            self.opening.content_height_set.set(true);
+            self.dialog.set_content_height(height);
         }
     }
 
@@ -324,8 +375,6 @@ impl Dialog {
         dialog.set_child(gtk::Widget::NONE);
         dialog.set_default_widget(gtk::Widget::NONE);
         dialog.set_title("");
-        dialog.set_content_width(-1);
-        dialog.set_content_height(-1);
         dialog.set_follows_content_size(false);
         dialog.set_can_close(true);
         dialog.set_presentation_mode(adw::DialogPresentationMode::Auto);
@@ -520,6 +569,117 @@ mod tests {
         }
         window.destroy();
         assert_eq!(finalized.get(), 25);
+    }
+
+    /// Each opening of one reused dialog is as large as its child asks, or as
+    /// the opening sets, before or after giving it its child.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn reused_dialog_sized_per_opening() {
+        init();
+        install();
+        FREE.with_borrow_mut(Vec::clear);
+        let window = adw::Window::builder()
+            .default_width(1000)
+            .default_height(900)
+            .build();
+        window.present();
+        pump();
+        let mut dialogs = Vec::<adw::Dialog>::new();
+        let openings = [
+            (None, None, (500, 400)),
+            (None, None, (500, 400)),
+            (Some((300, 250)), None, (300, 250)),
+            (None, None, (500, 400)),
+            (None, Some(300), (300, 400)),
+        ];
+        for (set, width_after_child, size) in openings {
+            // Small at its minimum, large at its natural size, as a list is.
+            let child = gtk::ScrolledWindow::builder()
+                .child(
+                    &gtk::Box::builder()
+                        .width_request(500)
+                        .height_request(400)
+                        .build(),
+                )
+                .propagate_natural_width(true)
+                .propagate_natural_height(true)
+                .build();
+            let mut builder = Dialog::builder(Some(&window)).child(&child);
+            if let Some((width, height)) = set {
+                builder = builder.content_width(width).content_height(height);
+            }
+            let dialog = builder.build();
+            if let Some(width) = width_after_child {
+                dialog.set_content_width(width);
+            }
+            dialogs.push(dialog.dialog().clone());
+            dialog.present();
+            pump();
+            assert_eq!(
+                (child.width(), child.height()),
+                size,
+                "{set:?} {width_after_child:?}"
+            );
+            dialog.close();
+            while dialog.parent().is_some() {
+                pump();
+            }
+            pump();
+        }
+        window.destroy();
+        dialogs.dedup();
+        assert_eq!(dialogs.len(), 1, "one dialog showed them all");
+    }
+
+    /// A dialog is measured in its sheet, under its window's style, the first
+    /// time and when reused after an opening that set its size.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn dialog_measured_in_its_sheet() {
+        init();
+        install();
+        FREE.with_borrow_mut(Vec::clear);
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string("window.big-gtk-kit-large label { font-size: 40px; }");
+        let display = gtk::gdk::Display::default().expect("a display");
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let window = adw::Window::builder()
+            .default_width(1000)
+            .default_height(900)
+            .css_classes(["big-gtk-kit-large"])
+            .build();
+        window.present();
+        pump();
+        for set in [None, Some((300, 250)), None] {
+            // Narrower than its natural width only when it wraps.
+            let child = gtk::Label::builder()
+                .label("Measured where it is shown")
+                .wrap(true)
+                .build();
+            let mut builder = Dialog::builder(Some(&window)).child(&child);
+            if let Some((width, height)) = set {
+                builder = builder.content_width(width).content_height(height);
+            }
+            let dialog = builder.build();
+            dialog.present();
+            pump();
+            if set.is_none() {
+                let (_, natural, _, _) = child.measure(gtk::Orientation::Horizontal, -1);
+                assert!(child.width() >= natural, "{} < {natural}", child.width());
+            }
+            dialog.close();
+            while dialog.parent().is_some() {
+                pump();
+            }
+            pump();
+        }
+        gtk::style_context_remove_provider_for_display(&display, &provider);
+        window.destroy();
     }
 
     #[gtk::test]
