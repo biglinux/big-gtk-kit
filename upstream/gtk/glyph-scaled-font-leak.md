@@ -86,11 +86,14 @@ instances counted by [gobject-census](../../tools/census/); memory from
 In these runs (big-host 0.1.0-111), without animations About costs 6 MiB of
 Pss_Anon and 9 MiB of VRAM; with them, patched, 31 to 32 MiB and 54 to 66 MiB.
 A scale animation draws every glyph, fill and stroke again at the scale of each
-frame, and the GPU cache keeps them in its atlases. Entries go stale after
-`GSK_CACHE_TIMEOUT` (15 s in GTK, 60 s in the BigLinux session) and an atlas is
-freed only when all its entries are stale. cairo keeps up to 256 scaled fonts
-and 512 glyph pages, and Pango keeps one `FcPattern` per scale. This patch does
-not change any of that.
+frame, and the GPU cache keeps them in its atlases (at 200 openings, in the
+runs of [scale-animation-cache](scale-animation-cache.md): 9 or 10 atlases of
+4 MiB holding 16 061 to 17 590 glyphs, 2 045 to 2 053 fills and 864 to 866
+strokes). Entries go stale after `GSK_CACHE_TIMEOUT` (15 s in GTK, 60 s in the
+BigLinux session) and an atlas is freed only when all its entries are stale.
+cairo keeps up to 256 scaled fonts and 512 glyph pages, and Pango keeps one
+`FcPattern` per scale. This patch does not change any of that;
+scale-animation-cache lets the frames share entries.
 
 ## Costs and risks
 
@@ -102,7 +105,3 @@ None found: one reference drop on a path that returns early.
   pairs of the table: 63/51 and 75/55 MiB at 200 openings, 75/55 after the
   60 s idle. Connect to Server has 26 MiB in both. Nothing in the patch
   touches the atlases, and the cause is not known.
-- A follow-up could draw glyphs, fills and strokes under a scale transform at
-  a quantised scale, as the renderer already does for rotations (the next power
-  of two), so that frames and later openings share entries. It changes how text
-  under a static scale looks, so it needs its own measurements and review.
