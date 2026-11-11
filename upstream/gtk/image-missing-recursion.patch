@@ -1,0 +1,107 @@
+From 169b042afab8e2ad182285e088949f528e63618e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Gon=C3=A7alves?= <bigbruno@gmail.com>
+Date: Sat, 7 Nov 2026 08:30:39 -0300
+Subject: [PATCH] icontheme: Don't recurse when image-missing is missing too
+
+When no icon matches, real_choose_icon() looks up image-missing by
+calling itself. If the themes don't have image-missing either, that
+call fails the same way and recurses until the stack overflows.
+
+GTK's own image-missing is only found as part of hicolor, for the
+directories listed in the hicolor index.theme that is found first. A
+hicolor index.theme in ~/.local/share/icons that lists only the
+directories an application installs, or a resource path that drops
+/org/gtk/libgtk/icons/, leaves no image-missing to find, and every
+lookup of a missing icon crashes.
+
+When the image-missing lookup itself fails, use GTK's own copy, as
+gtk_icon_theme_lookup_by_gicon() does for unknown icon types.
+---
+ gtk/gtkicontheme.c        | 17 +++++++++++------
+ testsuite/gtk/icontheme.c | 35 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 46 insertions(+), 6 deletions(-)
+
+diff --git a/gtk/gtkicontheme.c b/gtk/gtkicontheme.c
+index 7937e57f87..8b0462c040 100644
+--- a/gtk/gtkicontheme.c
++++ b/gtk/gtkicontheme.c
+@@ -2139,12 +2139,17 @@ G_GNUC_END_IGNORE_DEPRECATIONS
+           gdk_debug_message ("No icon found in %s (or fallbacks) for: %s", self->current_theme, s);
+           g_free (s);
+         }
+-      
+-      return real_choose_icon (self,
+-                               (const char*[2]) { "image-missing", NULL },
+-                               size,
+-                               scale,
+-                               flags);
++
++      if (strcmp (icon_names[0], "image-missing") != 0 || icon_names[1] != NULL)
++        return real_choose_icon (self,
++                                 (const char*[2]) { "image-missing", NULL },
++                                 size,
++                                 scale,
++                                 flags);
++
++      /* No theme has image-missing either, use our own */
++      icon = gtk_icon_paintable_new_for_path (IMAGE_MISSING_RESOURCE_PATH, TRUE, size, scale);
++      gtk_icon_paintable_set_icon_name (icon, "image-missing");
+     }
+ 
+  out:
+diff --git a/testsuite/gtk/icontheme.c b/testsuite/gtk/icontheme.c
+index b290cfe680..3e63750a17 100644
+--- a/testsuite/gtk/icontheme.c
++++ b/testsuite/gtk/icontheme.c
+@@ -687,6 +687,40 @@ test_inherit (void)
+                       "/icons2/scalable/one-two-symbolic-rtl.svg");
+ }
+ 
++static void
++test_missing_without_fallback (void)
++{
++  GtkIconTheme *theme;
++  GtkIconPaintable *info;
++  const char *search_path[2];
++  const char *resource_path[1] = { NULL };
++  GFile *file;
++  char *uri;
++
++  /* No theme in the chain has image-missing, and the resource path
++   * that holds GTK's own copy is gone */
++  theme = gtk_icon_theme_new ();
++  gtk_icon_theme_set_theme_name (theme, "icons");
++  search_path[0] = g_test_get_dir (G_TEST_DIST);
++  search_path[1] = NULL;
++  gtk_icon_theme_set_search_path (theme, search_path);
++  gtk_icon_theme_set_resource_path (theme, resource_path);
++
++  info = gtk_icon_theme_lookup_icon (theme, "no-such-icon", NULL, 16, 1, GTK_TEXT_DIR_NONE, 0);
++  g_assert_nonnull (info);
++G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++  g_assert_cmpstr (gtk_icon_paintable_get_icon_name (info), ==, "image-missing");
++G_GNUC_END_IGNORE_DEPRECATIONS
++  file = gtk_icon_paintable_get_file (info);
++  uri = g_file_get_uri (file);
++  g_assert_cmpstr (uri, ==, "resource:///org/gtk/libgtk/icons/16x16/status/image-missing.png");
++
++  g_free (uri);
++  g_object_unref (file);
++  g_object_unref (info);
++  g_object_unref (theme);
++}
++
+ static void
+ require_env (const char *var)
+ {
+@@ -711,6 +745,7 @@ main (int argc, char *argv[])
+   g_test_add_func ("/icontheme/size", test_size);
+   g_test_add_func ("/icontheme/list", test_list);
+   g_test_add_func ("/icontheme/inherit", test_inherit);
++  g_test_add_func ("/icontheme/missing-without-fallback", test_missing_without_fallback);
+   g_test_add_func ("/icontheme/lookup_order0", test_lookup_order0);
+   g_test_add_func ("/icontheme/lookup_order1", test_lookup_order1);
+   g_test_add_func ("/icontheme/lookup_order2", test_lookup_order2);
+-- 
+2.56.0
+

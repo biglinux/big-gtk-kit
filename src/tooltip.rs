@@ -674,8 +674,9 @@ fn active(native: &gtk::Widget) -> bool {
 /// Whether a card for `owner` would cover an open popover.
 ///
 /// A popover parented to `owner`, menu or panel, opens beside it where the
-/// card would. Elsewhere only menus count: popovers that close on a click
-/// outside them. Another control's panel and the card itself stay open and
+/// card would. Elsewhere only menus count, popovers that close on a click
+/// outside them, and not one that holds `owner`: the card explains its rows.
+/// Another control's panel and the card itself stay open and
 /// leave cards shown, though a menu inside a panel counts. Each popover
 /// is a native of its own, so the walk starts at the window that holds
 /// `native`: an owner in a panel sees a menu of the window and the other way
@@ -698,7 +699,7 @@ fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
             if !popover.is_mapped() {
                 continue;
             }
-            if popover.is_autohide() {
+            if popover.is_autohide() && !owner.is_ancestor(popover) {
                 return true;
             }
         }
@@ -900,6 +901,70 @@ mod tests {
         }
         panel.popdown();
         panel.unparent();
+        set_show_when_inactive(false);
+        window.destroy();
+        pump();
+    }
+
+    /// A row of an open menu, or of a submenu beside it, explains itself: the
+    /// menu that holds it is not one the card would cover.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn menu_row_shows_card() {
+        gtk::init().expect("a display");
+        install();
+        set_show_when_inactive(true);
+        let host = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let window = gtk::Window::builder().child(&host).build();
+        window.present();
+        pump();
+
+        let door = gtk::Button::with_label("Tab Color");
+        let off = gtk::Button::with_label("Move Right");
+        off.set_tooltip_text(Some("This is the last tab"));
+        off.set_sensitive(false);
+        let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        rows.append(&door);
+        rows.append(&off);
+        let menu = gtk::Popover::builder().child(&rows).build();
+        menu.set_parent(&host);
+        menu.popup();
+        pump();
+        let shows = |native: &gtk::Widget, owner: &gtk::Button| {
+            let engine = engine(native).expect("attached at realize");
+            engine
+                .owner
+                .replace(Some(owner.upcast_ref::<gtk::Widget>().downgrade()));
+            engine.show(true);
+            pump();
+            let shown = engine.shown.get();
+            engine.popdown();
+            pump();
+            shown
+        };
+        assert!(
+            shows(menu.upcast_ref(), &off),
+            "a card for a row of its menu"
+        );
+
+        let red = gtk::Button::with_label("Red");
+        red.set_tooltip_text(Some("Red"));
+        let submenu = gtk::Popover::builder().child(&red).build();
+        submenu.set_parent(&door);
+        submenu.popup();
+        pump();
+        assert!(
+            shows(submenu.upcast_ref(), &red),
+            "a card for a row of a submenu"
+        );
+        assert!(
+            !shows(menu.upcast_ref(), &off),
+            "no card under a submenu of another row"
+        );
+        submenu.popdown();
+        submenu.unparent();
+        menu.popdown();
+        menu.unparent();
         set_show_when_inactive(false);
         window.destroy();
         pump();

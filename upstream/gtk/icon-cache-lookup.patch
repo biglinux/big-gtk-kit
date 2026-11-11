@@ -1,0 +1,816 @@
+From d0ef0ba402dc6e2b7a3c00bb56c22859b116f475 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Gon=C3=A7alves?= <bigbruno@gmail.com>
+Date: Sun, 8 Nov 2026 21:28:41 -0300
+Subject: [PATCH] icontheme: Look up icons in icon-theme.cache instead of
+ listing them
+
+When a theme directory has an up-to-date icon-theme.cache, loading the
+theme listed every icon of every theme directory from the cache into
+per-size hash tables and interned every name. With a large theme (76
+directories, 20000 names) that costs 50 ms at the first lookup of every
+process and 3.5 MiB of heap.
+
+Keep the cache mapped and answer lookups from its hash table, as GTK 3
+did. Directories without a cache are still listed when the theme loads.
+Cached and listed directories of a size keep their order, so the first
+directory that has an icon still wins. gtk_icon_theme_get_icon_names()
+lists the cached directories when it is called.
+
+icontheme also runs on copies of the test themes that have an
+icon-theme.cache, one of which lists an icon that is not on disk.
+---
+ gtk/gtkiconcache.c                 | 109 ++++++++++-
+ gtk/gtkiconcacheprivate.h          |  18 +-
+ gtk/gtkicontheme.c                 | 282 ++++++++++++++++++++++++-----
+ testsuite/gtk/cache-icon-themes.py |  29 +++
+ testsuite/gtk/icontheme.c          |  27 +++
+ testsuite/gtk/meson.build          |  27 +++
+ 6 files changed, 434 insertions(+), 58 deletions(-)
+ create mode 100755 testsuite/gtk/cache-icon-themes.py
+
+diff --git a/gtk/gtkiconcache.c b/gtk/gtkiconcache.c
+index f787ebcbe2..67b18c7f83 100644
+--- a/gtk/gtkiconcache.c
++++ b/gtk/gtkiconcache.c
+@@ -152,9 +152,9 @@ gtk_icon_cache_new (const char *data)
+   return cache;
+ }
+ 
+-static int
+-get_directory_index (GtkIconCache *cache,
+-                     const char *directory)
++int
++gtk_icon_cache_get_directory_index (GtkIconCache *cache,
++                                    const char   *directory)
+ {
+   guint32 dir_list_offset;
+   int n_dirs;
+@@ -175,12 +175,106 @@ get_directory_index (GtkIconCache *cache,
+   return -1;
+ }
+ 
++/* The hash of gtk4-update-icon-cache, continued from @h over @name */
++static guint32
++icon_name_hash (guint32     h,
++                const char *name)
++{
++  for (const signed char *p = (const signed char *) name; *p != '\0'; p++)
++    h = (h << 5) - h + *p;
++
++  return h;
++}
++
++static guint32
++find_image_list (GtkIconCache *cache,
++                 guint32       hash,
++                 const char   *name,
++                 gsize         name_len,
++                 const char   *suffix)
++{
++  guint32 hash_offset, n_buckets, chain_offset;
++
++  hash_offset = GET_UINT32 (cache->buffer, 4);
++  n_buckets = GET_UINT32 (cache->buffer, hash_offset);
++  if (n_buckets == 0)
++    return 0;
++
++  chain_offset = GET_UINT32 (cache->buffer, hash_offset + 4 + 4 * (hash % n_buckets));
++  while (chain_offset != 0xffffffff)
++    {
++      const char *chain_name = cache->buffer + GET_UINT32 (cache->buffer, chain_offset + 4);
++
++      if (strncmp (chain_name, name, name_len) == 0 &&
++          strcmp (chain_name + name_len, suffix) == 0)
++        return GET_UINT32 (cache->buffer, chain_offset + 8);
++
++      chain_offset = GET_UINT32 (cache->buffer, chain_offset);
++    }
++
++  return 0;
++}
++
++static guint
++image_list_get_flags (GtkIconCache *cache,
++                      guint32       image_list_offset,
++                      int           directory_index)
++{
++  guint32 n_images, i;
++
++  if (image_list_offset == 0)
++    return 0;
++
++  n_images = GET_UINT32 (cache->buffer, image_list_offset);
++  for (i = 0; i < n_images; i++)
++    {
++      if (GET_UINT16 (cache->buffer, image_list_offset + 4 + 8 * i) == directory_index)
++        return GET_UINT16 (cache->buffer, image_list_offset + 4 + 8 * i + 2);
++    }
++
++  return 0;
++}
++
++void
++gtk_icon_cache_find_icon (GtkIconCache      *cache,
++                          const char        *icon_name,
++                          GtkIconCacheEntry *entry)
++{
++  guint32 hash = icon_name_hash (0, icon_name);
++  gsize len = strlen (icon_name);
++
++  entry->plain = find_image_list (cache, hash, icon_name, len, "");
++  entry->symbolic = find_image_list (cache, icon_name_hash (hash, ".symbolic"), icon_name, len, ".symbolic");
++  entry->is_symbolic_name = g_str_has_suffix (icon_name, ".symbolic");
++}
++
++/* Returns the flags gtk_icon_cache_list_icons_in_directory() lists
++ * for the icon of @entry in @directory_index, 0 if it is not there.
++ */
++guint
++gtk_icon_cache_get_icon_flags (GtkIconCache            *cache,
++                               const GtkIconCacheEntry *entry,
++                               int                      directory_index)
++{
++  guint flags, symbolic_flags;
++
++  flags = image_list_get_flags (cache, entry->plain, directory_index);
++  /* Listed under the name without ".symbolic" */
++  if (entry->is_symbolic_name && (flags & ICON_CACHE_FLAG_PNG_SUFFIX) != 0)
++    flags = 0;
++
++  symbolic_flags = image_list_get_flags (cache, entry->symbolic, directory_index);
++  if ((symbolic_flags & ICON_CACHE_FLAG_PNG_SUFFIX) != 0)
++    flags |= (symbolic_flags & ~ICON_CACHE_FLAG_PNG_SUFFIX) | ICON_CACHE_FLAG_SYMBOLIC_PNG_SUFFIX;
++
++  return flags;
++}
++
+ GHashTable *
+ gtk_icon_cache_list_icons_in_directory (GtkIconCache *cache,
+-                                        const char   *directory,
++                                        int           directory_index,
+                                         GtkStringSet *set)
+ {
+-  int directory_index;
+   guint32 hash_offset, n_buckets;
+   guint32 chain_offset;
+   guint32 image_list_offset, n_images;
+@@ -188,11 +282,6 @@ gtk_icon_cache_list_icons_in_directory (GtkIconCache *cache,
+   GHashTable *icons = NULL;
+   GString *string;
+ 
+-  directory_index = get_directory_index (cache, directory);
+-
+-  if (directory_index == -1)
+-    return NULL;
+-
+   hash_offset = GET_UINT32 (cache->buffer, 4);
+   n_buckets = GET_UINT32 (cache->buffer, hash_offset);
+ 
+diff --git a/gtk/gtkiconcacheprivate.h b/gtk/gtkiconcacheprivate.h
+index 5263cc431a..e16f63daf9 100644
+--- a/gtk/gtkiconcacheprivate.h
++++ b/gtk/gtkiconcacheprivate.h
+@@ -36,11 +36,27 @@ typedef enum
+ 
+ typedef struct _GtkIconCache GtkIconCache;
+ 
++/* Image list offsets of an icon name, 0 when the cache does not have it */
++typedef struct
++{
++  guint32 plain;             /* "name" */
++  guint32 symbolic;          /* "name.symbolic", from name.symbolic.png */
++  gboolean is_symbolic_name; /* name itself ends in ".symbolic" */
++} GtkIconCacheEntry;
++
+ GtkIconCache *gtk_icon_cache_new                        (const char   *data);
+ GtkIconCache *gtk_icon_cache_new_for_path               (const char   *path);
+ GHashTable   *gtk_icon_cache_list_icons_in_directory    (GtkIconCache *cache,
+-                                                         const char   *directory,
++                                                         int           directory_index,
+                                                          GtkStringSet *set);
++int           gtk_icon_cache_get_directory_index        (GtkIconCache *cache,
++                                                         const char   *directory);
++void          gtk_icon_cache_find_icon                  (GtkIconCache      *cache,
++                                                         const char        *icon_name,
++                                                         GtkIconCacheEntry *entry);
++guint         gtk_icon_cache_get_icon_flags             (GtkIconCache            *cache,
++                                                         const GtkIconCacheEntry *entry,
++                                                         int                      directory_index);
+ GtkIconCache *gtk_icon_cache_ref                        (GtkIconCache *cache);
+ void          gtk_icon_cache_unref                      (GtkIconCache *cache);
+ 
+diff --git a/gtk/gtkicontheme.c b/gtk/gtkicontheme.c
+index 7937e57f87..4ce0dbcf0b 100644
+--- a/gtk/gtkicontheme.c
++++ b/gtk/gtkicontheme.c
+@@ -379,6 +379,7 @@ typedef struct
+ 
+   GArray *dir_sizes;     /* IconThemeDirSize */
+   GArray *dirs;          /* IconThemeDir */
++  GPtrArray *caches;     /* GtkIconCache of the cached directories */
+ } IconTheme;
+ 
+ typedef struct
+@@ -387,6 +388,13 @@ typedef struct
+   guint8 best_suffix;
+ } IconThemeFile;
+ 
++typedef struct
++{
++  guint16 dir_index;    /* index in dirs */
++  guint16 cache_index;  /* index in IconTheme.caches */
++  int directory_index;  /* index of the directory in the cache */
++} IconThemeCachedDir;
++
+ typedef struct
+ {
+   IconThemeDirType type;
+@@ -396,8 +404,14 @@ typedef struct
+   int threshold;
+   int scale;
+ 
++  /* Directories without an icon cache, listed when the theme loads */
+   GArray *icon_files;
+   GHashTable *icon_hash; /* name (interned) -> file index */
++
++  /* Directories with an icon cache, looked up in the cache.
++   * Ordered by dir_index, like icon_hash, so the first directory
++   * that has an icon wins in both. */
++  GArray *cached_dirs;   /* IconThemeCachedDir */
+ } IconThemeDirSize;
+ 
+ typedef struct
+@@ -430,8 +444,21 @@ static void              theme_dir_destroy                (IconThemeDir     *dir
+ static void              theme_destroy                    (IconTheme        *theme);
+ static GtkIconPaintable *theme_lookup_icon                (IconTheme        *theme,
+                                                            const char       *icon_name,
++                                                           const char       *interned_name,
+                                                            int               size,
+                                                            int               scale);
++static gboolean          theme_has_icon                   (IconTheme        *theme,
++                                                           const char       *icon_name,
++                                                           const char       *interned_name);
++static gboolean          theme_find_in_caches             (IconTheme         *theme,
++                                                           const char        *icon_name,
++                                                           GtkIconCacheEntry *entries);
++static gboolean          theme_dir_size_find              (IconTheme               *theme,
++                                                           IconThemeDirSize        *dir_size,
++                                                           const char              *interned_name,
++                                                           const GtkIconCacheEntry *entries,
++                                                           guint                   *dir_index,
++                                                           IconCacheFlag           *suffix);
+ static void              theme_subdir_load                (GtkIconTheme     *self,
+                                                            IconTheme        *theme,
+                                                            GKeyFile         *theme_file,
+@@ -2043,12 +2070,9 @@ real_choose_icon (GtkIconTheme      *self,
+       for (i = 0; icon_names[i] && icon_name_is_symbolic (icon_names[i], -1); i++)
+         {
+           icon_name = gtk_string_set_lookup (&self->icons, icon_names[i]);
+-          if (icon_name)
+-            {
+-              icon = theme_lookup_icon (theme, icon_name, size, scale);
+-              if (icon)
+-                goto out;
+-            }
++          icon = theme_lookup_icon (theme, icon_names[i], icon_name, size, scale);
++          if (icon)
++            goto out;
+         }
+     }
+ 
+@@ -2059,12 +2083,9 @@ real_choose_icon (GtkIconTheme      *self,
+       for (i = 0; icon_names[i]; i++)
+         {
+           icon_name = gtk_string_set_lookup (&self->icons, icon_names[i]);
+-          if (icon_name)
+-            {
+-              icon = theme_lookup_icon (theme, icon_name, size, scale);
+-              if (icon)
+-                goto out;
+-            }
++          icon = theme_lookup_icon (theme, icon_names[i], icon_name, size, scale);
++          if (icon)
++            goto out;
+         }
+     }
+ 
+@@ -2408,6 +2429,26 @@ gtk_icon_theme_error_quark (void)
+   return g_quark_from_static_string ("gtk-icon-theme-error-quark");
+ }
+ 
++static gboolean
++icon_theme_has_icon (GtkIconTheme *self,
++                     const char   *icon_name)
++{
++  const char *interned_name;
++  GList *l;
++
++  if (g_hash_table_contains (self->unthemed_icons, icon_name))
++    return TRUE;
++
++  interned_name = gtk_string_set_lookup (&self->icons, icon_name);
++  for (l = self->themes; l; l = l->next)
++    {
++      if (theme_has_icon (l->data, icon_name, interned_name))
++        return TRUE;
++    }
++
++  return FALSE;
++}
++
+ /**
+  * gtk_icon_theme_has_icon:
+  * @self: a `GtkIconTheme`
+@@ -2432,14 +2473,8 @@ gtk_icon_theme_has_icon (GtkIconTheme *self,
+ 
+   ensure_valid_themes (self);
+ 
+-  if (gtk_string_set_lookup (&self->icons, icon_name) != NULL ||
+-      g_hash_table_contains (self->unthemed_icons, icon_name))
+-    {
+-      res = TRUE;
+-      goto out;
+-    }
++  res = icon_theme_has_icon (self, icon_name);
+ 
+- out:
+   gtk_icon_theme_unlock (self);
+ 
+   return res;
+@@ -2473,17 +2508,9 @@ gtk_icon_theme_has_gicon (GtkIconTheme *self,
+ 
+   ensure_valid_themes (self);
+ 
+-  for (int i = 0; names[i]; i++)
+-    {
+-      if (gtk_string_set_lookup (&self->icons, names[i]) != NULL ||
+-          g_hash_table_contains (self->unthemed_icons, names[i]))
+-        {
+-          res = TRUE;
+-          goto out;
+-        }
+-    }
++  for (int i = 0; names[i] && !res; i++)
++    res = icon_theme_has_icon (self, names[i]);
+ 
+- out:
+   gtk_icon_theme_unlock (self);
+ 
+   return res;
+@@ -2526,6 +2553,8 @@ gtk_icon_theme_get_icon_sizes (GtkIconTheme *self,
+   GHashTable *sizes;
+   int *result, *r;
+   const char *interned_icon_name;
++  GtkIconCacheEntry *entries;
++  guint n_caches = 0;
+ 
+   g_return_val_if_fail (GTK_IS_ICON_THEME (self), NULL);
+ 
+@@ -2536,10 +2565,17 @@ gtk_icon_theme_get_icon_sizes (GtkIconTheme *self,
+   sizes = g_hash_table_new (g_direct_hash, g_direct_equal);
+ 
+   interned_icon_name = gtk_string_set_lookup (&self->icons, icon_name);
++  for (l = self->themes; l; l = l->next)
++    n_caches = MAX (n_caches, ((IconTheme *) l->data)->caches->len);
++  entries = g_newa (GtkIconCacheEntry, n_caches + 1);
+ 
+   for (l = self->themes; l; l = l->next)
+     {
+       IconTheme *theme = l->data;
++      guint dir_index;
++      IconCacheFlag suffix;
++
++      theme_find_in_caches (theme, icon_name, entries);
+ 
+       for (i = 0; i < theme->dir_sizes->len; i++)
+         {
+@@ -2548,7 +2584,7 @@ gtk_icon_theme_get_icon_sizes (GtkIconTheme *self,
+           if (dir_size->type != ICON_THEME_DIR_SCALABLE && g_hash_table_lookup_extended (sizes, GINT_TO_POINTER (dir_size->size), NULL, NULL))
+             continue;
+ 
+-          if (!g_hash_table_contains (dir_size->icon_hash, interned_icon_name))
++          if (!theme_dir_size_find (theme, dir_size, interned_icon_name, entries, &dir_index, &suffix))
+             continue;
+ 
+           if (dir_size->type == ICON_THEME_DIR_SCALABLE)
+@@ -2592,10 +2628,12 @@ char **
+ gtk_icon_theme_get_icon_names (GtkIconTheme *self)
+ {
+   GHashTable *icons;
++  GtkStringSet cached_icons;
+   GHashTableIter iter;
+   char **names;
+   char *key;
+-  int i;
++  GList *l;
++  guint i;
+ 
+   gtk_icon_theme_lock (self);
+ 
+@@ -2604,6 +2642,30 @@ gtk_icon_theme_get_icon_names (GtkIconTheme *self)
+   icons = g_hash_table_new (g_str_hash, g_str_equal);
+   gtk_string_set_list (&self->icons, icons);
+ 
++  /* Names in cached directories are not in self->icons */
++  gtk_string_set_init (&cached_icons);
++  for (l = self->themes; l; l = l->next)
++    {
++      IconTheme *theme = l->data;
++
++      for (i = 0; i < theme->dir_sizes->len; i++)
++        {
++          IconThemeDirSize *dir_size = &g_array_index (theme->dir_sizes, IconThemeDirSize, i);
++
++          for (guint j = 0; j < dir_size->cached_dirs->len; j++)
++            {
++              IconThemeCachedDir *dir = &g_array_index (dir_size->cached_dirs, IconThemeCachedDir, j);
++              GHashTable *dir_icons;
++
++              dir_icons = gtk_icon_cache_list_icons_in_directory (g_ptr_array_index (theme->caches, dir->cache_index),
++                                                                  dir->directory_index,
++                                                                  &cached_icons);
++              g_clear_pointer (&dir_icons, g_hash_table_destroy);
++            }
++        }
++    }
++  gtk_string_set_list (&cached_icons, icons);
++
+   g_hash_table_foreach (self->unthemed_icons, add_key_to_hash, icons);
+ 
+   names = g_new (char *, g_hash_table_size (icons) + 1);
+@@ -2616,6 +2678,7 @@ gtk_icon_theme_get_icon_names (GtkIconTheme *self)
+   names[i] = NULL;
+ 
+   g_hash_table_destroy (icons);
++  gtk_string_set_destroy (&cached_icons);
+ 
+   gtk_icon_theme_unlock (self);
+ 
+@@ -2663,6 +2726,7 @@ theme_new (const char *theme_name,
+   theme->name = g_strdup (theme_name);
+   theme->dir_sizes = g_array_new (FALSE, FALSE, sizeof (IconThemeDirSize));
+   theme->dirs = g_array_new (FALSE, FALSE, sizeof (IconThemeDir));
++  theme->caches = g_ptr_array_new_with_free_func ((GDestroyNotify) gtk_icon_cache_unref);
+ 
+   theme->display_name =
+     g_key_file_get_locale_string (theme_file, "Icon Theme", "Name", NULL, NULL);
+@@ -2692,6 +2756,7 @@ theme_destroy (IconTheme *theme)
+   for (i = 0; i < theme->dirs->len; i++)
+     theme_dir_destroy (&g_array_index (theme->dirs, IconThemeDir, i));
+   g_array_free (theme->dirs, TRUE);
++  g_ptr_array_unref (theme->caches);
+ 
+   g_free (theme);
+ }
+@@ -2703,6 +2768,8 @@ theme_dir_size_destroy (IconThemeDirSize *dir)
+     g_hash_table_destroy (dir->icon_hash);
+   if (dir->icon_files)
+     g_array_free (dir->icon_files, TRUE);
++  if (dir->cached_dirs)
++    g_array_free (dir->cached_dirs, TRUE);
+ }
+ 
+ static void
+@@ -2866,38 +2933,127 @@ compare_dir_size_matches (IconThemeDirSize *dir_a, int difference_a,
+   return diff_a <= diff_b;
+ }
+ 
++/* Returns whether any cache of @theme has the icon */
++static gboolean
++theme_find_in_caches (IconTheme         *theme,
++                      const char        *icon_name,
++                      GtkIconCacheEntry *entries)
++{
++  gboolean found = FALSE;
++
++  for (guint i = 0; i < theme->caches->len; i++)
++    {
++      gtk_icon_cache_find_icon (g_ptr_array_index (theme->caches, i), icon_name, &entries[i]);
++      found |= entries[i].plain != 0 || entries[i].symbolic != 0;
++    }
++
++  return found;
++}
++
++/* Finds the first directory of @dir_size that has the icon,
++ * @interned_name in icon_hash or @entries in cached_dirs.
++ */
++static gboolean
++theme_dir_size_find (IconTheme               *theme,
++                     IconThemeDirSize        *dir_size,
++                     const char              *interned_name,
++                     const GtkIconCacheEntry *entries,
++                     guint                   *dir_index,
++                     IconCacheFlag           *suffix)
++{
++  IconThemeFile *file = NULL;
++  gpointer file_index;
++
++  if (interned_name &&
++      g_hash_table_lookup_extended (dir_size->icon_hash, interned_name, NULL, &file_index))
++    file = &g_array_index (dir_size->icon_files, IconThemeFile, GPOINTER_TO_INT (file_index));
++
++  for (guint i = 0; i < dir_size->cached_dirs->len; i++)
++    {
++      IconThemeCachedDir *dir = &g_array_index (dir_size->cached_dirs, IconThemeCachedDir, i);
++      const GtkIconCacheEntry *entry = &entries[dir->cache_index];
++      guint flags;
++
++      if (file && file->dir_index < dir->dir_index)
++        break;
++
++      if (entry->plain == 0 && entry->symbolic == 0)
++        continue;
++
++      flags = gtk_icon_cache_get_icon_flags (g_ptr_array_index (theme->caches, dir->cache_index),
++                                             entry, dir->directory_index);
++      if (flags != 0)
++        {
++          *dir_index = dir->dir_index;
++          *suffix = best_suffix (flags);
++          return TRUE;
++        }
++    }
++
++  if (file)
++    {
++      *dir_index = file->dir_index;
++      *suffix = file->best_suffix;
++      return TRUE;
++    }
++
++  return FALSE;
++}
++
++static gboolean
++theme_has_icon (IconTheme  *theme,
++                const char *icon_name,
++                const char *interned_name)
++{
++  GtkIconCacheEntry *entries = g_newa (GtkIconCacheEntry, theme->caches->len + 1);
++  guint dir_index;
++  IconCacheFlag suffix;
++
++  if (!theme_find_in_caches (theme, icon_name, entries) && interned_name == NULL)
++    return FALSE;
++
++  for (guint i = 0; i < theme->dir_sizes->len; i++)
++    {
++      if (theme_dir_size_find (theme, &g_array_index (theme->dir_sizes, IconThemeDirSize, i),
++                               interned_name, entries, &dir_index, &suffix))
++        return TRUE;
++    }
++
++  return FALSE;
++}
++
+ static GtkIconPaintable *
+ theme_lookup_icon (IconTheme  *theme,
+-                   const char *icon_name, /* interned */
++                   const char *icon_name,
++                   const char *interned_name, /* NULL if no uncached directory has it */
+                    int          size,
+                    int          scale)
+ {
+   IconThemeDirSize *min_dir_size;
+-  IconThemeFile *min_file;
++  guint min_dir_index = 0;
+   int min_difference;
+   IconCacheFlag min_suffix = ICON_CACHE_FLAG_PNG_SUFFIX;
++  GtkIconCacheEntry *entries;
+   int i;
+ 
++  entries = g_newa (GtkIconCacheEntry, theme->caches->len + 1);
++  if (!theme_find_in_caches (theme, icon_name, entries) && interned_name == NULL)
++    return NULL;
++
+   min_difference = G_MAXINT;
+   min_dir_size = NULL;
+-  min_file = NULL;
+ 
+   for (i = 0; i < theme->dir_sizes->len; i++)
+     {
+       IconThemeDirSize *dir_size = &g_array_index (theme->dir_sizes, IconThemeDirSize, i);
+-      IconThemeFile *file;
+-      guint best_suffix;
++      IconCacheFlag suffix;
++      guint dir_index;
+       int difference;
+-      gpointer file_index;
+ 
+-      if (!g_hash_table_lookup_extended (dir_size->icon_hash, icon_name, NULL, &file_index))
++      if (!theme_dir_size_find (theme, dir_size, interned_name, entries, &dir_index, &suffix))
+         continue;
+ 
+-      file = &g_array_index (dir_size->icon_files, IconThemeFile, GPOINTER_TO_INT(file_index));
+-
+-      best_suffix = file->best_suffix;
+-
+-      if (best_suffix == ICON_CACHE_FLAG_NONE)
++      if (suffix == ICON_CACHE_FLAG_NONE)
+         continue;
+ 
+       difference = theme_dir_size_difference (dir_size, size, scale);
+@@ -2907,8 +3063,8 @@ theme_lookup_icon (IconTheme  *theme,
+                                     size, scale))
+         {
+           min_dir_size = dir_size;
+-          min_file = file;
+-          min_suffix = best_suffix;
++          min_dir_index = dir_index;
++          min_suffix = suffix;
+           min_difference = difference;
+         }
+     }
+@@ -2916,7 +3072,7 @@ theme_lookup_icon (IconTheme  *theme,
+   if (min_dir_size)
+     {
+       GtkIconPaintable *icon;
+-      IconThemeDir *dir = &g_array_index (theme->dirs, IconThemeDir, min_file->dir_index);
++      IconThemeDir *dir = &g_array_index (theme->dirs, IconThemeDir, min_dir_index);
+       char *filename, *path;
+ 
+       filename = g_strconcat (icon_name, string_from_suffix (min_suffix), NULL);
+@@ -3056,6 +3212,7 @@ theme_ensure_dir_size (IconTheme *theme,
+   new.icon_files = g_array_new (FALSE, FALSE, sizeof (IconThemeFile));
+   /* The keys are interned strings, so use direct hash/equal */
+   new.icon_hash = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
++  new.cached_dirs = g_array_new (FALSE, FALSE, sizeof (IconThemeCachedDir));
+ 
+   index = theme->dir_sizes->len;
+   g_array_append_val (theme->dir_sizes, new);
+@@ -3125,6 +3282,28 @@ theme_add_dir_with_icons (IconTheme *theme,
+     }
+ }
+ 
++static void
++theme_add_cached_dir (IconTheme        *theme,
++                      IconThemeDirSize *dir_size,
++                      GtkIconCache     *cache,
++                      int               directory_index,
++                      char             *path /* takes ownership */)
++{
++  IconThemeCachedDir dir;
++  guint cache_index;
++
++  if (!g_ptr_array_find (theme->caches, cache, &cache_index))
++    {
++      cache_index = theme->caches->len;
++      g_ptr_array_add (theme->caches, gtk_icon_cache_ref (cache));
++    }
++
++  dir.dir_index = theme_add_icon_dir (theme, FALSE, path);
++  dir.cache_index = cache_index;
++  dir.directory_index = directory_index;
++  g_array_append_val (dir_size->cached_dirs, dir);
++}
++
+ static void
+ theme_subdir_load (GtkIconTheme *self,
+                    IconTheme    *theme,
+@@ -3216,7 +3395,16 @@ theme_subdir_load (GtkIconTheme *self,
+             }
+ 
+           if (dir_mtime->cache != NULL)
+-            icons = gtk_icon_cache_list_icons_in_directory (dir_mtime->cache, subdir, &self->icons);
++            {
++              int directory_index = gtk_icon_cache_get_directory_index (dir_mtime->cache, subdir);
++
++              if (directory_index != -1)
++                theme_add_cached_dir (theme,
++                                      dir_size,
++                                      dir_mtime->cache,
++                                      directory_index,
++                                      g_strdup (str->str));
++            }
+           else
+             icons = scan_directory (self, str->str, &self->icons);
+ 
+diff --git a/testsuite/gtk/cache-icon-themes.py b/testsuite/gtk/cache-icon-themes.py
+new file mode 100755
+index 0000000000..60bec8f3c6
+--- /dev/null
++++ b/testsuite/gtk/cache-icon-themes.py
+@@ -0,0 +1,29 @@
++#!/usr/bin/env python3
++#
++# Copy the icontheme test themes and give each an icon-theme.cache
++#
++# Usage: cache-icon-themes UPDATE-ICON-CACHE SOURCE-DIR OUTPUT-DIR
++#
++# The cache of the icons theme also lists 16x16/cache-only.png, which is
++# removed once the cache is written, so only a lookup in the cache finds it.
++
++import os
++import shutil
++import subprocess
++import sys
++
++update_icon_cache, srcdir, outdir = sys.argv[1:]
++
++shutil.rmtree(outdir, ignore_errors=True)
++
++for theme in ['icons', 'icons2']:
++    shutil.copytree(os.path.join(srcdir, theme), os.path.join(outdir, theme))
++
++icons16 = os.path.join(outdir, 'icons', '16x16')
++shutil.copyfile(os.path.join(icons16, 'simple.png'), os.path.join(icons16, 'cache-only.png'))
++
++for theme in ['icons', 'icons2']:
++    subprocess.run([update_icon_cache, '--quiet', os.path.join(outdir, theme)], check=True)
++
++# The cache stays valid: it is checked against the theme directory, not 16x16
++os.remove(os.path.join(icons16, 'cache-only.png'))
+diff --git a/testsuite/gtk/icontheme.c b/testsuite/gtk/icontheme.c
+index b290cfe680..943c97685c 100644
+--- a/testsuite/gtk/icontheme.c
++++ b/testsuite/gtk/icontheme.c
+@@ -646,6 +646,32 @@ test_list (void)
+   g_strfreev (icons);
+ }
+ 
++static void
++test_cache (void)
++{
++  GtkIconTheme *theme;
++  char *cache;
++  char **icons;
++
++  cache = g_test_build_filename (G_TEST_DIST, "icons", "icon-theme.cache", NULL);
++  if (!g_file_test (cache, G_FILE_TEST_EXISTS))
++    {
++      g_test_skip ("The test theme has no icon-theme.cache");
++      g_free (cache);
++      return;
++    }
++  g_free (cache);
++
++  /* The cache lists 16x16/cache-only.png, which is not on disk */
++  theme = get_test_icontheme (TRUE);
++  g_assert_true (gtk_icon_theme_has_icon (theme, "cache-only"));
++  icons = gtk_icon_theme_get_icon_names (theme);
++  g_assert_true (g_strv_contains ((const char * const *) icons, "cache-only"));
++  g_strfreev (icons);
++  assert_icon_lookup ("cache-only", 16, GTK_TEXT_DIR_NONE, 0, FALSE,
++                      "/icons/16x16/cache-only.png");
++}
++
+ static void
+ test_inherit (void)
+ {
+@@ -721,6 +747,7 @@ main (int argc, char *argv[])
+   g_test_add_func ("/icontheme/lookup_order7", test_lookup_order7);
+   g_test_add_func ("/icontheme/lookup_order8", test_lookup_order8);
+   g_test_add_func ("/icontheme/lookup_order9", test_lookup_order9);
++  g_test_add_func ("/icontheme/cache", test_cache);
+ 
+   return g_test_run();
+ }
+diff --git a/testsuite/gtk/meson.build b/testsuite/gtk/meson.build
+index df507ca828..80aff476da 100644
+--- a/testsuite/gtk/meson.build
++++ b/testsuite/gtk/meson.build
+@@ -167,6 +167,22 @@ foreach flag: common_cflags
+   endif
+ endforeach
+ 
++# icontheme runs a second time on copies of its themes with an icon-theme.cache
++cached_icon_themes = custom_target('cached-icon-themes',
++  output: 'cached-icon-themes',
++  command: [
++    find_program('cache-icon-themes.py'),
++    gtk4_update_icon_cache,
++    meson.current_source_dir(),
++    '@OUTPUT@',
++  ],
++  # Copies the whole test themes, so it follows any file in them
++  build_always_stale: true,
++)
++
++cached_icon_themes_env = test_env
++cached_icon_themes_env.set('G_TEST_SRCDIR', cached_icon_themes.full_path())
++
+ foreach t : tests
+   test_name = t.get('name')
+   test_srcs = ['@0@.c'.format(test_name)] + t.get('sources', [])
+@@ -195,6 +211,17 @@ foreach t : tests
+     env: test_env,
+     suite: ['gtk'] + test_extra_suites,
+   )
++
++  if test_name == 'icontheme'
++    test('icontheme-cached', test_exe,
++      args: [ '--tap', '-k' ],
++      protocol: 'tap',
++      timeout: test_timeout,
++      env: cached_icon_themes_env,
++      depends: cached_icon_themes,
++      suite: ['gtk'],
++    )
++  endif
+ endforeach
+ 
+ foreach t : internal_tests
+-- 
+2.56.0
+
