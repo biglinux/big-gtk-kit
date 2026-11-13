@@ -23,7 +23,7 @@ accessibility bus and a throwaway HOME, which is what the sweep needs.
 
 ## 1. Static checker
 
-    static/leak_lint.py [--json] [--no-icons] [--errors-only] PATH...
+    static/leak_lint.py [--json] [--no-icons] [--errors-only | --strict] PATH...
 
 Errors (exit 1): `unparent()` inside the popover's own `closed` handler,
 closing a window by watching `destroy`, `set_parent` without `unparent`, a
@@ -33,8 +33,12 @@ that holds its own widget or an ancestor (also through a closure kept in an
 `Rc`, a child set by a builder, or a controller), siblings that hold each
 other, follower lists pruned too late, a handler on an object that lives as
 long as the process (the display clipboard, `VolumeMonitor`, the application
-seen from a component) with its id thrown away. Reads `.rs` files only; test
-code is ignored and an unreadable file is skipped with a warning.
+seen from a component) with its id thrown away, a repeating GLib source
+(`timeout_add*`, `idle_add*`, not `_once`) whose id is thrown away and whose
+closure can return `Continue` but never `Break` when a weak reference fails to
+upgrade. `--strict` fails on warnings too, which is what a gate runs: a warning
+is fixed or waived. Reads `.rs` files only; test code is ignored and an
+unreadable file is skipped with a warning.
 
 A finding is waived with a reason; a waiver without one is an error:
 
@@ -50,7 +54,10 @@ the accessibility bus and, for each surface: warms up, takes census A, opens
 and closes it N times, takes census B and confirms with a second round. A type
 that gained at least one instance per cycle is a leak, unless an `[[allow]]`
 with a per-cycle ceiling and a reason covers it (in the file or in the
-surface). A surface that does not really close is reported as such. Exit 0
+surface). The process's threads (`Threads:` in `/proc/PID/status`) and open
+file descriptors are read with each census; they are exact, so any growth the
+second round repeats is a leak (`process threads`, `process file
+descriptors`). A surface that does not really close is reported as such. Exit 0
 clean, 1 leak, 2 did not run (incomplete file, missing program or `gdbus`);
 `LEAK_SWEEP_DIR` chooses where the censuses and the program log go.
 
