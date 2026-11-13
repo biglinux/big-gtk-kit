@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Find the GTK4 code shapes that leaked on the BigLinux desktop, in Rust sources.
 
-    tools/static/leak_lint.py [--json] [--no-icons] [--errors-only] PATH...
+    tools/static/leak_lint.py [--json] [--no-icons] [--errors-only | --strict] PATH...
 
 Each rule is one leak that was measured, not a style preference. Errors are shapes
 that are wrong whenever they appear; warnings are heuristics that need a person to
@@ -13,7 +13,8 @@ Suppress one finding with a comment on its line or the line above:
     // leak-guard: allow(<rule>) <why this one is fine>
 A suppression without a reason is itself reported.
 
-Exit status: 0 no errors, 1 errors found, 2 usage error.
+Exit status: 0 no errors, 1 errors found (or any finding with --strict), 2 usage
+error.
 """
 
 from __future__ import annotations
@@ -434,6 +435,47 @@ def handler_captures(
     )
 
 
+def top_level_index(text: str, start: int, stop: int, token: str) -> int:
+    """Where `token` first appears in `text[start:stop]` outside brackets, or -1."""
+    depth = 0
+    for i in range(start, stop):
+        if depth == 0 and text.startswith(token, i):
+            return i
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+    return -1
+
+
+def match_arm_patterns(body: str) -> list[tuple[int, int]]:
+    """(start, end) of the pattern of each `match` arm in `body`, its guard left out:
+    the guard reads names, it binds none."""
+    spans = []
+    for m in re.finditer(r"\bmatch\b", body):
+        brace = body.find("{", m.end())
+        if brace < 0:
+            continue
+        close = brace + len(call_argument(body, brace)) + 1
+        start = brace + 1
+        while (arrow := top_level_index(body, start, close, "=>")) >= 0:
+            guard = re.search(r"\bif\b", body[start:arrow])
+            spans.append((start, start + guard.start() if guard else arrow))
+            arm = arrow + 2
+            while arm < close and body[arm].isspace():
+                arm += 1
+            if body.startswith("{", arm):  # a block arm; its comma is optional
+                arm += len(call_argument(body, arm)) + 2
+                comma = re.match(r"\s*,", body[arm:close])
+                start = arm + (comma.end() if comma else 0)
+            else:
+                comma = top_level_index(body, arm, close, ",")
+                if comma < 0:
+                    break  # the last arm
+                start = comma + 1
+    return spans
+
+
 def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[str]:
     """What the closure in `arg` (a closure, or a block ending in one) keeps alive."""
     macro = re.search(r"\bclone!\s*\(", arg)
@@ -454,12 +496,12 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     pre, body = arg[: closure.start()], arg[closure.end() :]
     body = re.sub(r'"(?:\\.|[^"\\])*"', '""', body)  # words in strings are not names
     params = set(re.findall(r"\b([a-z_]\w*)\b", closure.group(2)))
-    # Where each name is first bound inside the body (let, for, match arm, inner closure).
-    bound_at: dict[str, int] = {}
+    # Each pattern inside the body (let, for, inner closure, match arm) as
+    # (start, end, where its names start to shadow the outer ones).
+    patterns = [(lo, hi, lo) for lo, hi in match_arm_patterns(body)]
     binders = [
         r"\blet\s+([^=;]+?)\s*(?::[^=;]*)?=(?!=)",
         r"\bfor\s+(.+?)\s+in\b",
-        r"([^{},;]*?)=>",
         r"\|([^|]*)\|",
     ]
     for binder in binders:
@@ -478,11 +520,12 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
                 else:
                     end = body.find(";", m.end())
                 where = end if end >= 0 else len(body)
-            for name in re.findall(r"\b([a-z_]\w*)\b", m.group(1)):
-                bound_at[name] = min(bound_at.get(name, len(body)), where)
-    pattern_spans = [
-        (m.start(1), m.end(1)) for binder in binders for m in re.finditer(binder, body)
-    ]
+            patterns.append((m.start(1), m.end(1), where))
+    bound_at: dict[str, int] = {}
+    for lo, hi, where in patterns:
+        for name in re.findall(r"\b([a-z_]\w*)\b", body[lo:hi]):
+            bound_at[name] = min(bound_at.get(name, len(body)), where)
+    pattern_spans = [(lo, hi) for lo, hi, _ in patterns]
     used = set()
     # variables only: not a field or method (`.x`), a path (`x::`, `::x`), a call, a macro,
     # or a field name in a struct literal (`x: value`)
@@ -668,6 +711,44 @@ def rule_process_object_handler(src: Source):
         )
 
 
+# A repeating GLib source started as a statement: its SourceId goes nowhere.
+REPEATING_SOURCE = re.compile(
+    r"(?m)^[ \t]*(?:let\s+_\s*=\s*)?(?:[\w:]+::)?"
+    r"(timeout_add_local|timeout_add_seconds_local|idle_add_local|"
+    r"timeout_add|timeout_add_seconds|idle_add)(?:_full)?\s*\("
+)
+
+
+def rule_repeating_source_without_weak_exit(src: Source):
+    """A repeating source whose id is dropped stops only when its closure returns Break."""
+    for m in REPEATING_SOURCE.finditer(src.text):
+        arg = call_argument(src.text, m.end() - 1)
+        if not src.text[m.end() + len(arg) + 1 :].lstrip().startswith(";"):
+            continue  # the id is kept, returned or passed on
+        closure = top_level_arguments(arg)[-1].strip()
+        if re.fullmatch(r"\w+", closure):
+            local = list(
+                re.finditer(rf"\blet\s+(?:mut\s+)?{closure}\s*=", src.text[: m.start()])
+            )
+            if not local:
+                continue  # a fn item captures nothing
+            closure = statement_after(src.text, local[-1].end())
+        if "Continue" not in closure:
+            continue  # returns Break every time: it runs once
+        if "Break" in closure and re.search(r"\.upgrade\(\)|#\[upgrade_or", closure):
+            continue
+        yield (
+            src.line_of(m.start()),
+            (
+                f"`{m.group(1)}` with its SourceId dropped and no `Break` when a weak "
+                "reference fails to upgrade: it runs, and keeps what its closure holds, until "
+                "the process ends. Capture weakly and return `ControlFlow::Break` when the "
+                "upgrade fails, keep the id and remove the source with its owner, or use the "
+                "`_once` form."
+            ),
+        )
+
+
 ERROR_RULES = {
     "closed-unparent": rule_closed_unparent,
     "window-close-by-destroy": rule_window_close_by_destroy,
@@ -679,6 +760,7 @@ WARNING_RULES = {
     "mutual-siblings": rule_mutual_siblings,
     "lazy-followers": rule_lazy_followers,
     "process-object-handler": rule_process_object_handler,
+    "repeating-source-without-weak-exit": rule_repeating_source_without_weak_exit,
 }
 
 
@@ -755,8 +837,12 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--no-icons", action="store_true", help="skip the icon theme scan"
     )
-    parser.add_argument(
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
         "--errors-only", action="store_true", help="do not print warnings"
+    )
+    scope.add_argument(
+        "--strict", action="store_true", help="fail on warnings as well as errors"
     )
     options = parser.parse_args(argv)
     files = rust_files(options.paths)
@@ -778,7 +864,10 @@ def main(argv=None) -> int:
             f"leak_lint: {len(files)} files, {errors} errors, {warnings} warnings",
             file=sys.stderr,
         )
-    return 1 if any(f.severity == "error" for f in findings) else 0
+    failing = (
+        findings if options.strict else [f for f in findings if f.severity == "error"]
+    )
+    return 1 if failing else 0
 
 
 if __name__ == "__main__":

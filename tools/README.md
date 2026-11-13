@@ -23,7 +23,7 @@ accessibility bus and a throwaway HOME, which is what the sweep needs.
 
 ## 1. Static checker
 
-    static/leak_lint.py [--json] [--no-icons] [--errors-only] PATH...
+    static/leak_lint.py [--json] [--no-icons] [--errors-only | --strict] PATH...
 
 Errors (exit 1): `unparent()` inside the popover's own `closed` handler,
 closing a window by watching `destroy`, `set_parent` without `unparent`, a
@@ -33,8 +33,12 @@ that holds its own widget or an ancestor (also through a closure kept in an
 `Rc`, a child set by a builder, or a controller), siblings that hold each
 other, follower lists pruned too late, a handler on an object that lives as
 long as the process (the display clipboard, `VolumeMonitor`, the application
-seen from a component) with its id thrown away. Reads `.rs` files only; test
-code is ignored and an unreadable file is skipped with a warning.
+seen from a component) with its id thrown away, a repeating GLib source
+(`timeout_add*`, `idle_add*`, not `_once`) whose id is thrown away and whose
+closure can return `Continue` but never `Break` when a weak reference fails to
+upgrade. `--strict` fails on warnings too, which is what a gate runs: a warning
+is fixed or waived. Reads `.rs` files only; test code is ignored and an
+unreadable file is skipped with a warning.
 
 A finding is waived with a reason; a waiver without one is an error:
 
