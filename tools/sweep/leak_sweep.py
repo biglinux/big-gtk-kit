@@ -13,6 +13,8 @@ census by signal, so `command` must exec the GTK program directly: a wrapper
 script would receive the signal instead. For each surface: warm-up cycles,
 census A, N cycles, census B. A type that gained at least one instance per cycle
 is a leak, unless the surfaces file allows it with a per-cycle cap and a reason.
+The process's threads and open file descriptors are counted with each census;
+they are exact, so any growth that a second round of cycles repeats is a leak.
 
 A surface that does not really close is reported as such, not as a leak: windows
 stacking up look exactly like one.
@@ -70,6 +72,30 @@ def verdict(
         else:
             leaks[name] = amount
     return leaks, tolerated
+
+
+def process_counts(pid: int) -> dict[str, int]:
+    """The threads and open file descriptors of `pid`: exact counts, unlike a census."""
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+        fds = len(os.listdir(f"/proc/{pid}/fd"))
+    except OSError as error:
+        raise RuntimeError(f"cannot read /proc/{pid}: {error}") from error
+    threads = next(
+        int(line.split()[1])
+        for line in status.splitlines()
+        if line.startswith("Threads:")
+    )
+    return {"process threads": threads, "process file descriptors": fds}
+
+
+def confirmed_growth(
+    first: dict[str, int], second: dict[str, int], third: dict[str, int]
+) -> dict[str, int]:
+    """Exact counters that grew over one round and again over the next, by the
+    first round's growth: a pool filling up grows once, a leak every time."""
+    again = grown(second, third)
+    return {name: n for name, n in grown(first, second).items() if name in again}
 
 
 def with_workdir(text: str, workdir) -> str:
@@ -303,17 +329,18 @@ def sweep_surface(
     for _ in range(warm):
         unclosed += not cycle(surface, spec, app_name, program.workdir)
     time.sleep(1)
-    before = program.census()
+    pid = program.process.pid
+    before, process_before = program.census(), process_counts(pid)
     for _ in range(cycles):
         unclosed += not cycle(surface, spec, app_name, program.workdir)
     time.sleep(float(surface.get("after", 1.5)))
-    after = program.census()
+    after, process_after = program.census(), process_counts(pid)
     local_allow = {
         **allow,
         **{a["type"]: float(a["per_cycle"]) for a in surface.get("allow", [])},
     }
     leaks, tolerated = verdict(grown(before, after), cycles, local_allow)
-    if leaks:
+    if leaks or grown(process_before, process_after):
         # Confirm: a leak grows again over a second round; a banner that happened to
         # appear, or a cache filling once, does not.
         for _ in range(cycles):
@@ -321,6 +348,7 @@ def sweep_surface(
         time.sleep(float(surface.get("after", 1.5)))
         again, _ = verdict(grown(after, program.census()), cycles, local_allow)
         leaks = {name: amount for name, amount in leaks.items() if name in again}
+        leaks |= confirmed_growth(process_before, process_after, process_counts(pid))
     return {
         "surface": surface["name"],
         "cycles": cycles,

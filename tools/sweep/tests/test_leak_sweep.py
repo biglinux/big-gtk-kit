@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """The parts of the sweep that decide, without a display."""
 
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -42,6 +43,50 @@ class Verdict(unittest.TestCase):
             leak_sweep.verdict({"AdwBreakpoint": 24}, 6, allow),
             ({"AdwBreakpoint": 24}, {}),
         )
+
+
+# One cycle per line on stdin: `every` leaks a thread and a file descriptor each
+# time, `once` only on the first; it answers when started and after each line.
+FIXTURE = """
+import os, sys, threading
+hold = threading.Event()
+print(flush=True)
+for n, line in enumerate(sys.stdin):
+    if line.strip() == "every" or n == 0:
+        os.open(os.devnull, os.O_RDONLY)
+        threading.Thread(target=hold.wait, daemon=True).start()
+    print(flush=True)
+"""
+
+
+class ProcessCounters(unittest.TestCase):
+    def rounds(self, mode: str, cycles: int = 3) -> dict[str, int]:
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-c", FIXTURE],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        child.stdout.readline()  # started: its imports closed their files
+        counts = [leak_sweep.process_counts(child.pid)]
+        for _ in range(2):
+            for _ in range(cycles):
+                child.stdin.write(mode + "\n")
+                child.stdin.flush()
+                child.stdout.readline()
+            counts.append(leak_sweep.process_counts(child.pid))
+        return leak_sweep.confirmed_growth(*counts)
+
+    def test_leak_per_cycle_is_confirmed(self):
+        self.assertEqual(
+            self.rounds("every"),
+            {"process threads": 3, "process file descriptors": 3},
+        )
+
+    def test_growth_in_one_round_passes(self):
+        self.assertEqual(self.rounds("once"), {})
 
 
 PROGRAM = """

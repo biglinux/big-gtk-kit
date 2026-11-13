@@ -54,7 +54,10 @@ the accessibility bus and, for each surface: warms up, takes census A, opens
 and closes it N times, takes census B and confirms with a second round. A type
 that gained at least one instance per cycle is a leak, unless an `[[allow]]`
 with a per-cycle ceiling and a reason covers it (in the file or in the
-surface). A surface that does not really close is reported as such. Exit 0
+surface). The process's threads (`Threads:` in `/proc/PID/status`) and open
+file descriptors are read with each census; they are exact, so any growth the
+second round repeats is a leak (`process threads`, `process file
+descriptors`). A surface that does not really close is reported as such. Exit 0
 clean, 1 leak, 2 did not run (incomplete file, missing program or `gdbus`);
 `LEAK_SWEEP_DIR` chooses where the censuses and the program log go.
 
