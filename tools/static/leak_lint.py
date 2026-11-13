@@ -502,7 +502,9 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     binders = [
         r"\blet\s+([^=;]+?)\s*(?::[^=;]*)?=(?!=)",
         r"\bfor\s+(.+?)\s+in\b",
-        r"\|([^|]*)\|",
+        # a closure's `|`, not a pattern's or a flag set's: it opens an argument,
+        # a value or a statement
+        r"(?:^|[(,={;>]|\bmove)\s*\|([^|]*)\|",
     ]
     for binder in binders:
         for m in re.finditer(binder, body):
@@ -575,6 +577,11 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     return held
 
 
+# A handler connected on a local or on a field of `self`: `picker.open` is the
+# field of another value, never the local `open`.
+CONNECT = re.compile(r"(?<![\w.])((?:\w+\.)*\w+)\s*\.\s*connect_\w+\s*\(")
+
+
 def rule_handler_holds_owner(src: Source):
     """A handler that holds the object it hangs off, or one of that object's ancestors."""
     for first, last in src.functions():
@@ -612,8 +619,10 @@ def rule_handler_holds_owner(src: Source):
                 if more:
                     parents |= more
                     changed = True
-        for m in re.finditer(r"\b(\w+)\s*\.\s*connect_\w+\s*\(", text):
-            target = m.group(1)
+        for m in CONNECT.finditer(text):
+            target = source_name(m.group(1))
+            if "." in target:
+                continue  # a field of another value, not a local
             index = max(i for i, st in enumerate(starts) if st <= m.start())
             strong = handler_captures(text, m.end(), text[: m.start()], values)
             if target in strong:
@@ -645,11 +654,14 @@ def rule_mutual_siblings(src: Source):
             starts.append(pos)
             pos += len(line) + 1
         holds: dict[str, tuple[set[str], int]] = {}
-        for m in re.finditer(r"\b(\w+)\s*\.\s*connect_\w+\s*\(", text):
+        for m in CONNECT.finditer(text):
+            target = source_name(m.group(1))
+            if "." in target:
+                continue  # a field of another value, not a local
             index = max(i for i, st in enumerate(starts) if st <= m.start())
             before = "\n".join(body[max(0, index - 12) : index + 1])
             strong = handler_captures(text, m.end(), before)
-            entry = holds.setdefault(m.group(1), (set(), first + index + 1))
+            entry = holds.setdefault(target, (set(), first + index + 1))
             entry[0].update(strong)
         for a, (held_a, line_a) in holds.items():
             for b in held_a:
@@ -692,6 +704,14 @@ PROCESS_OBJECT = (
 )
 
 
+def dropped_result(text: str, line_start: int, call_end: int) -> bool:
+    """Whether a statement starts at `line_start` and ends after the call that
+    ends at `call_end`: what the call returns goes nowhere."""
+    before = text[:line_start].rstrip()
+    starts_here = not before or before[-1] in ";{}"
+    return starts_here and text[call_end:].lstrip().startswith(";")
+
+
 def rule_process_object_handler(src: Source):
     """A handler on a process-lifetime object whose id is thrown away."""
     for m in re.finditer(
@@ -700,6 +720,9 @@ def rule_process_object_handler(src: Source):
         + r"\s*\.?\s*connect_(\w+)\s*\(",
         src.text,
     ):
+        call_end = m.end() + len(call_argument(src.text, m.end() - 1)) + 1
+        if not dropped_result(src.text, m.start(), call_end):
+            continue
         yield (
             src.line_of(m.start()),
             (
@@ -723,7 +746,7 @@ def rule_repeating_source_without_weak_exit(src: Source):
     """A repeating source whose id is dropped stops only when its closure returns Break."""
     for m in REPEATING_SOURCE.finditer(src.text):
         arg = call_argument(src.text, m.end() - 1)
-        if not src.text[m.end() + len(arg) + 1 :].lstrip().startswith(";"):
+        if not dropped_result(src.text, m.start(), m.end() + len(arg) + 1):
             continue  # the id is kept, returned or passed on
         closure = top_level_arguments(arg)[-1].strip()
         if re.fullmatch(r"\w+", closure):

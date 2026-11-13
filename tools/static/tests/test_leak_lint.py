@@ -293,6 +293,64 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
+    def test_field_target_names_no_local(self):
+        # bigdesktop apps/bigfiles/src/archive/picker.rs: `picker.open` is the
+        # button, `open` the closure its handler calls.
+        self.assertEqual(
+            lint("""
+            fn connect(picker: &Rc<Picker>) {
+                let open = {
+                    let picker = Rc::downgrade(picker);
+                    move |name: Option<String>| {
+                        let Some(picker) = picker.upgrade() else {
+                            return;
+                        };
+                        picker.show(name);
+                    }
+                };
+                let open = Rc::new(open);
+                let button_open = Rc::clone(&open);
+                picker.open.connect_clicked(move |_| button_open(None));
+            }
+        """),
+            [],
+        )
+
+    def test_flag_set_pipes_bind_nothing(self):
+        # bigdesktop desktop/big-shell-ui/src/popup.rs: the `|` of a pattern and
+        # of a flag set paired with the inner closure's `|popover|`.
+        self.assertEqual(
+            lint("""
+            fn let_the_keyboard_in(popover: &gtk::Popover) {
+                let space = gtk::EventControllerKey::new();
+                let weak = popover.downgrade();
+                space.connect_key_pressed(move |_, key, _, state| {
+                    if !matches!(key, Key::space | Key::KP_Space)
+                        || state.intersects(
+                            ModifierType::CONTROL_MASK
+                                | ModifierType::ALT_MASK
+                                | ModifierType::SUPER_MASK,
+                        )
+                    {
+                        return Proceed;
+                    }
+                    let focus = weak.upgrade().and_then(|popover| {
+                        popover
+                            .root()
+                            .and_then(|root| root.focus())
+                            .filter(|focus| focus.is_ancestor(&popover))
+                    });
+                    match focus {
+                        Some(focus) if focus.activate() => Stop,
+                        _ => Proceed,
+                    }
+                });
+                popover.add_controller(space);
+            }
+        """),
+            [],
+        )
+
     def test_match_arm_binding_shadows_outer(self):
         # pamac frontends/pamac-gtk/src/context_menu.rs: the arm's `widget` is
         # `controller.widget()`, not the function's `widget`.
@@ -469,6 +527,19 @@ class ProcessObjectHandlers(unittest.TestCase):
             fn main() {
                 app.connect_activate(|_| {});
             }
+            fn count_once_online(self: &Rc<Self>) {
+                let handler =
+                    gio::NetworkMonitor::default().connect_network_changed(move |_, _| {});
+                self.once_online.replace(Some(handler));
+            }
+            fn init(sender: Sender) -> Model {
+                Model {
+                    dark_mode_handler: Some({
+                        let input = sender.clone();
+                        adw::StyleManager::default().connect_dark_notify(move |_| input.send(()))
+                    }),
+                }
+            }
         """),
             [],
         )
@@ -519,7 +590,8 @@ class RepeatingSources(unittest.TestCase):
                 });
             }
             fn kept(label: gtk::Label) -> glib::SourceId {
-                let id = glib::timeout_add_local(SECOND, move || {
+                let id =
+                    glib::timeout_add_local(SECOND, move || {
                     label.set_text("x");
                     glib::ControlFlow::Continue
                 });
