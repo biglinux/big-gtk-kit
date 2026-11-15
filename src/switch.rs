@@ -13,10 +13,11 @@ thread_local! {
 /// Let a switch change at once in a window that draws no frames. Called by
 /// [`crate::install`].
 ///
-/// `GtkSwitch` changes its state on the last frame of its slide (GTK 4.22 to
-/// 4.24), and a window the compositor suspended (screens off, covered) gets
-/// no frames: a key or a screen reader's action on it waited until the window
-/// was seen again. The hook runs after the switch's handler started the slide.
+/// `GtkSwitch` changes its state on the last frame of its slide (GTK 4.22
+/// through 4.25.0, still so on `main`), and a window the compositor suspended
+/// (screens off, covered) gets no frames: a key or a screen reader's action
+/// on it waited until the window was seen again. The hook runs after the
+/// switch's handler started the slide.
 pub(crate) fn install() {
     if INSTALLED.replace(true) {
         return;
@@ -86,12 +87,24 @@ mod tests {
         window.destroy();
     }
 
-    /// A switch no frame reaches changes with its action, once.
+    /// Puts `gtk-enable-animations` back as it was when dropped, so a failed
+    /// assert leaves it as the other tests expect.
+    struct Animations(gtk::Settings, bool);
+
+    impl Drop for Animations {
+        fn drop(&mut self) {
+            self.0.set_gtk_enable_animations(self.1);
+        }
+    }
+
+    /// A switch no frame reaches changes with its action, once. The switch is
+    /// in no window, so this covers the unmapped branch of `draws_no_frames`
+    /// only, not a mapped switch in a suspended window.
     #[gtk::test]
     #[ignore = "needs a display"]
     fn unseen_switch_turns_at_once() {
         let settings = gtk::Settings::default().expect("a display");
-        let animated = settings.is_gtk_enable_animations();
+        let _restore = Animations(settings.clone(), settings.is_gtk_enable_animations());
         // Installed twice, the hook still runs once.
         install();
         install();
@@ -101,6 +114,5 @@ mod tests {
         assert!(switch.is_active());
         switch.activate();
         assert!(!switch.is_active());
-        settings.set_gtk_enable_animations(animated);
     }
 }

@@ -56,8 +56,10 @@ This turns on what needs no change at the call sites:
 - releasing the parent surface of every Wayland popup: GDK never drops the
   reference a popup takes on it, so every window that showed a popover, menu or
   tooltip kept its surface after closing, 25 of 25 measured (GTK 4.22 through
-  4.25.0, still so on `main`; limited to the releases whose source was read,
-  and a test fails on one that drops the reference itself);
+  4.25.0, still so on `main`; it runs on those releases only, since on one that
+  drops the reference itself it would unreference the surface twice, so any
+  other release leaks; a test fails on a GTK that belongs on the other side of
+  that list);
 - under the Cairo renderer (`GSK_RENDERER=cairo`), libadwaita's window shadows
   restated so their fade to backdrop changes colours only: GTK keeps every
   blurred shadow corner it draws, keyed by blur and size, and each frame of
@@ -65,7 +67,12 @@ This turns on what needs no change at the call sites:
   focus 70 times a minute without this; every state draws the same pixels
   (GTK 4.24.1, still so on `main`; libadwaita 1.10, left off under
   `GTK_THEME` or granite, where its stylesheet is not in use, and once that
-  stylesheet changes these rules).
+  stylesheet changes these rules);
+- turning a `GtkSwitch` at once, with animations on, when it is off screen or
+  its window is suspended (screens off, covered): GTK changes a switch's state
+  on the last frame of its slide, so a key or a screen reader's action on it
+  waited until the window was seen again (GTK 4.22 through 4.25.0, still so on
+  `main`).
 
 ## Workarounds
 
