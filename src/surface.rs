@@ -16,6 +16,13 @@ thread_local! {
 const WATCHED_KEY: &str = "big-gtk-kit-surface-watched";
 /// `ParentRef` on a popup surface whose parent this module releases.
 const PARENT_KEY: &str = "big-gtk-kit-surface-parent";
+/// The GTK 4 releases whose source keeps a popup's parent, as each minor
+/// series and its last such micro release: 4.22.0 to 4.22.5, 4.23.0 to 4.23.4,
+/// 4.24.0 to 4.24.1 and 4.25.0, read in each tag and measured on 4.24.1. A
+/// release not listed, a later micro one included, leaks the surface rather
+/// than risk unreferencing it twice; `gdk_keeps_the_parent_of_a_finalized_popup`
+/// fails on a listed one that drops the reference itself.
+const FAULTY_GTK: [(u32, u32); 4] = [(22, 5), (23, 4), (24, 1), (25, 0)];
 
 /// Release the parent surface every Wayland popup keeps. Called by
 /// [`crate::install`].
@@ -24,11 +31,15 @@ const PARENT_KEY: &str = "big-gtk-kit-surface-parent";
 /// (`gdkpopup-wayland.c`) and nothing ever drops that reference
 /// (`gdk_surface_finalize` only unlinks the popup from the parent's children),
 /// so a window that showed one popover, menu or tooltip kept its
-/// `GdkWaylandToplevel` after it closed (GTK 4.22.4 and 4.22.5, still so on
-/// `main`). The release is limited to GTK before 4.22.6, so a GTK that fixes it
-/// is not unreferenced twice.
+/// `GdkWaylandToplevel` after it closed (GTK 4.22 through 4.25.0, still so on
+/// `main`). The release runs only on the versions in [`FAULTY_GTK`].
 pub(crate) fn install() {
-    if INSTALLED.replace(true) || gtk::check_version(4, 22, 6).is_none() {
+    let (minor, micro) = (gtk::minor_version(), gtk::micro_version());
+    let faulty = gtk::major_version() == 4
+        && FAULTY_GTK
+            .iter()
+            .any(|&(series, last)| minor == series && micro <= last);
+    if INSTALLED.replace(true) || !faulty {
         return;
     }
     crate::on_every_emission("realize", |widget: gtk::Widget| {
@@ -123,6 +134,70 @@ mod tests {
         pump();
         last.destroy();
         pump();
-        assert_eq!(finalized.get(), 25);
+        assert_eq!(
+            finalized.get(),
+            25,
+            "add this GTK to FAULTY_GTK if gdk_keeps_the_parent_of_a_finalized_popup passes"
+        );
+    }
+
+    /// The defect itself, on the GTK under test: once its popup is finalized, a
+    /// window that showed a popover still has its surface, where a window that
+    /// showed none has lost it. Fails on a GTK that drops the popup's reference
+    /// itself; that version then leaves [`FAULTY_GTK`]. The release of an
+    /// earlier test's `install()` is taken off the popup first. On such a GTK,
+    /// `popover_windows_release_surface` unreferences twice and may abort the
+    /// binary first: run this test alone (`cargo test gdk_keeps -- --ignored`).
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn gdk_keeps_the_parent_of_a_finalized_popup() {
+        gtk::init().expect("a display");
+        let without_popup = Rc::new(Cell::new(0));
+        let with_popup = Rc::new(Cell::new(0));
+        let popups = Rc::new(Cell::new(0));
+        for (finalized, show) in [(&without_popup, false), (&with_popup, true)] {
+            let popover = gtk::Popover::builder()
+                .child(&gtk::Label::new(Some("x")))
+                .build();
+            let button = gtk::MenuButton::builder().popover(&popover).build();
+            let window = gtk::Window::builder().child(&button).build();
+            window.present();
+            pump();
+            watch(&window.surface().expect("realized"), finalized);
+            if show {
+                button.popup();
+                pump();
+                let popup = popover.surface().expect("a shown popover's surface");
+                watch(&popup, &popups);
+                // SAFETY: PARENT_KEY holds a `ParentRef`. Forgotten, it never
+                // drops GDK's reference, as if the release were not installed.
+                if let Some(release) = unsafe { popup.steal_data::<ParentRef>(PARENT_KEY) } {
+                    std::mem::forget(release);
+                }
+                button.popdown();
+                pump();
+            }
+            drop((popover, button));
+            window.destroy();
+            drop(window);
+            pump();
+            // GDK holds the last closed window's surface until another window
+            // comes: one more moves that reference along.
+            let last = gtk::Window::new();
+            last.present();
+            pump();
+            last.destroy();
+            pump();
+        }
+        assert_eq!(without_popup.get(), 1, "a window without a popup finalizes");
+        assert_eq!(popups.get(), 1, "the popup surface finalizes");
+        assert_eq!(
+            with_popup.get(),
+            0,
+            "GTK {}.{}.{} drops a popup's parent itself: take it out of FAULTY_GTK",
+            gtk::major_version(),
+            gtk::minor_version(),
+            gtk::micro_version()
+        );
     }
 }
