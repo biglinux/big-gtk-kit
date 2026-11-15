@@ -715,7 +715,7 @@ def dropped_result(text: str, line_start: int, call_end: int) -> bool:
 def rule_process_object_handler(src: Source):
     """A handler on a process-lifetime object whose id is thrown away."""
     for m in re.finditer(
-        r"(?m)^[ \t]*(?!let\b)[^\n;=]*?"
+        r"(?m)^[ \t]*(?:let\s+_\s*=\s*)?(?!let\b)[^\n;=]*?"
         + PROCESS_OBJECT
         + r"\s*\.?\s*connect_(\w+)\s*\(",
         src.text,

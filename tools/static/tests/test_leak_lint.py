@@ -294,8 +294,7 @@ class WarningRules(unittest.TestCase):
         )
 
     def test_field_target_names_no_local(self):
-        # bigdesktop apps/bigfiles/src/archive/picker.rs: `picker.open` is the
-        # button, `open` the closure its handler calls.
+        # `picker.open` is the button, `open` the closure its handler calls.
         self.assertEqual(
             lint("""
             fn connect(picker: &Rc<Picker>) {
@@ -317,8 +316,8 @@ class WarningRules(unittest.TestCase):
         )
 
     def test_flag_set_pipes_bind_nothing(self):
-        # bigdesktop desktop/big-shell-ui/src/popup.rs: the `|` of a pattern and
-        # of a flag set paired with the inner closure's `|popover|`.
+        # The `|` of a pattern and of a flag set paired with the inner
+        # closure's `|popover|`.
         self.assertEqual(
             lint("""
             fn let_the_keyboard_in(popover: &gtk::Popover) {
@@ -352,8 +351,7 @@ class WarningRules(unittest.TestCase):
         )
 
     def test_match_arm_binding_shadows_outer(self):
-        # pamac frontends/pamac-gtk/src/context_menu.rs: the arm's `widget` is
-        # `controller.widget()`, not the function's `widget`.
+        # The arm's `widget` is `controller.widget()`, not the function's `widget`.
         self.assertEqual(
             lint("""
             fn attach(widget: &gtk::Widget, open: impl Fn(&gtk::Widget) -> bool + 'static) {
@@ -516,6 +514,14 @@ class ProcessObjectHandlers(unittest.TestCase):
             }
         """),
         )
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn count_once_online() {
+                let _ = gio::NetworkMonitor::default().connect_network_changed(|_, _| {});
+            }
+        """),
+        )
 
     def test_kept_id_and_main_are_fine(self):
         self.assertEqual(
@@ -551,7 +557,6 @@ class RepeatingSources(unittest.TestCase):
     RULE = ("repeating-source-without-weak-exit", "warning")
 
     def test_unbounded_dropped_source_warns(self):
-        # bigdesktop desktop/big-shell-ui/src/notices.rs
         self.assertIn(
             self.RULE,
             lint("""
