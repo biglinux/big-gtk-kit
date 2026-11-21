@@ -180,7 +180,9 @@ fn holds_stop(widget: &gtk::Widget) -> bool {
 /// insensitive entry counts as a stop: it may be shown or enabled later.
 fn follow_body(pane: &gtk::ScrolledWindow) {
     let adjustment = pane.vadjustment();
-    let scrolls = adjustment.upper() > adjustment.page_size();
+    // The pane's content measures a pixel past it when nothing overflows, its
+    // height rounded: that is no scroll for the keys.
+    let scrolls = adjustment.upper() - adjustment.page_size() > 1.0;
     pane.set_focusable(scrolls);
     pane.set_can_focus(scrolls || pane.child().is_some_and(|child| holds_stop(&child)));
 }
