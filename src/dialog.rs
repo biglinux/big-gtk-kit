@@ -198,14 +198,24 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
             closing.reusable.set(!windowed);
         });
     // libadwaita takes the focus into a dialog only the first time it maps and
-    // when it is presented while shown, so one asked again opens with none: Esc
-    // and Enter do nothing until a Tab. The first map is left to libadwaita.
+    // when it is presented while shown, so one asked again opens with none, and
+    // on that first map it prefers a destructive answer to the default one. So
+    // each map gives the focus to the field set as the dialog's focus, else to
+    // the default answer; a dialog asked again with neither takes it itself.
     let mapped_before = Cell::new(false);
     dialog
         .upcast_ref::<adw::Dialog>()
         .connect_map(move |dialog| {
-            if mapped_before.replace(true) && dialog.focus().is_none() {
-                dialog.grab_focus();
+            let asked_again = mapped_before.replace(true);
+            let field = dialog.focus().filter(|focus| !focus.is::<gtk::Button>());
+            match field.or_else(|| dialog.default_widget()) {
+                Some(target) => {
+                    target.grab_focus();
+                }
+                None if asked_again => {
+                    dialog.grab_focus();
+                }
+                None => {}
             }
         });
     let give_back = Rc::new(give_back);

@@ -668,6 +668,7 @@ mod tests {
                 .default_response("cancel")
                 .build();
             alert.add_responses(&[("cancel", "_Cancel"), ("delete", "_Delete")]);
+            alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
             alert.present();
             for _ in 0..10 {
                 pump();
@@ -684,6 +685,45 @@ mod tests {
             let shown = alert.dialog().clone();
             drop(alert);
             cancel.emit_clicked();
+            while shown.parent().is_some() {
+                pump();
+            }
+            pump();
+        }
+        window.destroy();
+        pump();
+    }
+
+    /// A question with a field opens with the focus in the field, asked again
+    /// as the first time.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn field_takes_the_focus_each_time() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.present();
+        for round in 0..2 {
+            let entry = gtk::Entry::new();
+            let alert = Alert::builder(Some(&window))
+                .heading("Name?")
+                .default_response("save")
+                .build();
+            alert.add_responses(&[("cancel", "_Cancel"), ("save", "_Save")]);
+            alert.set_extra_child(Some(&entry));
+            alert.set_focus(Some(&entry));
+            alert.present();
+            for _ in 0..10 {
+                pump();
+            }
+            let focused = GtkWindowExt::focus(&window);
+            assert!(
+                focused.is_some_and(|focus| focus == entry || focus.is_ancestor(&entry)),
+                "round {round}: the field lacks the focus"
+            );
+            let shown = alert.dialog().clone();
+            drop(alert);
+            shown.close();
             while shown.parent().is_some() {
                 pump();
             }
