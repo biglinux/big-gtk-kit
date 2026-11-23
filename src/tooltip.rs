@@ -726,11 +726,7 @@ mod tests {
         unsafe { display.set_data(SHOW_WHEN_INACTIVE_KEY, true) };
         assert!(display_flag(SHOW_WHEN_INACTIVE_KEY));
         set_follow_pointer(true);
-        // SAFETY: as above.
-        assert!(
-            unsafe { display.data::<bool>(FOLLOW_POINTER_KEY) }
-                .is_some_and(|flag| unsafe { *flag.as_ref() })
-        );
+        assert!(display_flag(FOLLOW_POINTER_KEY));
 
         let owner = gtk::Button::with_label("Save");
         owner.set_tooltip_text(Some("Save the document"));

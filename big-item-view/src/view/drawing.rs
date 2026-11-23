@@ -163,7 +163,7 @@ impl imp::ItemView {
                     *scratch = ItemContent::default();
                     presenter.content(position, &crate::view::presented(&item), &mut scratch);
                     vacant.insert(Entry {
-                        _object: item.clone(),
+                        _object: item,
                         content: scratch.clone(),
                         icon: None,
                         title: None,

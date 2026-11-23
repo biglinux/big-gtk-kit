@@ -72,9 +72,8 @@ fn watch(native: &gtk::Widget) {
         return;
     };
     // SAFETY: PARENT_KEY holds a `ParentRef` (see its definition).
-    if surface.type_().name() != "GdkWaylandPopup"
-        || unsafe { surface.data::<ParentRef>(PARENT_KEY).is_some() }
-    {
+    let watched = unsafe { surface.data::<ParentRef>(PARENT_KEY).is_some() };
+    if surface.type_().name() != "GdkWaylandPopup" || watched {
         return;
     }
     let Some(parent) = surface

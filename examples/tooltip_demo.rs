@@ -98,7 +98,7 @@ fn main() -> glib::ExitCode {
         halves.set_draw_func(|_, cairo, width, height| {
             cairo.set_source_rgb(0.55, 0.65, 0.85);
             cairo.rectangle(0.0, 0.0, f64::from(width / 2), f64::from(height));
-            cairo.fill().ok();
+            let _ = cairo.fill();
         });
         big_gtk_kit::tooltip::set_area_tips(&halves, |halves, x, _| {
             let half = halves.width() / 2;

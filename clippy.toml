@@ -1,3 +1,5 @@
+allow-unwrap-in-tests = true
+
 # GTK and libadwaita APIs that leak, measured, and the big-gtk-kit function to
 # use instead. This is the canonical list: a consumer copies these entries into
 # the `disallowed-methods` / `disallowed-types` of its own clippy.toml (Clippy has
