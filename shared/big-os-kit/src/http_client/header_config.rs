@@ -80,14 +80,15 @@ fn render_request_config(url: &str, headers: &[(&str, &str)]) -> Result<String, 
     Ok(output)
 }
 
-pub(super) fn validate_header_name(value: &str) -> Result<(), HttpError> {
-    if value.is_empty()
-        || value.contains(':')
-        || value.contains('\r')
-        || value.contains('\n')
-        || value.contains('"')
-        || value.contains('\\')
-    {
+/// Accept an HTTP field name: an RFC 9110 token of at most 256 bytes.
+///
+/// # Errors
+///
+/// [`HttpError::HeaderName`] when `name` is empty, longer than 256 bytes, or
+/// holds a byte outside the token characters.
+pub fn validate_header_name(name: &str) -> Result<(), HttpError> {
+    let token = |byte: u8| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte);
+    if name.is_empty() || name.len() > 256 || !name.bytes().all(token) {
         return Err(HttpError::HeaderName);
     }
     Ok(())
@@ -123,6 +124,26 @@ mod tests {
             rendered,
             "url = \"https://api.example.test/items?token=secret\"\nheader = \"Authorization: Bearer secret\"\nheader = \"Accept: text/event-stream\"\n"
         );
+    }
+
+    #[test]
+    fn header_names_are_tokens() {
+        for name in ["Accept", "X-Api-Key", "a!#$%&'*+-.^_`|~9"] {
+            assert!(validate_header_name(name).is_ok(), "{name}");
+        }
+        let long = "a".repeat(257);
+        for name in [
+            "",
+            "Bad Name",
+            "Bad:Name",
+            "Bad\nName",
+            "Bad\"Name",
+            "Bad\\Name",
+            "Ação",
+            &long,
+        ] {
+            assert!(validate_header_name(name).is_err(), "{name}");
+        }
     }
 
     #[test]

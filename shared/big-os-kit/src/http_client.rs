@@ -19,6 +19,7 @@ use std::time::Duration;
 
 mod header_config;
 use header_config::CurlRequestConfig;
+pub use header_config::validate_header_name;
 
 const CURL: &str = "curl";
 const USER_AGENT: &str = "BigLinuxRustApp/0.1 (https://github.com/biglinux/big)";
@@ -30,6 +31,9 @@ const FAST_TIMEOUT_SECS: u64 = 5;
 const MAX_TEXT_BODY_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 128 * 1024;
 const DEFAULT_MAX_REDIRECTS: u8 = 10;
+/// curl's exit code when the host name does not resolve (`man curl`).
+const CURL_COULDNT_RESOLVE_HOST: i32 = 6;
+const RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Why a request through `curl` got no usable answer.
 #[derive(Debug, thiserror::Error)]
@@ -117,6 +121,15 @@ pub struct HttpStreamResponse {
     pub content_length: Option<u64>,
     /// Streaming body reader. Callers impose their semantic cap.
     pub reader: Box<dyn Read>,
+}
+
+/// How long a request may take.
+#[derive(Debug, Clone, Copy)]
+enum Deadline {
+    /// The whole request, for an answer read into memory.
+    Total(Duration),
+    /// Each wait for more bytes once connected, for a download of any length.
+    Stall(Duration),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +239,86 @@ pub fn http_get_with_headers(url: &str, headers: &RequestHeaders<'_>) -> Option<
     http_get_text_with_headers(url, headers, &[], Duration::from_secs(TIMEOUT_SECS), true)
 }
 
+/// GET text as [`http_get_with_headers`] does, trying once more after 500 ms
+/// when the server answers 5xx or the request fails before an answer, but not
+/// when the host name does not resolve. `extra_headers`, such as `("Accept",
+/// "application/json")`, go to every redirect target.
+#[must_use]
+pub fn http_get_with_retry(url: &str, extra_headers: &[(&str, &str)]) -> Option<String> {
+    for attempt in 0..2 {
+        if attempt > 0 {
+            std::thread::sleep(RETRY_DELAY);
+        }
+        match curl_bytes(
+            HttpMethod::Get,
+            url,
+            &RequestHeaders::default(),
+            extra_headers,
+            None,
+            MAX_TEXT_BODY_BYTES,
+            Deadline::Total(Duration::from_secs(TIMEOUT_SECS)),
+            true,
+        ) {
+            Ok(response) if response.status < 500 => return text_body(response),
+            Err(HttpError::CurlExited(CURL_COULDNT_RESOLVE_HOST)) => return None,
+            Ok(_) | Err(_) => {}
+        }
+    }
+    None
+}
+
+/// GET a response into memory with a caller-owned body cap. Redirects are
+/// followed unless `headers` carries a `Referer`, which a provider may check
+/// and which must not reach another host.
+///
+/// # Errors
+///
+/// [`HttpError`] when the URL or a header cannot reach `curl`, `curl` does not
+/// start or fails before an answer, or the body passes `max_bytes`. An error
+/// status is an answer, in [`HttpResponseBytes::status`].
+pub fn http_get_bytes_capped(
+    url: &str,
+    headers: &RequestHeaders<'_>,
+    max_bytes: u64,
+    timeout: Duration,
+) -> Result<HttpResponseBytes, HttpError> {
+    curl_bytes(
+        HttpMethod::Get,
+        url,
+        headers,
+        &[],
+        None,
+        max_bytes,
+        Deadline::Total(timeout),
+        headers.referer.is_empty(),
+    )
+}
+
+/// GET a response to read as it arrives, for a download of any length: after
+/// connecting, it fails only once no byte arrives for `stall_timeout`, which
+/// curl measures in whole seconds. Redirects as [`http_get_bytes_capped`].
+///
+/// # Errors
+///
+/// [`HttpError`] when the URL or a header cannot reach `curl`, `curl` does not
+/// start or fails before an answer, or its headers are missing or too large. An
+/// error status is an answer.
+pub fn http_get_stream(
+    url: &str,
+    headers: &RequestHeaders<'_>,
+    stall_timeout: Duration,
+) -> Result<HttpStreamResponse, HttpError> {
+    curl_stream(
+        HttpMethod::Get,
+        url,
+        headers,
+        &[],
+        None,
+        Deadline::Stall(stall_timeout),
+        headers.referer.is_empty(),
+    )
+}
+
 /// GET a response into memory with caller-owned body cap. Redirects are
 /// disabled because curl sends the extra headers, such as API keys, to every
 /// redirect target.
@@ -249,7 +342,7 @@ pub fn http_get_bytes_capped_with_extra_headers(
         extra_headers,
         None,
         max_bytes,
-        timeout,
+        Deadline::Total(timeout),
         false,
     )
 }
@@ -277,7 +370,7 @@ pub fn http_post_json_stream_with_extra_headers(
         headers,
         &all_headers,
         Some(json_body.as_bytes()),
-        timeout,
+        Deadline::Total(timeout),
         false,
     )
 }
@@ -305,10 +398,15 @@ fn http_get_text_with_headers(
         extra_headers,
         None,
         MAX_TEXT_BODY_BYTES,
-        timeout,
+        Deadline::Total(timeout),
         follow_redirects,
     )
     .ok()?;
+    text_body(response)
+}
+
+/// The body of a 200 answer, when it is UTF-8.
+fn text_body(response: HttpResponseBytes) -> Option<String> {
     (response.status == 200)
         .then(|| String::from_utf8(response.bytes).ok())
         .flatten()
@@ -321,7 +419,7 @@ fn curl_bytes(
     extra_headers: &[(&str, &str)],
     body: Option<&[u8]>,
     max_bytes: u64,
-    timeout: Duration,
+    deadline: Deadline,
     follow_redirects: bool,
 ) -> Result<HttpResponseBytes, HttpError> {
     let mut process = spawn_curl(
@@ -330,7 +428,7 @@ fn curl_bytes(
         headers,
         extra_headers,
         body,
-        timeout,
+        deadline,
         follow_redirects,
     )?;
     if let Some(body) = body {
@@ -356,7 +454,7 @@ fn curl_stream(
     headers: &RequestHeaders<'_>,
     extra_headers: &[(&str, &str)],
     body: Option<&[u8]>,
-    timeout: Duration,
+    deadline: Deadline,
     follow_redirects: bool,
 ) -> Result<HttpStreamResponse, HttpError> {
     let mut process = spawn_curl(
@@ -365,7 +463,7 @@ fn curl_stream(
         headers,
         extra_headers,
         body,
-        timeout,
+        deadline,
         follow_redirects,
     )?;
     if let Some(body) = body {
@@ -394,12 +492,12 @@ fn spawn_curl(
     headers: &RequestHeaders<'_>,
     extra_headers: &[(&str, &str)],
     body: Option<&[u8]>,
-    timeout: Duration,
+    deadline: Deadline,
     follow_redirects: bool,
 ) -> Result<CurlProcess, HttpError> {
     validate_url(url)?;
-    let mut command = base_curl(timeout, headers.user_agent);
-    restrict_protocols(&mut command);
+    let mut command = base_curl(deadline, headers.user_agent);
+    restrict_protocols(&mut command, url);
     command.arg("--request").arg(match method {
         HttpMethod::Get => "GET",
         HttpMethod::Post => "POST",
@@ -434,24 +532,42 @@ fn spawn_curl(
     })
 }
 
-/// HTTP and HTTPS only, redirects included: no `file://` or other scheme.
-fn restrict_protocols(command: &mut Command) {
+/// HTTP and HTTPS only, redirects included: no `file://` or other scheme, and
+/// an `https` request never follows a redirect down to plain `http`.
+fn restrict_protocols(command: &mut Command, url: &str) {
+    let secure = url
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
     command
         .arg("--proto")
         .arg("=http,https")
         .arg("--proto-redir")
-        .arg("=http,https");
+        .arg(if secure { "=https" } else { "=http,https" });
 }
 
-fn base_curl(timeout: Duration, user_agent: &str) -> Command {
+fn base_curl(deadline: Deadline, user_agent: &str) -> Command {
     let mut command = Command::new(CURL);
     command
         .arg("--silent")
         .arg("--show-error")
         .arg("--connect-timeout")
-        .arg(FAST_TIMEOUT_SECS.to_string())
-        .arg("--max-time")
-        .arg(timeout.as_secs_f64().to_string())
+        .arg(FAST_TIMEOUT_SECS.to_string());
+    match deadline {
+        Deadline::Total(timeout) => {
+            command
+                .arg("--max-time")
+                .arg(timeout.as_secs_f64().to_string());
+        }
+        // Below one byte a second for that long, curl gives up.
+        Deadline::Stall(stall) => {
+            command
+                .arg("--speed-limit")
+                .arg("1")
+                .arg("--speed-time")
+                .arg(stall.as_secs().max(1).to_string());
+        }
+    }
+    command
         .arg("--user-agent")
         .arg(if user_agent.is_empty() {
             USER_AGENT
@@ -594,18 +710,105 @@ mod tests {
         assert_eq!(read_capped(&mut reader, u64::MAX).unwrap(), b"abcdef");
     }
 
+    fn arguments(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
     fn protocol_policy_restricts_redirects() {
         let mut command = Command::new(CURL);
-        restrict_protocols(&mut command);
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        restrict_protocols(&mut command, "http://example.com/");
         assert_eq!(
-            args,
+            arguments(&command),
             ["--proto", "=http,https", "--proto-redir", "=http,https"]
         );
+        let mut command = Command::new(CURL);
+        restrict_protocols(&mut command, "HTTPS://example.com/");
+        assert_eq!(
+            arguments(&command),
+            ["--proto", "=http,https", "--proto-redir", "=https"]
+        );
+    }
+
+    /// A stream has no total deadline, so a long download is not cut short.
+    #[test]
+    fn stream_deadline_is_a_stall_limit() {
+        let total = arguments(&base_curl(Deadline::Total(Duration::from_secs(15)), ""));
+        assert!(total.windows(2).any(|pair| pair == ["--max-time", "15"]));
+        let stall = arguments(&base_curl(Deadline::Stall(Duration::from_secs(30)), ""));
+        assert!(!stall.iter().any(|arg| arg == "--max-time"));
+        assert!(
+            stall
+                .windows(4)
+                .any(|args| args == ["--speed-limit", "1", "--speed-time", "30"])
+        );
+    }
+
+    /// Serve one canned answer per connection, in order, on a local port.
+    fn serve(answers: Vec<&'static [u8]>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for answer in answers {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                stream.write_all(answer).unwrap();
+            }
+        });
+        (url, server)
+    }
+
+    #[test]
+    fn retry_follows_a_server_error() {
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 503 Busy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+        ]);
+        assert_eq!(http_get_with_retry(&url, &[]).as_deref(), Some("ok"));
+        server.join().unwrap();
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        ]);
+        assert_eq!(http_get_with_retry(&url, &[]), None);
+        server.join().unwrap();
+    }
+
+    /// A redirect is followed, unless a Referer would go to the other host.
+    #[test]
+    fn capped_get_keeps_a_referer_home() {
+        let target = serve(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nart",
+        ]);
+        let redirect = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            target.0
+        )
+        .leak()
+        .as_bytes();
+        let (url, server) = serve(vec![redirect, redirect]);
+        let followed = http_get_bytes_capped(
+            &url,
+            &RequestHeaders::default(),
+            1024,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            (followed.status, followed.bytes.as_slice()),
+            (200, &b"art"[..])
+        );
+        let headers = RequestHeaders {
+            referer: "http://provider.example/",
+            ..RequestHeaders::default()
+        };
+        let kept = http_get_bytes_capped(&url, &headers, 1024, Duration::from_secs(5)).unwrap();
+        assert_eq!(kept.status, 302);
+        server.join().unwrap();
+        target.1.join().unwrap();
     }
 
     #[test]
