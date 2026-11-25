@@ -143,6 +143,16 @@ impl FileRequest {
         self
     }
 
+    /// Offer a named file type by its file name suffixes, in any letter case,
+    /// as `gtk::FileFilter::add_suffix` matches them: `("Audio", ["mp3"])`
+    /// also offers `SONG.MP3`.
+    #[must_use]
+    pub fn offering_suffixes(self, label: impl Into<String>, suffixes: &[&str]) -> Self {
+        let patterns: Vec<String> = suffixes.iter().map(|suffix| suffix_glob(suffix)).collect();
+        let patterns: Vec<&str> = patterns.iter().map(String::as_str).collect();
+        self.offering(label, &patterns)
+    }
+
     /// Offer a named file type, as in `("Images", ["*.png", "*.jpg"])`.
     #[must_use]
     pub fn offering(mut self, label: impl Into<String>, patterns: &[&str]) -> Self {
@@ -156,6 +166,31 @@ impl FileRequest {
         });
         self
     }
+}
+
+/// The glob `*.suffix` in any letter case, written as GTK writes a suffix
+/// filter for the portal: `mp3` gives `*.[mM][pP]3`.
+fn suffix_glob(suffix: &str) -> String {
+    let mut glob = String::from("*.");
+    for character in suffix.chars() {
+        let lower = character.to_lowercase().collect::<String>();
+        let upper = character.to_uppercase().collect::<String>();
+        if lower == upper {
+            if matches!(character, '*' | '?' | '[' | ']') {
+                glob.push('[');
+                glob.push(character);
+                glob.push(']');
+            } else {
+                glob.push(character);
+            }
+        } else {
+            glob.push('[');
+            glob.push_str(&lower);
+            glob.push_str(&upper);
+            glob.push(']');
+        }
+    }
+    glob
 }
 
 /// Ask, and call `chosen` with the answer. `Ok(None)` is a cancel.
@@ -520,6 +555,16 @@ mod tests {
         assert!(local_paths(Ok(Vec::new())).is_empty());
         let failed = glib::Error::new(gtk::DialogError::Failed, "broken");
         assert!(local_paths(Err(failed)).is_empty());
+    }
+
+    /// GTK's own suffix filter matches the same names: an oracle for the glob.
+    #[test]
+    fn suffix_globs_match_any_case() {
+        assert_eq!(suffix_glob("mp3"), "*.[mM][pP]3");
+        assert_eq!(suffix_glob("tar.gz"), "*.[tT][aA][rR].[gG][zZ]");
+        assert_eq!(suffix_glob("a*b"), "*.[aA][*][bB]");
+        let request = FileRequest::open_files().offering_suffixes("Audio", &["mp3", "ogg"]);
+        assert_eq!(request.types[0].patterns, ["*.[mM][pP]3", "*.[oO][gG][gG]"]);
     }
 
     #[test]
