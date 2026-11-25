@@ -11,7 +11,9 @@ use gtk::cairo;
 /// sub-path the caller fills or strokes.
 ///
 /// The radius is held to half the shorter side, so a small rectangle becomes a
-/// capsule instead of a path that crosses itself.
+/// capsule instead of a path that crosses itself, and to zero. An empty
+/// rectangle adds nothing: a collapsed widget would otherwise leave a stray
+/// point the next path starts from.
 pub fn rounded_rectangle(
     cr: &cairo::Context,
     x: f64,
@@ -20,7 +22,10 @@ pub fn rounded_rectangle(
     height: f64,
     radius: f64,
 ) {
-    let radius = radius.min(width / 2.0).min(height / 2.0);
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    let radius = radius.min(width / 2.0).min(height / 2.0).max(0.0);
     cr.new_sub_path();
     cr.arc(x + width - radius, y + radius, radius, -FRAC_PI_2, 0.0);
     cr.arc(
@@ -52,6 +57,17 @@ mod tests {
         // A radius past half the height still fills the rectangle and no more.
         assert_eq!(extents(20.0, 10.0, 30.0), (4.0, 6.0, 24.0, 16.0));
         assert_eq!(extents(20.0, 10.0, 0.0), (4.0, 6.0, 24.0, 16.0));
+    }
+
+    #[test]
+    fn empty_rectangle_adds_no_path() {
+        let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 64, 64).unwrap();
+        let cr = cairo::Context::new(&surface).unwrap();
+        rounded_rectangle(&cr, 4.0, 6.0, 0.0, 10.0, 3.0);
+        rounded_rectangle(&cr, 4.0, 6.0, -5.0, 10.0, 3.0);
+        assert!(!cr.has_current_point().unwrap());
+        // A negative radius draws square corners.
+        assert_eq!(extents(20.0, 10.0, -3.0), (4.0, 6.0, 24.0, 16.0));
     }
 
     #[test]
