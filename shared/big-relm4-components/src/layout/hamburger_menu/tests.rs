@@ -1632,3 +1632,38 @@ fn labels_line_up_past_check_marks() {
         window.close();
     });
 }
+
+/// GTK 4.24 leaves a native item unnamed for a screen reader; the menu names
+/// it by its text once it opens.
+#[test]
+fn native_items_are_named() {
+    big_testkit::harness::require_gtk_test(|| {
+        let menu = gio::Menu::new();
+        menu.append(Some("Open Folder"), Some("win.open-folder"));
+        let popover = popover_menu(Some(menu.upcast_ref()));
+        let button = gtk::MenuButton::new();
+        button.set_popover(Some(&popover));
+        let window = gtk::Window::new();
+        window.set_child(Some(&button));
+        window.present();
+        assert!(big_testkit::harness::pump_until(|| window.is_mapped()));
+        popover.set_autohide(false);
+        button.popup();
+        assert!(big_testkit::harness::pump_until(|| popover.is_visible()));
+
+        let item = subtree(&popover)
+            .find(|widget| widget.type_().name() == "GtkModelButton")
+            .expect("a native menu draws its items as model buttons");
+        // SAFETY: the item outlives the call, and the property's variadic
+        // value is a NUL-terminated string.
+        let mismatch: Option<glib::GString> = unsafe {
+            glib::translate::from_glib_full(gtk::ffi::gtk_test_accessible_check_property(
+                glib::translate::ToGlibPtr::to_glib_none(item.upcast_ref::<gtk::Accessible>()).0,
+                gtk::ffi::GTK_ACCESSIBLE_PROPERTY_LABEL,
+                c"Open Folder".as_ptr(),
+            ))
+        };
+        assert_eq!(mismatch, None);
+        window.destroy();
+    });
+}

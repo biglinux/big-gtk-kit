@@ -264,6 +264,10 @@ impl BigMenuActionGroup {
 /// A native model's submenus are GTK's own popovers, and GTK 4.24 cascades
 /// their popdown: Left or Escape in one closes the whole menu. The structured
 /// builder closes one level.
+///
+/// GTK 4.24 labels a native item by a child label whose role is presentation,
+/// and its name computation skips such labels, so every item would reach a
+/// screen reader unnamed; each is named by its text when the menu opens.
 #[must_use]
 pub fn popover_menu(model: Option<&gio::MenuModel>) -> gtk::PopoverMenu {
     // The rows' style reaches the display with the first menu, which a window
@@ -274,7 +278,28 @@ pub fn popover_menu(model: Option<&gio::MenuModel>) -> gtk::PopoverMenu {
         .flags(gtk::PopoverMenuFlags::NESTED)
         .build();
     popover.set_menu_model(model);
+    popover.connect_map(|menu| name_menu_items(menu.upcast_ref()));
     popover
+}
+
+/// Name each native menu item under `menu` by the text of its label; the
+/// structured rows name themselves.
+fn name_menu_items(menu: &gtk::Widget) {
+    for item in big_gtk_kit::widget_tree::descendants(menu) {
+        let is_menu_item = item.type_().name() == "GtkModelButton"
+            && matches!(
+                item.accessible_role(),
+                gtk::AccessibleRole::MenuItem
+                    | gtk::AccessibleRole::MenuItemCheckbox
+                    | gtk::AccessibleRole::MenuItemRadio
+            );
+        let label = big_gtk_kit::widget_tree::children(&item)
+            .find_map(|part| part.downcast::<gtk::Label>().ok());
+        if is_menu_item && let Some(label) = label {
+            item.reset_relation(gtk::AccessibleRelation::LabelledBy);
+            item.update_property(&[gtk::accessible::Property::Label(&label.text())]);
+        }
+    }
 }
 
 /// Attach a structured action popover copied from `menu` with named action rows.
