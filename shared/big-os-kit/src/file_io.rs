@@ -18,7 +18,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rustix::fs::{Advice, OFlags, fadvise, fcntl_getfl, fcntl_setfl, listxattr_query};
+use rustix::fs::{Advice, fadvise, listxattr_query};
 
 /// Open a regular file for verification without following a final symlink.
 ///
@@ -271,14 +271,17 @@ impl From<std::io::Error> for BigBoundedReadError {
 /// The helper reads one extra byte to distinguish an exact-size file from an
 /// oversized file. Callers that import user-selected documents can surface
 /// [`BigBoundedReadError::TooLarge`] as a product error instead of risking an
-/// unbounded allocation. A FIFO, device or socket is refused: a path from an
-/// untrusted tree may name one, and reading it could block the worker forever.
+/// unbounded allocation. A FIFO, device or socket is refused without being
+/// opened: a path from an untrusted tree may name one, and opening it wakes a
+/// FIFO's waiting writer, runs a device's open hook (a serial board resets) or
+/// gives a session leader a controlling terminal.
 ///
 /// # Errors
 ///
 /// Returns [`BigBoundedReadError::Io`] for open/read failures (`InvalidInput`
-/// for a path that is not a regular file), or [`BigBoundedReadError::TooLarge`]
-/// when the file exceeds `max_bytes`.
+/// for a path that is not a regular file, `Unsupported` where `/proc` is not
+/// mounted), or [`BigBoundedReadError::TooLarge`] when the file exceeds
+/// `max_bytes`.
 ///
 /// # Examples
 ///
@@ -292,23 +295,7 @@ impl From<std::io::Error> for BigBoundedReadError {
 /// let _ = std::fs::remove_file(path);
 /// ```
 pub fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, BigBoundedReadError> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    // O_NONBLOCK keeps the open of a FIFO with no writer from waiting for one;
-    // the type check then refuses it before any read.
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "expected a regular file",
-        )
-        .into());
-    }
-    // Reads of a regular file ignore O_NONBLOCK on most filesystems, not on
-    // all (FUSE), so the read below waits as a plain one would.
-    clear_nonblocking(&file)?;
+    let file = open_regular(path)?;
     let mut bytes = Vec::new();
     let mut limited: Take<File> = file.take(max_bytes.saturating_add(1));
     limited.read_to_end(&mut bytes)?;
@@ -318,10 +305,40 @@ pub fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, BigBoundedRe
     Ok(bytes)
 }
 
-/// Clear `O_NONBLOCK` on `file`, keeping its other status flags.
-fn clear_nonblocking(file: &File) -> std::io::Result<()> {
-    let flags = fcntl_getfl(file)?;
-    Ok(fcntl_setfl(file, flags - OFlags::NONBLOCK)?)
+/// `path` opened for reading when it names a regular file, following symlinks.
+///
+/// The type is read through an `O_PATH` descriptor, which opens nothing; the
+/// file is then opened through `/proc/self/fd`, which is that same inode
+/// whatever has taken its name since.
+fn open_regular(path: &Path) -> std::io::Result<File> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let named = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH)
+        .open(path)?;
+    if !named.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "expected a regular file",
+        ));
+    }
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open(format!("/proc/self/fd/{}", named.as_raw_fd()))
+        .map_err(|error| {
+            // The descriptor's link names the inode even once it is unlinked,
+            // so a missing link is a missing /proc.
+            if error.kind() == std::io::ErrorKind::NotFound {
+                std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "/proc is not mounted: a file is opened through its descriptor",
+                )
+            } else {
+                error
+            }
+        })
 }
 
 /// [`read_bounded`] for a file that may not exist yet, such as saved state:

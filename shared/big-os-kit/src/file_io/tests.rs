@@ -226,26 +226,73 @@ fn private_directory_reports_missing_parent() {
     let _ = fs::remove_dir_all(parent);
 }
 
+/// Refusing a FIFO opens nothing: a writer waiting for a reader is not woken
+/// and its message is not lost.
 #[test]
-fn nonblocking_flag_clears_alone() {
+fn refused_fifo_keeps_its_writer_waiting() {
     use std::os::unix::fs::OpenOptionsExt as _;
-    let dir = file_io_test_dir("nonblocking");
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let dir = file_io_test_dir("fifo-writer");
+    let fifo = dir.join("fifo");
+    let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a live NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let (opened, woken) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn({
+        let fifo = fifo.clone();
+        move || {
+            let file = fs::OpenOptions::new().write(true).open(&fifo);
+            opened.send(()).unwrap();
+            file
+        }
+    });
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    assert!(read_bounded(&fifo, 8).is_err());
+    assert!(
+        woken
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "the writer is still waiting for a reader"
+    );
+
+    // Release the writer: a reader of our own.
+    let _reader = fs::OpenOptions::new()
+        .read(true)
         .custom_flags(libc::O_NONBLOCK)
-        .open(dir.join("log"))
+        .open(&fifo)
         .unwrap();
-    let fd = std::os::fd::AsRawFd::as_raw_fd(&file);
-    // SAFETY: `fd` is open and owned by `file`.
-    let before = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    assert_ne!(before & libc::O_NONBLOCK, 0);
+    writer.join().unwrap().unwrap();
+    let _ = fs::remove_dir_all(dir);
+}
 
-    clear_nonblocking(&file).unwrap();
+/// A device and a link to one are refused; a link to a regular file reads
+/// that file, and the kernel's own files still read.
+#[test]
+fn bounded_read_takes_only_regular_files() {
+    let dir = file_io_test_dir("bounded-kinds");
+    let text = dir.join("text");
+    fs::write(&text, b"hello").unwrap();
+    for (link, target) in [
+        ("to-null", Path::new("/dev/null")),
+        ("to-text", text.as_path()),
+    ] {
+        std::os::unix::fs::symlink(target, dir.join(link)).unwrap();
+    }
 
-    // SAFETY: as above.
-    let after = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    assert_eq!(after, before & !libc::O_NONBLOCK);
+    for path in [Path::new("/dev/null"), &dir.join("to-null")] {
+        let error = read_bounded(path, 8).unwrap_err();
+        assert!(
+            matches!(&error, BigBoundedReadError::Io(error) if error.kind() == std::io::ErrorKind::InvalidInput),
+            "{}: {error}",
+            path.display()
+        );
+    }
+    assert_eq!(read_bounded(&dir.join("to-text"), 8).unwrap(), b"hello");
+    assert!(
+        !read_bounded(Path::new("/proc/self/stat"), 4096)
+            .unwrap()
+            .is_empty()
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
