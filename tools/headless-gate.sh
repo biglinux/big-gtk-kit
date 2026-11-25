@@ -66,9 +66,38 @@ cleanup() {
 			wait "$pid" 2>/dev/null || true
 		fi
 	done
-	rm -rf "$runtime_dir"
+	rm -rf "$runtime_dir" ${home:+"$home"}
 }
 trap cleanup EXIT
+
+# What gui-session sets too: the census harness refuses to open windows without it.
+export BIGLINUX_UI_SESSION_MODE=headless
+
+# The private bus activates no dconf service, so GSettings keep their values in
+# memory for the run and never reach the person's database.
+export GSETTINGS_BACKEND=memory
+
+# A caller inside a systemd service (a terminal in the person's desktop) passes
+# down that service's memory.pressure: the run's programs would write their
+# trigger into the person's cgroup and wake when the person's desktop is short.
+unset MEMORY_PRESSURE_WATCH MEMORY_PRESSURE_WRITE
+
+# A home of its own: tests write desktop entries and settings into the data and
+# config homes, and a program run here reads and writes its configuration and
+# state. The tool homes keep the developer's paths, resolved before the switch:
+# the command is usually cargo, and a compiler cache server started from this
+# home would outlive the run pointing into it. It sits beside TMPDIR, not under
+# the runtime dir: tests move files from TMPDIR into the home's Trash, which
+# needs both on one filesystem.
+home="$(mktemp -d "${TMPDIR:-/tmp}/bg-home.XXXXXX")"
+mkdir -p "$home"/{.config,.local/share,.local/state,.cache}
+home_environment=(
+	HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share"
+	XDG_STATE_HOME="$home/.local/state" XDG_CACHE_HOME="$home/.cache"
+	CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+	SCCACHE_CONF="${SCCACHE_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/sccache/config}"
+	SCCACHE_DIR="${SCCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/sccache}"
+)
 
 # Activation-restricted private session bus: the empty servicedir means no
 # desktop service (portals, gvfs, at-spi, kwallet) can be D-Bus-activated:
@@ -101,7 +130,7 @@ if [[ "$accessible" == 1 ]]; then
 	kwin_environment=(KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1)
 fi
 env -u KWIN_WAYLAND_NO_PERMISSION_CHECKS -u KWIN_SCREENSHOT_NO_PERMISSION_CHECKS \
-	XDG_RUNTIME_DIR="$runtime_dir" "${kwin_environment[@]}" \
+	XDG_RUNTIME_DIR="$runtime_dir" "${home_environment[@]}" "${kwin_environment[@]}" \
 	kwin_wayland --virtual --no-lockscreen --no-global-shortcuts \
 	--width 1280 --height 800 --socket="$socket" \
 	>/dev/null 2>&1 &
@@ -157,27 +186,23 @@ fi
 # GSK_RENDERER defaults to cairo (software, reproducible, no GPU needed on a
 # build machine), but an explicit one from the caller wins, because measuring
 # what a renderer costs on the GPU is impossible against a renderer that never
-# touches it.
+# touches it. BIG_RUN_UI_SMOKE lets big-testkit's harness open windows: without
+# it every widget test passes without running.
 if [[ "$accessible" == 1 ]]; then
-	# A home of its own: this mode runs a program, not a test binary, and a program
-	# reads and writes its configuration and state (a desktop shell keeps its
-	# notification history under `~/.local/state`). A run that edits the state of
-	# the person running it cannot be repeated and mean the same thing.
-	home="$runtime_dir/home"
-	mkdir -p "$home"/{.config,.local/share,.local/state,.cache}
-
 	# The real bridge, and the language the program ships in rather than the msgids:
 	# an accessibility walk is about what a person hears, and a person hears their own
 	# language.
-	XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" DISPLAY='' \
-		HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
-		XDG_STATE_HOME="$home/.local/state" XDG_CACHE_HOME="$home/.cache" \
+	env XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" DISPLAY='' "${home_environment[@]}" \
 		GDK_BACKEND=wayland GSK_RENDERER="${GSK_RENDERER:-cairo}" GTK_A11Y=atspi \
-		LC_NUMERIC=C \
+		BIG_RUN_UI_SMOKE=1 LC_NUMERIC=C \
 		"$@"
 else
-	XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" DISPLAY='' \
+	# The simple input method: GTK 4.22's Wayland one crashes in text_input's
+	# `enter` when the first text field a process focused is destroyed before
+	# the main loop reads the compositor's answer, which tests do.
+	env XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" DISPLAY='' "${home_environment[@]}" \
 		GDK_BACKEND=wayland GSK_RENDERER="${GSK_RENDERER:-cairo}" GTK_A11Y=test NO_AT_BRIDGE=1 \
-		LC_NUMERIC=C LC_MESSAGES=C LANGUAGE='' \
+		GTK_IM_MODULE=gtk-im-context-simple \
+		BIG_RUN_UI_SMOKE=1 LC_NUMERIC=C LC_MESSAGES=C LANGUAGE='' \
 		"$@"
 fi
