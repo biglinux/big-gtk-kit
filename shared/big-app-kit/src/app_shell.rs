@@ -677,75 +677,8 @@ fn boot_application(spec: &AppShellSpec) -> Option<adw::Application> {
         // Every app in the suite draws its tooltips as the same card.
         big_gtk_kit::install();
         install_focus_ring();
-        turn_switches_without_frames();
     });
     Some(app)
-}
-
-/// Let a switch change at once in a window that draws no frames.
-///
-/// `GtkSwitch` changes its state on the last frame of its slide, and a window
-/// the compositor suspended (screens off, covered) gets no frames: a key or a
-/// screen reader's action would wait until the window is seen again. The hook
-/// runs after the switch's own handler has started the slide.
-fn turn_switches_without_frames() {
-    thread_local! {
-        static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if INSTALLED.replace(true) {
-        return;
-    }
-    let switch = gtk::Switch::static_type();
-    let _class = glib::Class::<gtk::Switch>::from_type(switch);
-    let Some(activate) = glib::subclass::SignalId::lookup("activate", switch) else {
-        log::warn!("app shell: GtkSwitch has no activate signal");
-        return;
-    };
-    // SAFETY: `turn_now` matches `GSignalEmissionHook` and keeps no data.
-    unsafe {
-        glib::gobject_ffi::g_signal_add_emission_hook(
-            activate.into_glib(),
-            0,
-            Some(turn_now),
-            std::ptr::null_mut(),
-            None,
-        );
-    }
-}
-
-unsafe extern "C" fn turn_now(
-    _hint: *mut glib::gobject_ffi::GSignalInvocationHint,
-    n_params: std::ffi::c_uint,
-    params: *const glib::gobject_ffi::GValue,
-    _data: glib::ffi::gpointer,
-) -> glib::ffi::gboolean {
-    if n_params == 0 || params.is_null() {
-        return glib::ffi::GTRUE;
-    }
-    // SAFETY: GLib passes the emitting instance first, alive for the call;
-    // `glib::Value` is a transparent `GValue`.
-    let instance = unsafe { &*params.cast::<glib::Value>() };
-    if let Ok(switch) = instance.get::<gtk::Switch>()
-        && switch.settings().is_gtk_enable_animations()
-        && draws_no_frames(switch.upcast_ref())
-    {
-        big_gtk_kit::switch::set_active(&switch, !switch.is_active());
-    }
-    glib::ffi::GTRUE
-}
-
-/// Whether `widget` is off screen or in a window the compositor suspended.
-fn draws_no_frames(widget: &gtk::Widget) -> bool {
-    !widget.is_mapped()
-        || widget
-            .root()
-            .and_then(|root| root.surface())
-            .and_downcast::<gtk::gdk::Toplevel>()
-            .is_some_and(|toplevel| {
-                toplevel
-                    .state()
-                    .contains(gtk::gdk::ToplevelState::SUSPENDED)
-            })
 }
 
 /// Let GTK read the icon theme once, on its own thread.

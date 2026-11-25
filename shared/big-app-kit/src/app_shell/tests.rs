@@ -430,29 +430,3 @@ fn boot_leaves_toolkit_alone() {
         .expect("a valid spec boots");
     assert!(!gtk::is_initialized());
 }
-
-/// A switch no frame reaches changes with its action, once.
-#[test]
-#[ignore = "display: needs a GTK display"]
-fn unseen_switch_turns_at_once() {
-    big_testkit::harness::require_gtk_test(|| {
-        let settings = gtk::Settings::default().expect("a display");
-        let animated = settings.is_gtk_enable_animations();
-        // Installed twice, the hook still runs once.
-        turn_switches_without_frames();
-        turn_switches_without_frames();
-        let switch = gtk::Switch::new();
-        settings.set_gtk_enable_animations(true);
-        switch.activate();
-        assert!(switch.is_active());
-        switch.activate();
-        assert!(!switch.is_active());
-        settings.set_gtk_enable_animations(false);
-        switch.activate();
-        assert!(
-            switch.is_active(),
-            "without a slide the switch turns by itself"
-        );
-        settings.set_gtk_enable_animations(animated);
-    });
-}
