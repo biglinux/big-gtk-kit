@@ -12,7 +12,7 @@ use relm4::gtk;
 /// Shared collection backing a dialog-level "Copy All" button.
 #[derive(Debug, Clone, Default)]
 pub struct BigDetailLines {
-    lines: Rc<RefCell<Vec<(String, String)>>>,
+    lines: Rc<RefCell<Vec<String>>>,
 }
 
 impl BigDetailLines {
@@ -24,19 +24,32 @@ impl BigDetailLines {
 
     /// Register one row in insertion order.
     pub fn push(&self, title: impl Into<String>, value: impl Into<String>) {
-        self.lines.borrow_mut().push((title.into(), value.into()));
+        let line = format!("{}: {}", title.into(), value.into());
+        self.lines.borrow_mut().push(line);
+    }
+
+    /// Register a line that is no row, such as a section's heading or the
+    /// blank line before it.
+    pub fn push_line(&self, line: impl Into<String>) {
+        self.lines.borrow_mut().push(line.into());
     }
 
     /// Render all registered rows as copyable plain text.
     #[must_use]
     pub fn copy_text(&self) -> String {
-        self.lines
-            .borrow()
-            .iter()
-            .map(|(title, value)| format!("{title}: {value}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.lines.borrow().join("\n")
     }
+}
+
+/// A "Copy All" button: it puts every line `lines` holds on the clipboard,
+/// named `label` for its tooltip and a screen reader.
+#[must_use]
+pub fn copy_all_button(label: &str, lines: BigDetailLines) -> gtk::Button {
+    let button = crate::feedback::tooltip::icon_button("edit-copy-symbolic", label, &[]);
+    button.connect_clicked(move |button| {
+        button.clipboard().set_text(&lines.copy_text());
+    });
+    button
 }
 
 /// Display-free specification for one copyable detail row.
@@ -124,11 +137,13 @@ mod tests {
         let lines = BigDetailLines::new();
 
         lines.push("File", "/video/movie.mkv");
+        lines.push_line("");
+        lines.push_line("[Video]");
         lines.push("Duration", "1:02:03");
 
         assert_eq!(
             lines.copy_text(),
-            "File: /video/movie.mkv\nDuration: 1:02:03"
+            "File: /video/movie.mkv\n\n[Video]\nDuration: 1:02:03"
         );
     }
 
