@@ -304,6 +304,27 @@ pub fn test_context() -> glib::MainContext {
     context
 }
 
+/// Run `test` with a [`test_context`] as this thread's default, where the
+/// local futures it spawns run and the loops it turns wait.
+///
+/// `cargo test` runs every test of a binary in one process, on threads of
+/// their own: a callback one test leaves on the shared default context runs
+/// on whichever test iterates it next, where glib-rs panics inside GLib's
+/// dispatch and the process aborts.
+///
+/// # Panics
+///
+/// With the panic of `test`.
+#[expect(
+    clippy::expect_used,
+    reason = "a test harness: its panics are the failures it reports"
+)]
+pub fn on_test_context<R>(test: impl FnOnce() -> R) -> R {
+    test_context()
+        .with_thread_default(test)
+        .expect("a new context has no owner")
+}
+
 /// Turn off GTK animations so window close is synchronous under a headless
 /// display (otherwise the close animation defers finalization and false-flags
 /// a leak). No-op when GTK settings are not yet available.
