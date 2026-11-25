@@ -49,6 +49,15 @@ pub fn cache_home() -> PathBuf {
     cache_home_checked().unwrap_or_else(|| account_home().join(".cache"))
 }
 
+/// Where this user's own data lives: files the person made or gave a program,
+/// which are neither settings nor a cache.
+///
+/// Same rules as [`config_home`], for `XDG_DATA_HOME` and `~/.local/share`.
+#[must_use]
+pub fn data_home() -> PathBuf {
+    data_home_checked().unwrap_or_else(|| account_home().join(".local/share"))
+}
+
 /// The home folder the user database names for this process's user, or `/`.
 fn account_home() -> PathBuf {
     crate::users::home_of(crate::users::own_uid())
@@ -77,6 +86,16 @@ pub fn cache_home_checked() -> Option<PathBuf> {
         std::env::var_os("XDG_CACHE_HOME"),
         std::env::var_os("HOME"),
         ".cache",
+    )
+}
+
+/// Where this user's own data lives, or nothing. See [`config_home_checked`].
+#[must_use]
+pub fn data_home_checked() -> Option<PathBuf> {
+    xdg_dir(
+        std::env::var_os("XDG_DATA_HOME"),
+        std::env::var_os("HOME"),
+        ".local/share",
     )
 }
 
@@ -432,6 +451,11 @@ mod tests {
     #[test]
     fn config_home_returns_non_empty_path() {
         assert!(!config_home().as_os_str().is_empty());
+    }
+
+    #[test]
+    fn data_home_is_absolute() {
+        assert!(data_home().is_absolute());
     }
 
     #[test]
