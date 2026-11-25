@@ -16,7 +16,7 @@ use adw::prelude::*;
 use gtk::glib;
 
 use super::announce::announce_from_window;
-use crate::timer::OnceTimer;
+use big_gtk_kit::timer::OnceTimer;
 
 /// How long a confirmation stays: long enough to read a sentence, short enough
 /// that nobody mistakes it for part of the window.

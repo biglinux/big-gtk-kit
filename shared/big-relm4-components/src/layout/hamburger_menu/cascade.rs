@@ -31,7 +31,7 @@ use super::action_row::{
 };
 use super::{BigMenuActionItem, StructuredMenuBuild, build_structured_menu_stack};
 use crate::feedback::popover_lifecycle::unparent_popover_on_parent_teardown;
-use crate::timer::OnceTimer;
+use big_gtk_kit::timer::OnceTimer;
 
 const OPENER_CSS_CLASS: &str = "big-menu-cascade-opener";
 /// The data key a door keeps its submenu's popover under ([`popover_of`]).

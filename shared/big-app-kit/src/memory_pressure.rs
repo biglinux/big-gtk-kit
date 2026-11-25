@@ -10,8 +10,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use big_gtk_kit::timer::OnceTimer;
 use big_os_kit::pressure_protocol::{PressureConfig, PressureWatch};
-use big_relm4_components::timer::OnceTimer;
 use gio::prelude::*;
 
 struct DeliveryState {

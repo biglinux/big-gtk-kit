@@ -16,5 +16,4 @@ pub mod task;
 pub mod templates;
 pub mod text;
 pub mod time;
-pub mod timer;
 pub mod wayland;

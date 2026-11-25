@@ -9,7 +9,7 @@ use std::rc::{Rc, Weak};
 use adw::prelude::*;
 use relm4::gtk;
 
-use crate::timer::OnceTimer;
+use big_gtk_kit::timer::OnceTimer;
 
 const DEFAULT_IMMERSION_IDLE_TIMEOUT_MS: u64 = 2_000;
 

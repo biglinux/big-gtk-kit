@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use big_relm4_components::timer::OnceTimer;
+use big_gtk_kit::timer::OnceTimer;
 use gio::prelude::*;
 use glib::variant::ToVariant;
 

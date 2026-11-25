@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use big_relm4_components::timer::OnceTimer;
+use big_gtk_kit::timer::OnceTimer;
 use gtk::prelude::*;
 
 /// How long a resize must settle before it is written.
