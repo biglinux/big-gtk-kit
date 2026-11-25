@@ -305,7 +305,7 @@ pub fn test_context() -> glib::MainContext {
 }
 
 /// Run `test` with a [`test_context`] as this thread's default, where the
-/// local futures it spawns run and the loops it turns wait.
+/// local futures it spawns run; `test` gets the context to turn or block on.
 ///
 /// `cargo test` runs every test of a binary in one process, on threads of
 /// their own: a callback one test leaves on the shared default context runs
@@ -319,9 +319,10 @@ pub fn test_context() -> glib::MainContext {
     clippy::expect_used,
     reason = "a test harness: its panics are the failures it reports"
 )]
-pub fn on_test_context<R>(test: impl FnOnce() -> R) -> R {
-    test_context()
-        .with_thread_default(test)
+pub fn on_test_context<R>(test: impl FnOnce(&glib::MainContext) -> R) -> R {
+    let context = test_context();
+    context
+        .with_thread_default(|| test(&context))
         .expect("a new context has no owner")
 }
 
