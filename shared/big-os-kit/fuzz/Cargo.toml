@@ -12,7 +12,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-big-os-kit = { path = ".." }
+big-os-kit = { path = "..", features = ["http-client"] }
 
 [[bin]]
 name = "cgroup_capacity"
@@ -31,6 +31,13 @@ bench = false
 [[bin]]
 name = "microdaemon_frame"
 path = "fuzz_targets/microdaemon_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_headers"
+path = "fuzz_targets/http_headers.rs"
 test = false
 doc = false
 bench = false

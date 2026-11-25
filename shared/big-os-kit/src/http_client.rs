@@ -592,7 +592,7 @@ fn write_request_body(process: &mut CurlProcess, body: &[u8]) -> Result<(), Http
 }
 
 fn read_final_headers(
-    stdout: &mut ChildStdout,
+    stdout: &mut impl Read,
     follow_redirects: bool,
 ) -> Result<CurlHeaders, HttpError> {
     loop {
@@ -613,7 +613,7 @@ fn read_final_headers(
     }
 }
 
-fn read_one_header_block(stdout: &mut ChildStdout) -> Result<Vec<u8>, HttpError> {
+fn read_one_header_block(stdout: &mut impl Read) -> Result<Vec<u8>, HttpError> {
     let mut headers = Vec::new();
     let mut byte = [0_u8; 1];
     while headers.len() <= MAX_HEADER_BYTES {
@@ -630,6 +630,13 @@ fn read_one_header_block(stdout: &mut ChildStdout) -> Result<Vec<u8>, HttpError>
         }
     }
     Err(HttpError::HeadersTooLarge)
+}
+
+/// The header reader over bytes curl did not produce; for `cargo fuzz` only.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub fn fuzz_read_headers(mut input: &[u8]) {
+    let _ = read_final_headers(&mut input, true);
 }
 
 fn parse_status(headers: &[u8]) -> Result<u16, HttpError> {
