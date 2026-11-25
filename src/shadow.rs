@@ -56,14 +56,11 @@ pub(crate) fn install() {
         if !adwaita_sheet_in_use(&display) || !adwaita_has_restated_rules() {
             return;
         }
-        // Its high-contrast rules answer as libadwaita's do, which writes
-        // the contrast it follows into the settings.
-        let provider = crate::css::following_settings(&display);
-        provider.load_from_string(include_str!("shadow.css"));
-        // Above libadwaita's sheet (THEME), below the program's own CSS.
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
+        // Above libadwaita's sheet (THEME), below the program's own CSS. Its
+        // high-contrast rules answer as libadwaita's do, which writes the
+        // contrast it follows into the settings.
+        crate::css::install(
+            include_str!("shadow.css"),
             gtk::STYLE_PROVIDER_PRIORITY_THEME + 1,
         );
     });
@@ -117,7 +114,7 @@ mod tests {
     #[ignore = "needs a display"]
     fn sheet_parses_cleanly() {
         init();
-        let provider = gtk::CssProvider::new();
+        let provider = crate::css::provider();
         let errors = std::rc::Rc::new(std::cell::Cell::new(0));
         let counted = errors.clone();
         provider.connect_parsing_error(move |_, _, _| counted.set(counted.get() + 1));

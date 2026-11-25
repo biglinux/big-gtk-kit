@@ -16,8 +16,6 @@
 //! needing one, and the next frame reads the new colours, with no style-manager
 //! signal to connect and to disconnect again in a process that runs for months.
 
-use std::cell::RefCell;
-
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib};
@@ -142,31 +140,9 @@ itemheader > button:active > box { color: currentColor; }
 /// Between the settings (400) and the application (600).
 const DEFAULT_PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_APPLICATION - 100;
 
-thread_local! {
-    static STYLED: RefCell<Vec<glib::WeakRef<gdk::Display>>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Give `display` the defaults, once.
-pub(crate) fn install_defaults(display: &gdk::Display) {
-    let already = STYLED.with(|styled| {
-        let mut styled = styled.borrow_mut();
-        styled.retain(|weak| weak.upgrade().is_some());
-        if styled
-            .iter()
-            .any(|weak| weak.upgrade().as_ref() == Some(display))
-        {
-            true
-        } else {
-            styled.push(display.downgrade());
-            false
-        }
-    });
-    if already {
-        return;
-    }
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(DEFAULT_CSS);
-    gtk::style_context_add_provider_for_display(display, &provider, DEFAULT_PRIORITY);
+/// Give the display the defaults, once.
+pub(crate) fn install_defaults() {
+    big_gtk_kit::css::install(DEFAULT_CSS, DEFAULT_PRIORITY);
 }
 
 /// The colours read on one frame.

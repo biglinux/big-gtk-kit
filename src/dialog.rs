@@ -655,13 +655,10 @@ mod tests {
         init();
         install();
         FREE.with_borrow_mut(Vec::clear);
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string("window.big-gtk-kit-large label { font-size: 40px; }");
-        let display = gtk::gdk::Display::default().expect("a display");
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        let sheet = crate::css::DisplaySheet::new(gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        sheet.load(
+            &gtk::gdk::Display::default().expect("a display"),
+            "window.big-gtk-kit-large label { font-size: 40px; }",
         );
         let window = adw::Window::builder()
             .default_width(1000)
@@ -693,7 +690,7 @@ mod tests {
             }
             pump();
         }
-        gtk::style_context_remove_provider_for_display(&display, &provider);
+        sheet.release();
         window.destroy();
     }
 

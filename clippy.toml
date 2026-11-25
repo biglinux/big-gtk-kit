@@ -26,6 +26,8 @@ disallowed-methods = [
     { path = "libadwaita::Dialog::builder", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::builder`" },
     { path = "gtk4::DirectoryList::new", reason = "a watched list crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`, and make the list again when the folder changes" },
     { path = "gtk4::DirectoryList::builder", reason = "a list it builds is watched, and crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`, and make the list again when the folder changes" },
+    { path = "gtk4::CssProvider::new", reason = "answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` as light and no preference whatever the system says; use `big_gtk_kit::css::provider`" },
+    { path = "gtk4::style_context_add_provider_for_display", reason = "the display keeps every provider it is given; add a fixed sheet once with `big_gtk_kit::css::install`, one that changes with `big_gtk_kit::css::DisplaySheet`, or one tied to a widget with `big_gtk_kit::css::add_provider_for_widget_lifetime`" },
     { path = "gio::Menu::append_section", reason = "GTK 4.22's menu tracker keeps every section it shows; use `big_gtk_kit::menu::append_shared_section`, or `append_refilled_section` for items that vary per build" },
 ]
 disallowed-types = [

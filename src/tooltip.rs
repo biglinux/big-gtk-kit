@@ -71,15 +71,12 @@ pub fn install() {
         return;
     }
     if let Some(display) = gdk::Display::default() {
-        let provider = crate::css::following_settings(&display);
-        provider.load_from_string(include_str!("tooltip.css"));
         let hide_all: Rc<dyn Fn()> = Rc::new(dismiss_every_card);
         // SAFETY: HIDE_ALL_KEY holds an `Rc<dyn Fn()>` (see its definition).
         unsafe { display.set_data(HIDE_ALL_KEY, hide_all) };
         // Process-wide: the card is the same in every window.
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
+        crate::css::install(
+            include_str!("tooltip.css"),
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 100,
         );
     }
