@@ -96,9 +96,9 @@ This turns on what needs no change at the call sites:
 ## Workarounds
 
 Clippy enforces the ones that stand in for a single call: copy the entries of
-this repository's `clippy.toml` into the program's own. `css`,
-`dialog::present_kept` and `popover` change how a call is used, which a lint
-cannot see.
+this repository's `clippy.toml` into the program's own. `dialog::present_kept`,
+`popover` and `timer` change how a call is used, which a lint cannot see; the
+ast-grep rules under `rules/` find the hand-made copies of the last two.
 
 | Use | Instead of | Why (measured) |
 |---|---|---|
@@ -107,6 +107,8 @@ cannot see.
 | `alert::Alert` | `adw::AlertDialog::new`, `builder` | libadwaita 1.9 leaves three breakpoints of every dialog shown as a sheet behind, about 1.8 KB an opening; an `Alert` made for a parent in an `AdwWindow` asks again with a dialog already made; add responses, connect `closed` and downgrade through it (a `WeakAlert` from an earlier question stops upgrading) |
 | `breakpoint::add` | `add_breakpoint` | libadwaita 1.9 never releases a window's breakpoints |
 | `css::add_provider_for_widget_lifetime` | `style_context_add_provider_for_display` per widget | the display keeps the provider and its rules |
+| `css::install`, `css::DisplaySheet` | `style_context_add_provider_for_display` | the display keeps every provider it is given: a sheet added again restyles every window for nothing |
+| `css::provider` | `CssProvider::new` | a program's provider answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` from its own properties, light and no preference, whatever the system says |
 | `dialog::Dialog` | `adw::Dialog::new`, `builder` | the same three breakpoints per opening; a `Dialog` shows one already made, as `Alert` does; one kept and presented again stays an `adw::Dialog` |
 | `dialog::present_kept` | building `AdwShortcutsDialog` per opening | its sections and models outlive it (libadwaita 1.9) |
 | `directory::unwatched` | `gtk::DirectoryList::new`, `builder` | GTK 4.22 to 4.24 (still so on `main`) frees a watched list's queued change while its file lookup runs, and the answer reads freed memory: a crash when lists are rebuilt while files arrive; the list does not follow its folder, so make it again when the folder changes |
@@ -115,6 +117,7 @@ cannot see.
 | `popover::auto_unparent_on_close` | a popover left on `set_parent` | GTK pins it, and its tree, to the widget forever |
 | `source::remove` | `glib::SourceId::remove` | panics, and so aborts the program, when the source already ran |
 | `switch::set_active` | `Switch::set_active` | GTK 4.22 cancels a click's slide on an unchanged value |
+| `timer::OnceTimer` | a `timeout_add_local_once` id kept to cancel | GLib gives the id of a timer that ran to another source, which the cancel then removes |
 | `view_switcher::toggles_for` | `AdwViewStack`, `AdwInlineViewSwitcher` | leak their animation and a tree per page |
 
 `Alert` and `Dialog` take the parent when they are made, and
@@ -178,6 +181,12 @@ of its own. The ignored tests take the activation, so they run one at a time;
 two read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
 namespace. rustdoc runs the doc tests from `TMPDIR`, which must allow
 execution.
+
+Three tests of big-os-kit's document storage need the machine to offer what
+they check is kept, and fail saying what is missing: the user in a second group
+(`replaced_document_keeps_group`), a temporary directory on a file system that
+takes access ACLs (`replaced_document_keeps_access_acl`) and seccomp filters on a
+thread (`creation_without_renameat2_links`, which refuses `renameat2` there).
 
 ## tools/
 
