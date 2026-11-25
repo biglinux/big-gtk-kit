@@ -295,7 +295,25 @@ impl From<std::io::Error> for BigBoundedReadError {
 /// let _ = std::fs::remove_file(path);
 /// ```
 pub fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, BigBoundedReadError> {
-    let file = open_regular(path)?;
+    read_bounded_from(open_regular(path)?, max_bytes)
+}
+
+/// Read at most `max_bytes` from `file`, which the caller opened with its own
+/// flags ([`open_regular`], [`open_regular_no_follow`]).
+///
+/// # Errors
+///
+/// [`BigBoundedReadError::Io`] with `InvalidInput` when `file` is not a
+/// regular file, or for a read failure; [`BigBoundedReadError::TooLarge`]
+/// when it holds more than `max_bytes`, even when it grows while read.
+pub fn read_bounded_from(file: File, max_bytes: u64) -> Result<Vec<u8>, BigBoundedReadError> {
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "expected a regular file",
+        )
+        .into());
+    }
     let mut bytes = Vec::new();
     let mut limited: Take<File> = file.take(max_bytes.saturating_add(1));
     limited.read_to_end(&mut bytes)?;
@@ -309,8 +327,13 @@ pub fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, BigBoundedRe
 ///
 /// The type is read through an `O_PATH` descriptor, which opens nothing; the
 /// file is then opened through `/proc/self/fd`, which is that same inode
-/// whatever has taken its name since.
-fn open_regular(path: &Path) -> std::io::Result<File> {
+/// whatever has taken its name since. [`read_bounded`] reads through it.
+///
+/// # Errors
+///
+/// The open error; `InvalidInput` for anything but a regular file, which is
+/// never opened; `Unsupported` where `/proc` is not mounted.
+pub fn open_regular(path: &Path) -> std::io::Result<File> {
     use std::os::fd::AsRawFd as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     let named = fs::OpenOptions::new()
