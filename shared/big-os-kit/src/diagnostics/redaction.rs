@@ -80,16 +80,16 @@ impl BigRedactionRules {
     pub fn from_environment() -> Self {
         let mut rules = Self::empty();
 
-        if let Some(config_home) = env_path("XDG_CONFIG_HOME").or_else(default_config_home) {
+        if let Some(config_home) = crate::settings::config_home_checked() {
             rules = rules.with_xdg_root("xdg-config", config_home);
         }
-        if let Some(data_home) = env_path("XDG_DATA_HOME").or_else(default_data_home) {
+        if let Some(data_home) = crate::settings::data_home_checked() {
             rules = rules.with_xdg_root("xdg-data", data_home);
         }
-        if let Some(cache_home) = env_path("XDG_CACHE_HOME").or_else(default_cache_home) {
+        if let Some(cache_home) = crate::settings::cache_home_checked() {
             rules = rules.with_xdg_root("xdg-cache", cache_home);
         }
-        if let Some(state_home) = env_path("XDG_STATE_HOME").or_else(default_state_home) {
+        if let Some(state_home) = crate::settings::state_home_checked() {
             rules = rules.with_xdg_root("xdg-state", state_home);
         }
         if let Some(runtime_dir) = env_path("XDG_RUNTIME_DIR") {
@@ -215,26 +215,6 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-}
-
-fn home_dir() -> Option<PathBuf> {
-    env_path("HOME")
-}
-
-fn default_config_home() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".config"))
-}
-
-fn default_data_home() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".local/share"))
-}
-
-fn default_cache_home() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".cache"))
-}
-
-fn default_state_home() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".local/state"))
 }
 
 fn normalize_path_string(path: PathBuf) -> String {

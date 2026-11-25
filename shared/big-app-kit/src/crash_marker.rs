@@ -6,7 +6,6 @@
 //! processes record the panic as one file in the app's own state directory,
 //! which the release gate reads; nothing leaves the machine.
 
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -23,21 +22,7 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 /// clear and it must not be synced as a setting.
 #[must_use]
 pub fn crash_dir(app: &str) -> Option<PathBuf> {
-    state_home(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
-        .map(|state| state.join(app).join("crash"))
-}
-
-/// The XDG state directory. A relative path in either variable is ignored, as
-/// the base directory specification asks.
-fn state_home(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    xdg_state_home
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            home.map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .map(|home| home.join(".local/state"))
-        })
+    big_os_kit::settings::state_home_checked().map(|state| state.join(app).join("crash"))
 }
 
 /// A new record file in `directory`, numbered after the files already there.
@@ -104,24 +89,6 @@ pub fn install(app: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Crash files are state: they survive a cache clear and are not settings.
-    #[test]
-    fn records_go_to_the_state_directory() {
-        let state = |xdg: Option<&str>, home: Option<&str>| {
-            state_home(xdg.map(OsString::from), home.map(OsString::from))
-        };
-        assert_eq!(
-            state(Some("/somewhere/state"), Some("/home/a")),
-            Some(PathBuf::from("/somewhere/state"))
-        );
-        assert_eq!(
-            state(Some("relative"), Some("/home/a")),
-            Some(PathBuf::from("/home/a/.local/state"))
-        );
-        assert_eq!(state(None, Some("relative")), None);
-        assert_eq!(state(None, None), None);
-    }
 
     #[test]
     fn a_new_record_overwrites_none() {
