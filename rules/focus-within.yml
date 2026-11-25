@@ -1,0 +1,16 @@
+id: focus-within
+language: Rust
+severity: error
+message: Use big_relm4_components::focus::holds_focus, which reads the window's focus widget
+note: GTK clears the FOCUS_WITHIN and FOCUSED state flags while the window is inactive, so a check on them loses the focus of a window the person will come back to.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: scoped_identifier
+  regex: 'StateFlags::FOCUS(_WITHIN|ED)$'
+ignores:
+  - shared/big-relm4-components/src/focus.rs
+  - '**/tests.rs'
+  - '**/*_tests.rs'
+  - '**/tests/**'

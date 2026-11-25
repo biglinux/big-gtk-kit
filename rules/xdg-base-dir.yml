@@ -1,0 +1,31 @@
+id: xdg-base-dir
+language: Rust
+severity: error
+message: Find the user's settings or cache folder with big_os_kit::settings (config_home, cache_home and their _checked forms)
+note: The owner ignores an empty or relative value, as the XDG base directory specification requires, and falls back to the home folder the same way everywhere.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '(^|::)var(_os)?$'
+    - has:
+        field: arguments
+        has:
+          kind: string_literal
+          regex: '^"XDG_(CONFIG|CACHE)_HOME"$'
+    # Tests read the folder the headless gate made for them.
+    - not:
+        inside:
+          stopBy: end
+          kind: mod_item
+          follows:
+            kind: attribute_item
+            regex: 'cfg\(test\)'
+ignores:
+  - "**/tests/**"
+  - "**/*tests.rs"
+  - shared/big-os-kit/src/settings.rs

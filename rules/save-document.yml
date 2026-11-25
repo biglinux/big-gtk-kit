@@ -1,0 +1,21 @@
+id: save-document
+language: Rust
+severity: error
+message: Save a document under a chosen name with big_os_kit::storage::atomic_save_document
+note: Creating the file and replacing it when it exists is one rule; written by hand it replaced a link with a file instead of writing the file the link names.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: match_expression
+  all:
+    - has:
+        stopBy: end
+        kind: identifier
+        regex: '^atomic_create_document$'
+    - has:
+        stopBy: end
+        kind: identifier
+        regex: '^atomic_replace_document$'
+ignores:
+  - shared/big-os-kit/src/storage.rs

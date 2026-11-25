@@ -1,0 +1,19 @@
+id: file-name
+language: Rust
+severity: error
+message: Ask big_os_kit::file_name::file_name_refusal whether a typed name can be a file's
+note: The owner refuses ".", "..", a separator, a line break and a name over NAME_MAX in one place, with the words for each, so a rename field in one program does not accept what another refuses.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: binary_expression
+  all:
+    - has:
+        field: left
+        pattern: $NAME == "."
+    - has:
+        field: right
+        pattern: $NAME == ".."
+ignores:
+  - shared/big-os-kit/src/file_name.rs

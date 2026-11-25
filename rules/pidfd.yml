@@ -1,0 +1,13 @@
+id: pidfd
+language: Rust
+severity: error
+message: Open a pidfd and signal through it with big_os_kit::pidfd (open, send_signal)
+note: The owner checks the pid's range and the syscall's result once, and gives an io::Error that names what the kernel refused, instead of an unsafe syscall and descriptor in each caller.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: scoped_identifier
+  regex: '(^|::)SYS_pidfd_(open|send_signal)$'
+ignores:
+  - shared/big-os-kit/src/pidfd.rs
