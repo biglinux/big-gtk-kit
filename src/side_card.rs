@@ -307,66 +307,11 @@ impl SideCards {
     fn show(&mut self, index: usize) {
         self.close();
         let (row, card) = (&self.rows[index], &self.cards[index]);
-        let Some(bounds) = row.compute_bounds(&self.layer) else {
+        // A card taller than the overlay scrolls.
+        card.set_max_content_height((self.layer.height() - 2 * GAP).max(0));
+        if !place_beside(&self.layer, row, card.upcast_ref(), &self.bridge) {
             return;
-        };
-        let (x, y) = (bounds.x() as i32, bounds.y() as i32);
-        let (width, height) = (bounds.width() as i32, bounds.height() as i32);
-        let layer_height = self.layer.height();
-        // A card taller than the overlay scrolls. Hidden, it would measure 0.
-        card.set_max_content_height((layer_height - 2 * GAP).max(0));
-        card.set_visible(true);
-        let (_, card_width, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
-        let (_, card_height, _, _) = card.measure(gtk::Orientation::Vertical, card_width);
-        let top = y.min(layer_height - card_height - GAP).max(0);
-        // Margins count from the start edge, which is the right one in a
-        // right-to-left layout.
-        let rtl = self.layer.direction() == gtk::TextDirection::Rtl;
-        let from_start = |left: i32, span: i32| {
-            if rtl {
-                self.layer.width() - left - span
-            } else {
-                left
-            }
-        };
-        // The card goes on the row's end side, or on its other side when
-        // only that one has room.
-        let right = x + width + GAP;
-        let left = x - GAP - card_width;
-        let fits =
-            |card_left: i32| card_left >= GAP && card_left + card_width <= self.layer.width() - GAP;
-        let on_right = if rtl {
-            !fits(left) && fits(right)
-        } else {
-            fits(right) || !fits(left)
-        };
-        card.set_margin_start(from_start(if on_right { right } else { left }, card_width));
-        card.set_margin_top(top);
-        card.remove_css_class("joined-left");
-        card.remove_css_class("joined-right");
-        if top == y {
-            card.add_css_class(if on_right {
-                "joined-left"
-            } else {
-                "joined-right"
-            });
         }
-
-        // Over both rings' facing sides, so they run on into each other.
-        let reach = RING_INSET + RING;
-        let bridge_left = if on_right {
-            x + width - reach
-        } else {
-            x - GAP - reach
-        };
-        let bridge_width = GAP + 2 * reach;
-        self.bridge
-            .set_margin_start(from_start(bridge_left, bridge_width));
-        self.bridge.set_margin_top(y + RING_INSET);
-        self.bridge
-            .set_size_request(bridge_width, height - 2 * RING_INSET);
-        self.bridge.set_visible(true);
-
         row.add_css_class("card-open");
         row.update_state(&[gtk::accessible::State::Expanded(Some(true))]);
         self.open = Some(index);
@@ -528,9 +473,74 @@ fn tiles(widget: &gtk::Widget) -> Vec<gtk::CheckButton> {
         .collect()
 }
 
-fn install_css() {
+pub(crate) fn install_css() {
     // Below application priority, so a product's own sheet wins.
     crate::css::install(CSS, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION - 1);
+}
+
+/// Show `card` beside `row` on `layer`, joined to it by `bridge`: on the
+/// row's end side, or its other side when only that one has room, and held
+/// inside the overlay. `false`, and nothing shown, when the row is not on the
+/// overlay.
+pub(crate) fn place_beside(
+    layer: &gtk::Overlay,
+    row: &gtk::Widget,
+    card: &gtk::Widget,
+    bridge: &gtk::Box,
+) -> bool {
+    let Some(bounds) = row.compute_bounds(layer) else {
+        return false;
+    };
+    let (x, y) = (bounds.x() as i32, bounds.y() as i32);
+    let (width, height) = (bounds.width() as i32, bounds.height() as i32);
+    // Hidden, a card would measure 0.
+    card.set_visible(true);
+    let (_, card_width, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
+    let (_, card_height, _, _) = card.measure(gtk::Orientation::Vertical, card_width);
+    let top = y.min(layer.height() - card_height - GAP).max(0);
+    // Margins count from the start edge, which is the right one in a
+    // right-to-left layout.
+    let rtl = layer.direction() == gtk::TextDirection::Rtl;
+    let from_start = |left: i32, span: i32| {
+        if rtl {
+            layer.width() - left - span
+        } else {
+            left
+        }
+    };
+    let right = x + width + GAP;
+    let left = x - GAP - card_width;
+    let fits = |card_left: i32| card_left >= GAP && card_left + card_width <= layer.width() - GAP;
+    let on_right = if rtl {
+        !fits(left) && fits(right)
+    } else {
+        fits(right) || !fits(left)
+    };
+    card.set_margin_start(from_start(if on_right { right } else { left }, card_width));
+    card.set_margin_top(top);
+    card.remove_css_class("joined-left");
+    card.remove_css_class("joined-right");
+    if top == y {
+        card.add_css_class(if on_right {
+            "joined-left"
+        } else {
+            "joined-right"
+        });
+    }
+
+    // Over both rings' facing sides, so they run on into each other.
+    let reach = RING_INSET + RING;
+    let bridge_left = if on_right {
+        x + width - reach
+    } else {
+        x - GAP - reach
+    };
+    let bridge_width = GAP + 2 * reach;
+    bridge.set_margin_start(from_start(bridge_left, bridge_width));
+    bridge.set_margin_top(y + RING_INSET);
+    bridge.set_size_request(bridge_width, height - 2 * RING_INSET);
+    bridge.set_visible(true);
+    true
 }
 
 #[cfg(test)]

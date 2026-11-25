@@ -14,6 +14,7 @@ pub mod dialog;
 pub mod directory;
 pub mod file_dialog;
 pub mod focus;
+pub mod hover_card;
 pub mod list;
 pub mod menu;
 pub mod password;

@@ -166,6 +166,22 @@ deriving the accessible name and description from the tooltip.
 `cargo run --example tooltip_demo` shows every case (`BIG_DEMO_DARK=1` for the
 dark card, `BIG_DEMO_FOLLOW=1` to follow the pointer).
 
+## Option cards
+
+A row that shows a setting's value opens a card of choices beside it, on the
+window's overlay, joined to the row by a bridge. Two ways to open one:
+
+- `side_card::SideCards`: a click or Enter opens it, with the focus on the
+  current choice. Nothing opens on hover, so the pointer can cross the rows on
+  its way elsewhere; settings pages and editors use it.
+- `hover_card::HoverCards`: the pointer resting on a row opens its card, and
+  the pointer may travel into it; a click or Enter opens it for the keyboard,
+  which the pointer then never replaces. A short sidebar of options uses it.
+
+Both place the card on the row's end side, or the other side when only that
+has room, and report what happens as events the owner passes back, so no
+handler holds a widget.
+
 ## Checks
 
 ```sh
