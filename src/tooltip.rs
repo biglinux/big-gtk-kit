@@ -465,6 +465,10 @@ impl Engine {
         Some(gdk::Rectangle::new(column, y, 1, height))
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "the card is made above when there is none"
+    )]
     fn card(&self, native: &gtk::Widget) -> std::cell::Ref<'_, Card> {
         if self.card.borrow().is_none() {
             let popover = gtk::Popover::builder()

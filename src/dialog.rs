@@ -455,26 +455,31 @@ pub struct DialogBuilder {
 }
 
 impl DialogBuilder {
+    /// The title, as `adw::Dialog`'s `title`.
     pub fn title(mut self, title: impl Into<glib::GString>) -> Self {
         self.title = Some(title.into());
         self
     }
 
+    /// The width it asks for, as `adw::Dialog`'s `content-width`.
     pub fn content_width(mut self, width: i32) -> Self {
         self.content_width = Some(width);
         self
     }
 
+    /// The height it asks for, as `adw::Dialog`'s `content-height`.
     pub fn content_height(mut self, height: i32) -> Self {
         self.content_height = Some(height);
         self
     }
 
+    /// Its content, as `adw::Dialog`'s `child`.
     pub fn child(mut self, child: &impl IsA<gtk::Widget>) -> Self {
         self.child = Some(child.clone().upcast());
         self
     }
 
+    /// The dialog [`Dialog::new`] makes, with these properties set.
     pub fn build(self) -> Dialog {
         let dialog = Dialog::new(self.parent.as_ref());
         if let Some(title) = &self.title {

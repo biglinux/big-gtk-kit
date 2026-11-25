@@ -17,11 +17,28 @@ members = ["big-item-view"]
 gtk = { version = "0.11", features = ["v4_22"], package = "gtk4" }
 adw = { version = "0.9", features = ["v1_9"], package = "libadwaita" }
 
+# Every package takes these with `[lints] workspace = true`, which cannot be
+# combined with lints of its own: a crate that differs says so with a
+# crate-level attribute in its root file.
+[workspace.lints.cargo]
+# A dependency nothing uses, build scripts' included: Cargo 1.100 judges it as it compiles.
+unused_dependencies = "deny"
+
 [workspace.lints.rust]
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 deprecated = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
+missing_safety_doc = "warn"
+# The programs built on these crates may share one process, where a panic
+# raised in a GLib callback cannot unwind and aborts it whole. `expect`,
+# `unwrap` and `panic!` are denied, so Clippy refuses a new site with or
+# without `-D warnings`: a site that stays says why with `#[expect]`; tests may
+# panic (`clippy.toml`).
+expect_used = "deny"
+panic = "deny"
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"

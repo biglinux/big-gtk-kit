@@ -915,14 +915,10 @@ pub(crate) fn update_drop_action(view: &ItemView) {
 
 /// Accept drops on the view; the presenter decides which items take them.
 pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::DragAction) {
-    if view.imp().drop_controller.get().is_some() {
+    let target = gtk::DropTarget::new(glib::Type::INVALID, actions);
+    if view.imp().drop_controller.set(target.clone()).is_err() {
         return;
     }
-    let target = gtk::DropTarget::new(glib::Type::INVALID, actions);
-    view.imp()
-        .drop_controller
-        .set(target.clone())
-        .expect("checked above");
     target.set_types(types);
     target.set_preload(view.imp().drop_preload.get());
     let weak = view.downgrade();

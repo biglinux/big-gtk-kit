@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! The widget in a real window: what it asks the presenter, and what it keeps.
+#![expect(clippy::expect_used, reason = "a failed fixture fails the test")]
 
 use std::cell::Cell;
 use std::rc::Rc;

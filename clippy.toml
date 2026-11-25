@@ -1,4 +1,6 @@
+allow-expect-in-tests = true
 allow-unwrap-in-tests = true
+allow-panic-in-tests = true
 
 # GTK and libadwaita APIs that leak, measured, and the big-gtk-kit function to
 # use instead. This is the canonical list: a consumer copies these entries into

@@ -435,36 +435,43 @@ pub struct AlertBuilder {
 }
 
 impl AlertBuilder {
+    /// The heading, as `adw::AlertDialog`'s `heading`.
     pub fn heading(mut self, heading: impl Into<glib::GString>) -> Self {
         self.heading = Some(heading.into());
         self
     }
 
+    /// The body text, as `adw::AlertDialog`'s `body`.
     pub fn body(mut self, body: impl Into<glib::GString>) -> Self {
         self.body = Some(body.into());
         self
     }
 
+    /// Whether the body is Pango markup, as `adw::AlertDialog`'s `body-use-markup`.
     pub fn body_use_markup(mut self, markup: bool) -> Self {
         self.body_use_markup = markup;
         self
     }
 
+    /// A widget under the body, as `adw::AlertDialog`'s `extra-child`.
     pub fn extra_child(mut self, child: &impl IsA<gtk::Widget>) -> Self {
         self.extra_child = Some(child.clone().upcast());
         self
     }
 
+    /// The response Enter gives, as `adw::AlertDialog`'s `default-response`.
     pub fn default_response(mut self, id: impl Into<glib::GString>) -> Self {
         self.default_response = Some(id.into());
         self
     }
 
+    /// The response Escape and closing give, as `adw::AlertDialog`'s `close-response`.
     pub fn close_response(mut self, id: impl Into<glib::GString>) -> Self {
         self.close_response = Some(id.into());
         self
     }
 
+    /// The alert [`Alert::new`] makes, with these properties set.
     pub fn build(self) -> Alert {
         let alert = Alert::new(
             self.parent.as_ref(),
