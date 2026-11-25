@@ -3,6 +3,11 @@
 
 //! Compact vertical scale popover for toolbar controls.
 
+use relm4::gtk;
+use relm4::gtk::prelude::*;
+
+const DEFAULT_MARGIN_HORIZONTAL: i32 = 8;
+const DEFAULT_MARGIN_VERTICAL: i32 = 6;
 const DEFAULT_SPACING: i32 = 6;
 const DEFAULT_HEIGHT: i32 = 160;
 
@@ -79,5 +84,98 @@ impl BigVerticalScalePopoverSpec {
     }
 }
 
+/// Build a popover containing a vertical [`gtk::Scale`] anchored to
+/// `parent`. The returned pair is `(popover, scale)`; the caller
+/// owns connecting `value-changed` and showing/hiding the popover.
+pub fn vertical_scale_popover(
+    parent: &impl IsA<gtk::Widget>,
+    spec: BigVerticalScalePopoverSpec,
+) -> (gtk::Popover, gtk::Scale) {
+    let resolved = resolve_spec(spec);
+    let popover = gtk::Popover::new();
+    popover.set_parent(parent.as_ref());
+    crate::feedback::popover_lifecycle::unparent_popover_on_parent_teardown(
+        parent.as_ref().upcast_ref(),
+        &popover,
+    );
+    popover.set_position(gtk::PositionType::Top);
+    // Non-grabbing, like `build_vertical_popover_shell`: an autohide popover takes
+    // a Wayland grab that anchors it to the window origin (top-left) instead of
+    // the control. Every caller drives this through a hover group that pops it
+    // down on leave, so no grab is needed.
+    popover.set_autohide(false);
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(resolved.spacing)
+        .margin_start(DEFAULT_MARGIN_HORIZONTAL)
+        .margin_end(DEFAULT_MARGIN_HORIZONTAL)
+        .margin_top(DEFAULT_MARGIN_VERTICAL)
+        .margin_bottom(DEFAULT_MARGIN_VERTICAL)
+        .build();
+    let title = gtk::Label::builder()
+        .label(&resolved.title)
+        .css_classes(["caption"])
+        .build();
+    let scale = crate::input::slider::build(
+        gtk::Scale::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .draw_value(false)
+            .inverted(resolved.inverted)
+            .height_request(resolved.height_request),
+    );
+    scale.set_range(resolved.minimum, resolved.maximum);
+    scale.set_increments(resolved.step, resolved.step);
+    scale.set_value(resolved.initial);
+    scale.update_property(&[gtk::accessible::Property::Label(&resolved.accessible_label)]);
+
+    content.append(&title);
+    content.append(&scale);
+    popover.set_child(Some(&content));
+
+    (popover, scale)
+}
+
+fn resolve_spec(mut spec: BigVerticalScalePopoverSpec) -> BigVerticalScalePopoverSpec {
+    if !spec.minimum.is_finite() {
+        spec.minimum = 0.0;
+    }
+    if !spec.maximum.is_finite() || spec.maximum <= spec.minimum {
+        spec.maximum = spec.minimum + 1.0;
+    }
+    if !spec.step.is_finite() || spec.step <= 0.0 {
+        spec.step = 0.1;
+    }
+    if !spec.initial.is_finite() {
+        spec.initial = spec.minimum;
+    }
+    spec.initial = spec.initial.clamp(spec.minimum, spec.maximum);
+    if spec.height_request <= 0 {
+        spec.height_request = DEFAULT_HEIGHT;
+    }
+    if spec.spacing < 0 {
+        spec.spacing = DEFAULT_SPACING;
+    }
+    spec
+}
+
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vertical_spec_clamps_bad_range() {
+        let resolved = resolve_spec(
+            BigVerticalScalePopoverSpec::new("Zoom", "Waveform zoom")
+                .range(10.0, 1.0, -1.0)
+                .initial(f64::NAN)
+                .height_request(-10),
+        );
+
+        assert_eq!(resolved.minimum, 10.0);
+        assert_eq!(resolved.maximum, 11.0);
+        assert_eq!(resolved.step, 0.1);
+        assert_eq!(resolved.initial, 10.0);
+        assert_eq!(resolved.height_request, DEFAULT_HEIGHT);
+    }
+}

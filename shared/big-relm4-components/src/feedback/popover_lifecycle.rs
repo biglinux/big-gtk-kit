@@ -56,3 +56,43 @@ fn release_popover(popover_weak: &glib::WeakRef<gtk::Popover>) {
         popover.unparent();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A control moved between boxes keeps a popover that still opens, while a
+    /// parent that only leaves the tree lets its popover go.
+    #[test]
+    fn popover_survives_parent_reparent() {
+        big_testkit::harness::require_gtk_test(|| {
+            let first = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let second = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            row.append(&first);
+            row.append(&second);
+            let window = gtk::Window::new();
+            window.set_child(Some(&row));
+            let button = gtk::Button::new();
+            first.append(&button);
+            let popover = gtk::Popover::new();
+            popover.set_parent(&button);
+            unparent_popover_on_parent_teardown(button.upcast_ref(), &popover);
+            window.present();
+            assert!(button.is_realized());
+
+            button.unparent();
+            second.append(&button);
+            assert_eq!(popover.parent().as_ref(), Some(button.upcast_ref()));
+
+            let detached_parent = gtk::Button::new();
+            let detached = gtk::Popover::new();
+            detached.set_parent(&detached_parent);
+            unparent_popover_on_parent_teardown(detached_parent.upcast_ref(), &detached);
+            second.append(&detached_parent);
+            second.remove(&detached_parent);
+            assert!(detached.parent().is_none());
+            window.destroy();
+        });
+    }
+}
