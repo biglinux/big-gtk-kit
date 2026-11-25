@@ -906,7 +906,7 @@ where
         let window = root.window_for_presentation(app, outcome, false)?;
         *root_slot.borrow_mut() = Some(root);
         if let Some(window) = window {
-            log_active_renderer_once(&window);
+            big_relm4_components::renderer::log_active_renderer_once(&window);
             window.present();
         }
         return Ok(());
@@ -921,31 +921,6 @@ where
         }
     }
     Ok(())
-}
-
-/// Log which GSK renderer the display actually chose, once, when the first
-/// window maps.
-///
-/// The renderer decides whether every window's buffer reaches the compositor as
-/// a GPU dmabuf (`gl`/`vulkan`, imported zero-copy) or as a per-frame software
-/// upload (`cairo`). A silent fall to `cairo` on an old GPU is otherwise
-/// invisible, and it is the dominant per-frame CPU cost on a machine like the
-/// i3; this one line makes it show up in the log.
-fn log_active_renderer_once(window: &gtk::Window) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    window.connect_map(move |window| {
-        if LOGGED.swap(true, Ordering::Relaxed) {
-            return;
-        }
-        let renderer = window
-            .renderer()
-            .map_or_else(|| "unknown".to_owned(), |r| r.type_().name().to_string());
-        let pinned =
-            std::env::var("GSK_RENDERER").unwrap_or_else(|_| "unset (GTK default)".to_owned());
-        log::info!("GSK renderer in use: {renderer} (GSK_RENDERER={pinned})");
-    });
 }
 
 fn process_args() -> Vec<OsString> {

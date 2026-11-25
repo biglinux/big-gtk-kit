@@ -12,6 +12,7 @@ pub mod input;
 pub mod layout;
 pub mod list;
 pub mod qr;
+pub mod renderer;
 pub mod shape;
 pub mod task;
 pub mod templates;
