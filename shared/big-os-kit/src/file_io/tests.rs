@@ -59,6 +59,40 @@ fn bounded_read_refuses_only_oversize() {
 }
 
 #[test]
+fn missing_file_reads_as_none() {
+    let dir = file_io_test_dir("if-exists");
+    let path = dir.join("state.json");
+
+    assert_eq!(read_bounded_if_exists(&path, 4).unwrap(), None);
+    fs::write(&path, b"abcd").unwrap();
+    assert_eq!(
+        read_bounded_if_exists(&path, 4).unwrap().as_deref(),
+        Some(&b"abcd"[..])
+    );
+    assert_eq!(
+        read_bounded_if_exists(&path, 3).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidData
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn modified_secs_reads_whole_seconds() {
+    let dir = file_io_test_dir("modified");
+    let path = dir.join("song.mp3");
+    let file = File::create(&path).unwrap();
+    let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_700_000_000_900);
+    file.set_modified(stamp).unwrap();
+
+    assert_eq!(modified_secs(&path), Some(1_700_000_000));
+    fs::remove_file(&path).unwrap();
+    assert_eq!(modified_secs(&path), None);
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn bounded_read_refuses_fifo_and_directory() {
     let dir = file_io_test_dir("bounded-fifo");
     let fifo = dir.join("fifo");

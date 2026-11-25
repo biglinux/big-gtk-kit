@@ -78,6 +78,31 @@ impl BigStorageFileLock {
             }
         }
     }
+
+    /// Take the same lock without waiting for another writer: `WouldBlock`
+    /// asks the caller to try later, so a GTK thread never freezes on it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::acquire`], and `WouldBlock` while another writer holds it.
+    pub fn try_acquire(target: &Path) -> std::io::Result<Self> {
+        let parent = target.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let file = crate::file_io::open_lock_file(&target.with_extension("json.lock"))?;
+        // A child forked by another thread shares the lock until it execs, a
+        // window of microseconds; a few short tries outlast it, while a real
+        // writer still holds the lock after them.
+        for attempt in 0.. {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(fs::TryLockError::WouldBlock) if attempt < 4 => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(Self { _file: file })
+    }
 }
 
 use crate::file_io::{BigBoundedReadError, read_bounded};

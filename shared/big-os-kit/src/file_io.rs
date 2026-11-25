@@ -324,6 +324,38 @@ fn clear_nonblocking(file: &File) -> std::io::Result<()> {
     Ok(fcntl_setfl(file, flags - OFlags::NONBLOCK)?)
 }
 
+/// [`read_bounded`] for a file that may not exist yet, such as saved state:
+/// `None` when it is missing.
+///
+/// # Errors
+///
+/// Any other open or read failure, and [`std::io::ErrorKind::InvalidData`]
+/// for a file over `max_bytes`.
+pub fn read_bounded_if_exists(path: &Path, max_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
+    match read_bounded(path, max_bytes) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(BigBoundedReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// When `path` was last modified, in whole seconds since the Unix epoch;
+/// `None` when it cannot be read or predates the epoch.
+#[must_use]
+pub fn modified_secs(path: &Path) -> Option<u64> {
+    let modified = fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()?;
+    Some(
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
+}
+
 /// Read a UTF-8 text file through the os-kit filesystem boundary.
 ///
 /// # Errors

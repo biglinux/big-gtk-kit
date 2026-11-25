@@ -1056,3 +1056,20 @@ pub(crate) fn refuse_on_this_thread(syscall: libc::c_long, errno: libc::c_int) {
         );
     }
 }
+
+#[test]
+fn try_lock_refuses_while_held() {
+    let dir = storage_test_dir("lock-try");
+    let target = dir.join("recent.jsonl");
+    let held = BigStorageFileLock::acquire(&target).unwrap();
+
+    let refused = BigStorageFileLock::try_acquire(&target).err();
+    drop(held);
+
+    assert_eq!(
+        refused.map(|error| error.kind()),
+        Some(std::io::ErrorKind::WouldBlock)
+    );
+    assert!(BigStorageFileLock::try_acquire(&target).is_ok());
+    let _ = fs::remove_dir_all(&dir);
+}
