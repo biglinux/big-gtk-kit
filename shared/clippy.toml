@@ -148,4 +148,5 @@ disallowed-types = [
     { path = "libadwaita::ViewSwitcher", reason = "needs an `AdwViewStack`, which leaks (libadwaita 1.9); use `big_gtk_kit::view_switcher::toggles_for` over a `gtk::Stack`" },
     { path = "std::process::Command", reason = "use big-os-kit subprocess specs/wrappers instead of raw Command" },
     { path = "gtk4::Spinner", reason = "the suite's spinner is `adw::Spinner`: it sizes with its place and turns only while shown" },
+    { path = "std::hash::DefaultHasher", reason = "its algorithm may change in any Rust release, renaming cache files and recoloring what a person recognizes; use `big_os_kit::stable_hash::hash`" },
 ]

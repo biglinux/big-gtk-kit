@@ -7,7 +7,8 @@
 //! checksums ([`crc32`]), signals read from a pipe ([`signal_pipe`]), a first
 //! capital letter ([`first_capital`]), `file://` URIs read as path bytes
 //! ([`uri_path`]), bytes handed over in an anonymous file (`memfd`), calendar
-//! days (`civil_date`), and the in-memory log ring.
+//! days (`civil_date`), unguessable ids ([`random`]), a hash that never
+//! changes between Rust releases ([`stable_hash`]), and the in-memory log ring.
 
 pub mod bench;
 pub mod caller;
@@ -40,6 +41,7 @@ pub mod mount_table;
 pub mod pidfd;
 pub mod pressure_protocol;
 mod process_locale;
+pub mod random;
 pub mod resource_budget;
 #[cfg(feature = "seat")]
 pub mod seat;
@@ -50,6 +52,7 @@ pub mod session_resources;
 pub mod settings;
 pub mod shell_word;
 pub mod signal_pipe;
+pub mod stable_hash;
 pub mod storage;
 pub mod subprocess;
 pub mod system_memory;
