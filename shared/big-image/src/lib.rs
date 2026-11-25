@@ -613,39 +613,18 @@ pub async fn load_sandboxed_texture(spec: BigImageSpec) -> Result<gdk::Texture, 
 /// Pack a `Pixbuf` into [`BigRgbaImage`] (worker-thread safe: touches only
 /// the pixbuf and a plain buffer). Feeding GTK the pixbuf's padded rowstride
 /// (or borrowing its pixel bytes) is a layout/lifetime mismatch that can
-/// corrupt the heap, so rows are copied into a packed owned buffer.
+/// corrupt the heap, so rows are copied into a packed owned buffer. An RGB
+/// pixbuf is widened as it is copied, with no second pixbuf, and comes back
+/// [`BigRgbaImage::opaque`].
 #[must_use]
-pub(crate) fn pixbuf_to_rgba(pixbuf: &gtk::gdk_pixbuf::Pixbuf) -> Option<BigRgbaImage> {
-    let opaque = !pixbuf.has_alpha();
-    let rgba = if pixbuf.has_alpha() {
-        pixbuf.clone()
-    } else {
-        pixbuf.add_alpha(false, 0, 0, 0).ok()?
-    };
-    let width = rgba.width();
-    let height = rgba.height();
-    if width <= 0 || height <= 0 {
-        return None;
+pub fn pixbuf_to_rgba(pixbuf: &gtk::gdk_pixbuf::Pixbuf) -> Option<BigRgbaImage> {
+    let stride = usize::try_from(pixbuf.rowstride()).ok()?;
+    let pixels = pixbuf.read_pixel_bytes();
+    match (pixbuf.n_channels(), pixbuf.has_alpha()) {
+        (4, true) => pack_rows_to_rgba(&pixels, pixbuf.width(), pixbuf.height(), stride),
+        (3, false) => pack_rgb_rows_to_rgbx(&pixels, pixbuf.width(), pixbuf.height(), stride),
+        _ => None,
     }
-    let row = usize::try_from(width).ok()?.checked_mul(4)?;
-    let src_stride = usize::try_from(rgba.rowstride()).ok()?;
-    let rows = usize::try_from(height).ok()?;
-    let src = rgba.read_pixel_bytes();
-    let mut packed = vec![0_u8; row.checked_mul(rows)?];
-    for y in 0..rows {
-        let s = y.checked_mul(src_stride)?;
-        let d = y * row;
-        packed
-            .get_mut(d..d + row)?
-            .copy_from_slice(src.get(s..s + row)?);
-    }
-    Some(BigRgbaImage {
-        rgba: packed,
-        width,
-        height,
-        cicp: None,
-        opaque,
-    })
 }
 
 fn pack_rows_to_rgba(
