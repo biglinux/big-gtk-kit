@@ -137,17 +137,9 @@ impl WeakAlert {
 
 /// The scroll pane the template puts around the body and extra child.
 fn body_pane(widget: &gtk::Widget) -> Option<gtk::ScrolledWindow> {
-    if widget.has_css_class("body-scrolled-window") {
-        return widget.downcast_ref().cloned();
-    }
-    let mut child = widget.first_child();
-    while let Some(each) = child {
-        if let Some(pane) = body_pane(&each) {
-            return Some(pane);
-        }
-        child = each.next_sibling();
-    }
-    None
+    crate::widget_tree::subtree(widget)
+        .find(|each| each.has_css_class("body-scrolled-window"))
+        .and_then(|pane| pane.downcast().ok())
 }
 
 /// Whether a widget inside `widget` takes the focus, or will once shown and
@@ -156,17 +148,7 @@ fn holds_stop(widget: &gtk::Widget) -> bool {
     if !widget.can_focus() {
         return false;
     }
-    if widget.is_focusable() {
-        return true;
-    }
-    let mut child = widget.first_child();
-    while let Some(each) = child {
-        if holds_stop(&each) {
-            return true;
-        }
-        child = each.next_sibling();
-    }
-    false
+    widget.is_focusable() || crate::widget_tree::children(widget).any(|each| holds_stop(&each))
 }
 
 /// Keep the body's pane in the Tab chain for what it holds. GtkScrolledWindow
@@ -1060,13 +1042,9 @@ mod tests {
     }
 
     fn buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {
-        let mut found: Vec<gtk::Button> = widget.downcast_ref().cloned().into_iter().collect();
-        let mut child = widget.first_child();
-        while let Some(widget) = child {
-            found.extend(buttons(&widget));
-            child = widget.next_sibling();
-        }
-        found
+        crate::widget_tree::subtree(widget)
+            .filter_map(|each| each.downcast().ok())
+            .collect()
     }
 
     #[gtk::test]

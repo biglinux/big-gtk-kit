@@ -1,11 +1,8 @@
 id: child-walk
 language: Rust
 severity: error
-message: Walk a widget's children with big_relm4_components::layout::widget_container::children or descendants
+message: Walk a widget's children with big_gtk_kit::widget_tree (children, descendants or subtree)
 note: One walk of the widget tree, so a loop that removes the widget it holds and a search that must stay under its root behave the same everywhere.
-# The owners live in the shared crates; the kit's own crates sit below them.
-files:
-  - shared/**
 rule:
   any:
     - pattern: std::iter::successors($W.first_child(), $$$)
@@ -18,4 +15,6 @@ rule:
               - has:
                   pattern: while let Some($X) = $C { $$$ }
 ignores:
+  - src/widget_tree.rs
+  # focus_first_control leaves out what is hidden, and the whole subtree under it.
   - shared/big-relm4-components/src/layout/widget_container.rs

@@ -364,14 +364,12 @@ impl WidgetImpl for ItemView {
         // A popover a consumer parents here (renaming an item, pointing at
         // its `item_rect`) is placed by its parent's allocation. The item
         // proxies get a size, zero, so they stay mapped.
-        let mut child = obj.first_child();
-        while let Some(widget) = child {
+        for widget in big_gtk_kit::widget_tree::children(&*obj) {
             if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
                 popover.present();
             } else if widget.is::<a11y::ItemProxy>() {
                 widget.allocate(0, 0, -1, None);
             }
-            child = widget.next_sibling();
         }
         self.read_fonts();
         let rtl = obj.direction() == gtk::TextDirection::Rtl;

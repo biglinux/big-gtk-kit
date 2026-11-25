@@ -433,15 +433,7 @@ fn headings_resize_and_move_by_keys() {
         pump_until(|| header.width() > 0),
         "the header was never shown"
     );
-    let headings = || {
-        let mut found = Vec::new();
-        let mut child = header.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            found.push(widget);
-        }
-        found
-    };
+    let headings = || big_gtk_kit::widget_tree::children(&header).collect::<Vec<_>>();
     let size = headings()[1].clone();
     assert_eq!(heading_title(&size).as_deref(), Some("Size"));
     assert!(gtk::test_accessible_has_property(

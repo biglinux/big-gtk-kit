@@ -24,6 +24,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 
 use crate::timer::OnceTimer;
+use crate::widget_tree::children;
 
 const SHOW_DELAY: Duration = Duration::from_millis(150);
 /// Reaching another widget this soon after a card hid shows its card at once.
@@ -676,19 +677,14 @@ fn active(native: &gtk::Widget) -> bool {
 /// `native`: an owner in a panel sees a menu of the window and the other way
 /// round. A popover off screen shows none of its children.
 fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
-    let mut child = owner.first_child();
-    while let Some(widget) = child {
-        if widget.is::<gtk::Popover>() && widget.is_mapped() {
-            return true;
-        }
-        child = widget.next_sibling();
+    if children(owner).any(|widget| widget.is::<gtk::Popover>() && widget.is_mapped()) {
+        return true;
     }
     let Some(root) = native.root() else {
         return false;
     };
-    let mut pending: Vec<gtk::Widget> = root.first_child().into_iter().collect();
+    let mut pending: Vec<gtk::Widget> = children(&root).collect();
     while let Some(widget) = pending.pop() {
-        pending.extend(widget.next_sibling());
         if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
             if !popover.is_mapped() {
                 continue;
@@ -697,7 +693,7 @@ fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
                 return true;
             }
         }
-        pending.extend(widget.first_child());
+        pending.extend(children(&widget));
     }
     false
 }
