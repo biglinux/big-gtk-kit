@@ -8,6 +8,8 @@ allow-panic-in-tests = true
 # no include) and keeps them in step with this file.
 
 disallowed-methods = [
+    { path = "relm4::set_global_css", reason = "a provider made by relm4 answers prefers-color-scheme, prefers-contrast and prefers-reduced-motion from its own properties, light and no preference; use `big_gtk_kit::css::install`", allow-invalid = true },
+    { path = "relm4::set_global_css_with_priority", reason = "a provider made by relm4 answers prefers-color-scheme, prefers-contrast and prefers-reduced-motion from its own properties, light and no preference; use `big_gtk_kit::css::install`", allow-invalid = true },
     { path = "gtk4::Scale::new", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
     { path = "gtk4::Scale::with_range", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
     { path = "gtk4::builders::ScaleBuilder::build", reason = "takes every wheel turn over it, so scrolling a page moves the slider; pass the builder to `big_gtk_kit::slider::build`" },
