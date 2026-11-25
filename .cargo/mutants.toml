@@ -1,0 +1,26 @@
+# cargo-mutants: mutants of the shared crates that no test can tell from the
+# original, each with the reason.
+
+test_tool = "nextest"
+timeout_multiplier = 2.0
+gitignore = true
+
+exclude_re = [
+  # Equivalent: the flags are distinct single bits, so `|` and `^` agree.
+  "shared/big-os-kit/src/file_io.rs:.*replace \\| with \\^ in open_regular_no_follow",
+  "shared/big-os-kit/src/storage.rs:.*replace \\| with \\^ in BigStorageFileLock::acquire",
+
+  # Equivalent: readahead advice changes how much the kernel fetches, never
+  # what a read returns, and nothing reads the advice back.
+  "shared/big-os-kit/src/file_io.rs:.*replace read_without_readahead with \\(\\)",
+
+  # Equivalent: early idle timestamp is never observable. While either counter
+  # is nonzero, should_exit() returns false and clears idle_since; when the final
+  # lease drops, mark_idle_if_empty overwrites the timestamp before it can be used.
+  "shared/big-os-kit/src/microdaemon/lifecycle.rs:.*replace && with \\|\\| in MicrodaemonIdleState::mark_idle_if_empty",
+
+  # Equivalent for the observable contract: the arm-once guard only prevents
+  # spawning redundant deadline threads; the FnOnce hook slot is taken at most
+  # once regardless, so extra armed threads fire nothing.
+  "shared/big-os-kit/src/task.rs:.*replace \\|\\| with && in BigTaskState::arm_hard_cancel",
+]

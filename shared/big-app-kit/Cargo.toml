@@ -1,0 +1,35 @@
+[package]
+name = "big-app-kit"
+version = "0.1.0"
+publish = false
+description = "BigLinux graphical AppShell: single-instance activation, gettext/CSS boot, and dark-mode delivery"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+adw = { workspace = true }
+gtk = { workspace = true }
+big-gtk-kit = { workspace = true }
+big-relm4-components = { workspace = true }
+gio = { workspace = true, features = ["v2_80"] }
+glib = { workspace = true }
+gettext-rs = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+libc = { workspace = true }
+big-os-kit = { workspace = true }
+relm4 = { workspace = true }
+
+[dev-dependencies]
+big-testkit = { workspace = true }
+
+[package.metadata.cargo-machete]
+# Imported as `gettextrs`, a name cargo-machete cannot match to the
+# `gettext-rs` package; the dependency is used for i18n.
+ignored = ["gettext-rs"]
+
+[lints]
+workspace = true

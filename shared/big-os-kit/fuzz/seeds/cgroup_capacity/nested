@@ -1,0 +1,3 @@
+0::/user/app
+|1 2 0:1 / /cg rw - cgroup2 none rw
+|536870912

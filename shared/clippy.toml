@@ -1,0 +1,151 @@
+# The shared crates' Clippy settings: the GTK bans of ../clippy.toml routed to
+# these crates' own wrappers, and the bans of the owners they hold. Clippy reads
+# only the nearest clippy.toml, so the kit's own crates keep ../clippy.toml, the
+# list every program copies.
+# big-gtk-kit skip gio::Menu::append_section: the suite's structured renderer reads
+# sections itself and they finalize (structured_menus_release_their_sections); a
+# model handed to a native GtkPopoverMenu or MenuButton takes its sections from
+# big_gtk_kit::menu.
+
+# Clippy reads the MSRV from `rust-version`. Nothing here is published, so public
+# items are judged too.
+avoid-breaking-exported-api = false
+
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+
+# Complexity thresholds
+too-many-arguments-threshold = 8
+type-complexity-threshold = 300
+
+# Size thresholds
+large-error-threshold = 256
+
+# Names `doc_markdown` would otherwise ask to put in backticks.
+doc-valid-idents = ["BigLinux", "FourCC", "GStreamer", "PipeWire", ".."]
+
+# Raw process and stdin primitives bypass the workspace's argv, cancellation,
+# timeout, and worker boundaries. Filesystem calls are reviewed at their actual
+# call sites because this global list cannot distinguish UI work from workers,
+# caches or tests; `std::fs::rename` is the exception, since every copy of an
+# atomic write ends in one.
+disallowed-methods = [
+    { path = "libadwaita::prelude::AlertDialogExt::set_response_appearance", reason = "ask a question with a styled answer through big_relm4_components::feedback::confirm::confirm_destructive, big_relm4_components::feedback::confirm::confirm_suggested, big_relm4_components::feedback::save_question::ask_to_save or big_relm4_components::feedback::text_question::ask_text" },
+    { path = "libc::getuid", reason = "ask big_os_kit::users::own_uid" },
+    { path = "libc::geteuid", reason = "ask big_os_kit::microdaemon::current_effective_user_id, in microdaemon::socket" },
+    { path = "libc::flock", reason = "lock a file with std::fs::File::lock, try_lock and unlock" },
+    { path = "libc::sigaction", reason = "deliver signals as bytes on a pipe through big_os_kit::signal_pipe::install" },
+    { path = "std::ptr::write_volatile", reason = "overwrite a secret with big_os_kit::secret_memory::wipe" },
+    { path = "gtk4::DirectoryList::builder", reason = "a list it builds is watched, and crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`, and make the list again when the folder changes" },
+    { path = "gdk4_wayland::WaylandDisplay::wl_display", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    { path = "gdk4_wayland::prelude::WaylandSurfaceExtManual::wl_surface", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    { path = "gdk4_wayland::WaylandSeat::wl_seat", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    { path = "gdk4_wayland::WaylandMonitor::wl_output", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    { path = "gdk4_wayland::WaylandDevice::wl_seat", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    { path = "gdk4_wayland::WaylandDevice::wl_pointer", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    { path = "gdk4_wayland::WaylandDevice::wl_keyboard", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    { path = "gdk4_wayland::WaylandDisplay::wl_compositor", reason = "shares one wayland-client Connection between modules, each with its own copy of wayland-client: the second module aborts dispatching it; use `big_relm4_components::wayland`" },
+    # GTK's own popover menus slide a submenu in over the menu that opened it.
+    { path = "gtk4::PopoverMenu::from_model", reason = "slides a submenu in over the menu that opened it; use `big_relm4_components::layout::hamburger_menu::popover_menu`" },
+    { path = "gtk4::PopoverMenu::from_model_full", reason = "the suite builds every popover menu one way; use `big_relm4_components::layout::hamburger_menu::popover_menu`" },
+    { path = "gtk4::PopoverMenu::builder", reason = "slides a submenu in over the menu that opened it; use `big_relm4_components::layout::hamburger_menu::popover_menu`" },
+    { path = "gtk4::MenuButton::set_menu_model", reason = "builds a popover menu that slides a submenu in over it; use `big_relm4_components::layout::hamburger_menu::set_menu_model_action_popover`, or `set_popover` with `hamburger_menu::popover_menu`" },
+    { path = "gtk4::builders::MenuButtonBuilder::menu_model", reason = "builds a popover menu that slides a submenu in over it; use `big_relm4_components::layout::hamburger_menu::set_menu_model_action_popover`, or `set_popover` with `hamburger_menu::popover_menu`" },
+    # A GtkScale takes the wheel over it, so scrolling a page moves its sliders.
+    { path = "gtk4::Scale::new", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_relm4_components::input::slider::with_range`" },
+    { path = "gtk4::Scale::with_range", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_relm4_components::input::slider::with_range`" },
+    { path = "gtk4::builders::ScaleBuilder::build", reason = "takes every wheel turn over it, so scrolling a page moves the slider; pass the builder to `big_relm4_components::input::slider::build`" },
+    # The default factories of a choice list leave each choice unnamed for a
+    # screen reader, and libadwaita's cuts each one at 20 characters.
+    { path = "libadwaita::ComboRow::new", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass `adw::ComboRow::builder()` to `big_relm4_components::input::dropdown::build`" },
+    { path = "libadwaita::builders::ComboRowBuilder::build", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass the builder to `big_relm4_components::input::dropdown::build`" },
+    { path = "gtk4::DropDown::new", reason = "leaves every choice unnamed for a screen reader; pass `gtk::DropDown::builder()` to `big_relm4_components::input::dropdown::build_drop_down`" },
+    { path = "gtk4::DropDown::from_strings", reason = "leaves every choice unnamed for a screen reader; use `big_relm4_components::input::dropdown::from_strings`" },
+    { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_relm4_components::input::dropdown::build_drop_down`" },
+    # An insensitive button cannot be picked, so a double-click on it lands on
+    # the handle around it and maximizes the window.
+    { path = "gtk4::WindowHandle::new", reason = "a double-click on an insensitive button inside it maximizes the window; pass `gtk::WindowHandle::builder()` to `big_relm4_components::layout::window_handle::build`" },
+    { path = "gtk4::builders::WindowHandleBuilder::build", reason = "a double-click on an insensitive button inside it maximizes the window; pass the builder to `big_relm4_components::layout::window_handle::build`" },
+    { path = "libadwaita::HeaderBar::new", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass `adw::HeaderBar::builder()` to `big_relm4_components::layout::window_handle::header_bar`" },
+    { path = "libadwaita::builders::HeaderBarBuilder::build", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass the builder to `big_relm4_components::layout::window_handle::header_bar`" },
+    { path = "gtk4::style_context_add_provider_for_display", reason = "the display keeps every provider it is given; add a fixed sheet once with `big_relm4_components::css::install`, one that changes with `big_relm4_components::css::DisplaySheet`, or one tied to a widget with `big_gtk_kit::css::add_provider_for_widget_lifetime`" },
+    { path = "gtk4::CssProvider::new", reason = "answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` as light and no preference whatever the system says; use `big_relm4_components::css::provider`" },
+    # From big-gtk-kit/clippy.toml, routed to the suite's own wrappers where it
+    # has them.
+    { path = "gtk4::prelude::AccessibleExtManual::update_relation", reason = "leaks the list of targets on every call (gtk-rs 0.11); use `big_gtk_kit::accessible::relate`" },
+    { path = "libadwaita::PasswordEntryRow::new", reason = "leaks its buffer and the password in it (libadwaita 1.9), and a screen reader says the title twice; use `big_relm4_components::input::entry_row::password(adw::PasswordEntryRow::builder())`" },
+    { path = "libadwaita::builders::PasswordEntryRowBuilder::build", reason = "leaks its buffer and the password in it (libadwaita 1.9), and a screen reader says the title twice; pass the builder to `big_relm4_components::input::entry_row::password`" },
+    { path = "big_gtk_kit::password::password_row", reason = "a screen reader says the title twice; pass the builder to `big_relm4_components::input::entry_row::password`" },
+    { path = "libadwaita::EntryRow::new", reason = "both title labels name the row, and a screen reader says the title twice; use `big_relm4_components::input::entry_row::build(adw::EntryRow::builder())`" },
+    { path = "libadwaita::builders::EntryRowBuilder::build", reason = "both title labels name the row, and a screen reader says the title twice; pass the builder to `big_relm4_components::input::entry_row::build`" },
+    { path = "libadwaita::prelude::AlertDialogExtManual::choose", reason = "leaks the dialog (libadwaita-rs 0.9); use `big_gtk_kit::alert::Alert::choose`" },
+    { path = "libadwaita::prelude::AlertDialogExtManual::choose_future", reason = "leaks the dialog (libadwaita-rs 0.9); use `big_gtk_kit::alert::Alert::choose_future`" },
+    { path = "libadwaita::TimedAnimation::new", reason = "takes a second reference to the animation it creates (libadwaita-rs 0.9), so the animation and its target, with whatever the target holds, are never freed; use `adw::TimedAnimation::builder()`" },
+    { path = "libadwaita::SpringAnimation::new", reason = "takes a second reference to the animation it creates (libadwaita-rs 0.9), so the animation and its target, with whatever the target holds, are never freed; use `adw::SpringAnimation::builder()`" },
+    { path = "libadwaita::prelude::MessageDialogExtManual::choose", reason = "leaks the dialog (libadwaita-rs 0.9); use `big_gtk_kit::alert::Alert::choose`" },
+    { path = "big_gtk_kit::alert::choose", reason = "takes any parent, and an Alert shown on a parent other than its own gives a Gtk-CRITICAL; use `big_gtk_kit::alert::Alert::choose`" },
+    { path = "big_gtk_kit::alert::choose_future", reason = "takes any parent, and an Alert shown on a parent other than its own gives a Gtk-CRITICAL; use `big_gtk_kit::alert::Alert::choose_future`" },
+    { path = "libadwaita::prelude::AdwWindowExt::add_breakpoint", reason = "the breakpoint outlives the window (libadwaita 1.9); use `big_gtk_kit::breakpoint::add`" },
+    { path = "libadwaita::prelude::AdwApplicationWindowExt::add_breakpoint", reason = "the breakpoint outlives the window (libadwaita 1.9); use `big_gtk_kit::breakpoint::add`" },
+    { path = "libadwaita::prelude::AdwDialogExt::add_breakpoint", reason = "the breakpoint outlives the dialog (libadwaita 1.9); use `big_gtk_kit::breakpoint::add`" },
+    { path = "libadwaita::prelude::BreakpointBinExt::add_breakpoint", reason = "the breakpoint outlives the bin (libadwaita 1.9); use `big_gtk_kit::breakpoint::add`" },
+    { path = "libadwaita::AlertDialog::new", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::alert::Alert::new`, which asks again with one already made when the parent is inside a resizable `AdwWindow` or `AdwApplicationWindow`" },
+    { path = "libadwaita::AlertDialog::builder", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::alert::Alert::builder`" },
+    { path = "libadwaita::Dialog::new", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::new`, which shows one already made when the parent is inside a resizable `AdwWindow` or `AdwApplicationWindow`; one kept and presented again, or a Relm4 root, stays an `adw::Dialog` under `#[expect]`" },
+    { path = "libadwaita::Dialog::builder", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::builder`" },
+    { path = "gtk4::Switch::set_active", reason = "cancels a click's slide even when the value is unchanged (GTK 4.22), so a refresh swallows the click; use `big_gtk_kit::switch::set_active`" },
+    { path = "gtk4::FileDialog::builder", reason = "opens GTK's own picker instead of the desktop's; use `big_relm4_components::file_dialog::present`, which asks the portal first" },
+    { path = "gtk4::FileDialog::new", reason = "opens GTK's own picker instead of the desktop's; use `big_relm4_components::file_dialog::present`, which asks the portal first" },
+    { path = "gtk4::DirectoryList::new", reason = "a watched list crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`" },
+    { path = "std::fs::rename", reason = "replace a file's contents with `big_os_kit::storage::atomic_write` (or its `_private`, `_durable` and `create` forms); move an entry with `big_os_kit::file_io::rename`" },
+    { path = "std::io::stdin", reason = "stdin is a blocking stream; keep it in workers/engines, not UI/app code" },
+    # `input()` panics once the component's runtime has finished, and a panic
+    # inside a GLib callback aborts the process, which here is the whole desktop.
+    # Send through the raw channel and ignore a closed receiver.
+    { path = "relm4::channel::component::ComponentSender::input", reason = "panics once the component has shut down; use `let _ = sender.input_sender().send(msg)`" },
+    { path = "relm4::channel::component::AsyncComponentSender::input", reason = "panics once the component has shut down; use `let _ = sender.input_sender().send(msg)`" },
+    { path = "relm4::channel::component::FactorySender::input", reason = "panics once the component has shut down; use `let _ = sender.input_sender().send(msg)`" },
+    { path = "relm4::channel::component::AsyncFactorySender::input", reason = "panics once the component has shut down; use `let _ = sender.input_sender().send(msg)`" },
+    # The same abort: `remove()` unwraps, and a source that already fired (a
+    # once-timer, or a repeating one that returned Break) is gone.
+    { path = "glib::SourceId::remove", reason = "panics when the source already ran, which aborts inside a GLib callback; use `big_gtk_kit::source::remove`" },
+    # Every icon and picture file goes through big-image: decoded in the sandbox at
+    # the size it is drawn, cached on disk for the whole suite. GTK's own loaders
+    # keep a file at the size of the file, and gdk-pixbuf hands every file to a
+    # glycin loader that copies it to /tmp first.
+    { path = "gtk4::Image::set_from_file", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Image::from_file", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Image::set_resource", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Image::from_resource", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Picture::set_filename", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Picture::for_filename", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Picture::set_file", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Picture::for_file", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Picture::set_resource", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gtk4::Picture::for_resource", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk4::Texture::from_filename", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk4::Texture::from_file", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk4::Texture::from_resource", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk_pixbuf::Pixbuf::from_file", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk_pixbuf::Pixbuf::from_file_at_scale", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk_pixbuf::Pixbuf::from_file_at_size", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk_pixbuf::Pixbuf::from_resource", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk_pixbuf::Pixbuf::from_resource_at_scale", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk_pixbuf::Pixbuf::from_stream", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    { path = "gdk_pixbuf::Pixbuf::from_stream_at_scale", reason = "load icons and pictures through big_image::icon (set_gicon/set_icon_name/set_icon_file/file_texture/resource_texture/own_png_texture): GTK keeps a file at the file's size, and gdk-pixbuf's glycin loader copies it to /tmp" },
+    # A picture's bytes are as untrusted as its file: gdk-pixbuf decodes PNG and
+    # JPEG itself and WMF through libwmf, all in this process.
+    { path = "gdk_pixbuf::PixbufLoader::new", reason = "decode pictures through big_image::load_sandboxed_texture or decode_rgba_sandboxed: PixbufLoader runs gdk-pixbuf's in-process loaders (PNG, JPEG, WMF) on the bytes, outside the image sandbox" },
+    { path = "gdk_pixbuf::PixbufLoader::with_type", reason = "decode pictures through big_image::load_sandboxed_texture or decode_rgba_sandboxed: PixbufLoader runs gdk-pixbuf's in-process loaders (PNG, JPEG, WMF) on the bytes, outside the image sandbox" },
+    { path = "gdk_pixbuf::PixbufLoader::with_mime_type", reason = "decode pictures through big_image::load_sandboxed_texture or decode_rgba_sandboxed: PixbufLoader runs gdk-pixbuf's in-process loaders (PNG, JPEG, WMF) on the bytes, outside the image sandbox" },
+]
+
+disallowed-types = [
+    # From big-gtk-kit/clippy.toml.
+    { path = "libadwaita::InlineViewSwitcher", reason = "leaks a widget tree per page (libadwaita 1.9); use `big_gtk_kit::view_switcher::toggles_for` over a `gtk::Stack`" },
+    { path = "libadwaita::ViewStack", reason = "leaks its transition animation (libadwaita 1.9); use `gtk::Stack` with `big_gtk_kit::view_switcher::toggles_for`" },
+    { path = "libadwaita::ViewSwitcher", reason = "needs an `AdwViewStack`, which leaks (libadwaita 1.9); use `big_gtk_kit::view_switcher::toggles_for` over a `gtk::Stack`" },
+    { path = "std::process::Command", reason = "use big-os-kit subprocess specs/wrappers instead of raw Command" },
+    { path = "gtk4::Spinner", reason = "the suite's spinner is `adw::Spinner`: it sizes with its place and turns only while shown" },
+]

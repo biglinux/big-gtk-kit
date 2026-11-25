@@ -1,0 +1,44 @@
+[package]
+name = "big-relm4-components"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reusable Relm4/libadwaita components for BigLinux applications"
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["relm4", "gtk4", "libadwaita", "components", "biglinux"]
+categories = ["gui"]
+
+[dependencies]
+big-gtk-kit = { workspace = true }
+# The same cairo GTK already uses, declared here only for its `png` feature:
+cairo-rs = { workspace = true, features = ["png"] }
+qrcodegen = { workspace = true }
+# Exporting a window handle so the portal's dialog belongs to the window that
+# asked for it. Wayland-only by nature; there is no other way to say it.
+gdk4-wayland = { workspace = true, features = ["v4_12"] }
+# Objects on GTK's display through a connection of this module's own (`wayland`).
+wayland-client = { workspace = true }
+wayland-backend = { workspace = true, features = ["client_system"] }
+log = { workspace = true }
+adw.workspace = true
+gtk.workspace = true
+relm4.workspace = true
+# `mem::trim_arenas` for dialog teardown (single canonical impl; light default).
+big-image = { workspace = true }
+big-os-kit = { workspace = true }
+
+[dev-dependencies]
+big-testkit = { workspace = true }
+
+[package.metadata.cargo-machete]
+# Used through paths cargo-machete cannot see: `cairo` (cairo-rs),
+# `gettextrs` (gettext-rs), and the `wayland-scanner` macro output (bitflags,
+# wayland-backend). Verified by the build failing without them.
+ignored = ["cairo-rs"]
+
+[lints]
+workspace = true

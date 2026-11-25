@@ -1,8 +1,9 @@
 # big-gtk-kit
 
-GTK4 building blocks shared by the BigLinux Rust programs, and the tools that
-check them. A piece enters only when it is GTK-generic, used by more than one
-program or backed by a measurement, and it depends on nothing but GTK and
+GTK4 building blocks shared by the BigLinux Rust programs, the crates those
+programs are built on (`shared/`), and the tools that check them. A piece of
+the `big-gtk-kit` crate enters only when it is GTK-generic, used by more than
+one program or backed by a measurement, and it depends on nothing but GTK and
 libadwaita: no code of any application.
 
 When GTK or libadwaita gets something wrong, the kit works around it with a
@@ -35,6 +36,24 @@ the whole window, as are none; a `GtkColumnView` with the same columns makes
 ```toml
 big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
 ```
+
+`shared/` holds the crates the BigLinux programs are built on, above the kit:
+`big-os-kit` (GTK-free system calls, storage, processes), `big-image` (image
+loading in glycin's sandbox), `big-relm4-components` (Relm4 and libadwaita
+components), `big-app-kit` (the application shell) and `big-testkit` (the test
+harness). Each is a git dependency the same way, at the same revision as the
+kit. They need Rust 1.100. `big-image` calls what only this repository's copy
+of glycin has (`third_party/glycin/BIGLINUX-PATCH.md`), and Cargo reads
+`[patch]` only in the workspace it builds, so a program that uses it names the
+copy in its own `Cargo.toml`:
+
+```toml
+[patch.crates-io]
+glycin = { git = "https://github.com/biglinux/big-gtk-kit" }
+```
+
+`shared/clippy.toml` holds their bans and `rules/` their ast-grep rules: a
+program copies the entries of the owners it calls.
 
 The Python programs carry their own copy of the Python port (`big_gtk_kit`:
 `install()` with the tooltip card, the dialog focus fix and the popup-parent
@@ -142,14 +161,23 @@ dark card, `BIG_DEMO_FOLLOW=1` to follow the pointer).
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-tools/headless-gate.sh cargo test --workspace -- --include-ignored
-cargo deny check
+cargo clippy --workspace --all-targets --config 'build.warnings="deny"'
+tools/headless-gate.sh cargo nextest run --workspace
+tools/headless-gate.sh cargo nextest run --workspace --run-ignored only -j 1 \
+    -E 'not test(/::(mount_change_is_seen|closed_about_keeps_cache|removed_link_label_keeps_cache)$/)'
+tools/headless-gate.sh --accessible cargo nextest run --workspace --run-ignored only \
+    -E 'test(/::(closed_about_keeps_cache|removed_link_label_keeps_cache)$/)'
+tools/headless-gate.sh cargo test --workspace --doc
+ast-grep scan
+cargo deny --workspace check
 ruff check . && ruff format --check .
 ```
 
-The ignored tests need a display; `tools/headless-gate.sh` runs them in a
-private KWin session.
+`tools/headless-gate.sh` runs the tests in a private KWin session with a home
+of its own. The ignored tests take the activation, so they run one at a time;
+two read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
+namespace. rustdoc runs the doc tests from `TMPDIR`, which must allow
+execution.
 
 ## tools/
 

@@ -1,0 +1,22 @@
+experimental = ["wrapper-scripts"]
+
+# Every test has a deadline: a test still running after `slow-timeout` is reported
+# as slow, and one still running at `terminate-after` periods is killed and fails.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# A popup that must stay open across turns of the main loop, or a window that
+# must stay the active one for keys or focus, gets a KWin session of its own.
+# KWin takes every popup down when any window becomes active, and in the run's
+# one session another test's window can take the activation at any moment. A
+# test that only needs to see a popup open counts its maps
+# (`big_testkit::harness::count_maps`) and stays in the shared session.
+[scripts.wrapper.own-kwin-session]
+command = { command-line = "tools/headless-gate.sh", relative-to = "workspace-root" }
+
+[[profile.default.scripts]]
+filter = """
+(package(big-relm4-components) & test(/::(context_menu::tests::.*|choice_popup_focuses_current_item)$/))
+| (package(big-app-kit) & test(/::(focused_window_takes_its_keys|own_popover_is_no_activation)$/))
+"""
+run-wrapper = "own-kwin-session"

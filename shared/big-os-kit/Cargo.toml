@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 BigLinux contributors
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "big-os-kit"
+version = "0.1.0"
+publish = false
+description = "GTK-free OS primitives: atomic and versioned storage, paths, processes, user database and Samba shares"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bon = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+libc = { workspace = true }
+libsecret = { workspace = true, optional = true }
+gio = { workspace = true, optional = true }
+glib = { workspace = true, optional = true }
+zbus = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+# System calls without `unsafe`.
+rustix = { workspace = true, features = ["event", "fs", "mm", "net", "pipe", "process"] }
+
+[features]
+http-client = ["memfd"]
+# `caller::check_caller`: the program behind a D-Bus call.
+bus-caller = ["dep:zbus"]
+# The KDE Connect daemon over D-Bus.
+kdeconnect = ["dep:zbus", "dep:futures-util"]
+# `seat`: whether a desktop's compositor runs in a logind session on a seat.
+seat = ["dep:zbus"]
+keyring = ["dep:gio", "dep:glib", "dep:libsecret", "memfd"]
+# `memfd`: bytes in an anonymous file, sealed or not, or mapped and shared.
+memfd = []
+# `BigSettingsDocument`: settings applied at once and written on a GIO worker.
+background-save = ["dep:gio", "dep:glib"]
+# `text_fold`: case and accents taken off the words a search compares.
+text-fold = ["dep:glib"]
+# `test_bus`: a private bus with an activatable service, for tests that prove
+# a call does not start it. Enabled by dev-dependencies only.
+test-bus = []
+
+[[bin]]
+name = "big-os-kit-test-daemon"
+path = "src/bin/big_os_kit_test_daemon.rs"
+doc = false
+test = false
+
+[[bin]]
+name = "big-os-kit-test-client"
+path = "src/bin/big_os_kit_test_client.rs"
+doc = false
+test = false
+
+[lints]
+workspace = true

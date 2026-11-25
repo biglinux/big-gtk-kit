@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 BigLinux contributors
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "big-image"
+version = "0.1.0"
+publish = false
+description = "One image-loading substrate: decode at the size shown through the system codecs, off the main loop, SVG rendered at its target size"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+big-os-kit = { workspace = true }
+glycin = { workspace = true, features = ["gdk4"] }
+async-global-executor = { workspace = true }
+gtk = { workspace = true }
+libc = { workspace = true }
+png = "0.18"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+big-testkit = { workspace = true }
+
+[lints]
+workspace = true
