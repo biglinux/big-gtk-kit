@@ -1,7 +1,7 @@
 id: tooltip-name
 language: Rust
 severity: error
-message: Name a control with big_relm4_components::feedback::tooltip::name_control
+message: Name a control with big_gtk_kit::tooltip::name_control
 note: The tooltip a person reads and the label a screen reader announces are one name, set in one place.
 # The owners live in the shared crates; the kit's own crates sit below them.
 files:
@@ -23,4 +23,4 @@ rule:
                   - has: {field: pattern, pattern: $B}
                   - has: {stopBy: end, pattern: $X.tooltip_text($L)}
 ignores:
-  - shared/big-relm4-components/src/feedback/tooltip.rs
+  - src/tooltip.rs

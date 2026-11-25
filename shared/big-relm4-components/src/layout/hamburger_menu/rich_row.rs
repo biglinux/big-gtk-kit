@@ -518,7 +518,7 @@ pub(super) fn build_scale_row(
     row.append(&caption);
 
     let scale =
-        crate::input::slider::with_range(gtk::Orientation::Horizontal, minimum, maximum, step);
+        big_gtk_kit::slider::with_range(gtk::Orientation::Horizontal, minimum, maximum, step);
     scale.set_draw_value(false);
     scale.set_hexpand(true);
     // Long enough to set a value finely in a menu that holds it alone.

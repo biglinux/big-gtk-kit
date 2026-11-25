@@ -23,7 +23,7 @@ pub fn flat_icon_button(icon: &str, label: &str, action: &str) -> gtk::Button {
         .css_classes(["flat"])
         .build();
     button.set_action_name(Some(action));
-    crate::feedback::tooltip::name_control(&button, label);
+    big_gtk_kit::tooltip::name_control(&button, label);
     button
 }
 
@@ -37,7 +37,7 @@ pub fn flat_icon_toggle(icon: &str, label: &str, action: &str) -> gtk::ToggleBut
         .css_classes(["flat"])
         .build();
     button.set_action_name(Some(action));
-    crate::feedback::tooltip::name_control(&button, label);
+    big_gtk_kit::tooltip::name_control(&button, label);
     button
 }
 
@@ -52,6 +52,6 @@ pub fn flat_icon_menu_button(icon: &str, label: &str) -> gtk::MenuButton {
         .icon_name(icon)
         .css_classes(["flat"])
         .build();
-    crate::feedback::tooltip::name_control(&button, label);
+    big_gtk_kit::tooltip::name_control(&button, label);
     button
 }

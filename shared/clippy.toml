@@ -53,9 +53,9 @@ disallowed-methods = [
     { path = "gtk4::MenuButton::set_menu_model", reason = "builds a popover menu that slides a submenu in over it; use `big_relm4_components::layout::hamburger_menu::set_menu_model_action_popover`, or `set_popover` with `hamburger_menu::popover_menu`" },
     { path = "gtk4::builders::MenuButtonBuilder::menu_model", reason = "builds a popover menu that slides a submenu in over it; use `big_relm4_components::layout::hamburger_menu::set_menu_model_action_popover`, or `set_popover` with `hamburger_menu::popover_menu`" },
     # A GtkScale takes the wheel over it, so scrolling a page moves its sliders.
-    { path = "gtk4::Scale::new", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_relm4_components::input::slider::with_range`" },
-    { path = "gtk4::Scale::with_range", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_relm4_components::input::slider::with_range`" },
-    { path = "gtk4::builders::ScaleBuilder::build", reason = "takes every wheel turn over it, so scrolling a page moves the slider; pass the builder to `big_relm4_components::input::slider::build`" },
+    { path = "gtk4::Scale::new", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
+    { path = "gtk4::Scale::with_range", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
+    { path = "gtk4::builders::ScaleBuilder::build", reason = "takes every wheel turn over it, so scrolling a page moves the slider; pass the builder to `big_gtk_kit::slider::build`" },
     # The default factories of a choice list leave each choice unnamed for a
     # screen reader, and libadwaita's cuts each one at 20 characters.
     { path = "libadwaita::ComboRow::new", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass `adw::ComboRow::builder()` to `big_relm4_components::input::dropdown::build`" },
@@ -95,8 +95,8 @@ disallowed-methods = [
     { path = "libadwaita::Dialog::new", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::new`, which shows one already made when the parent is inside a resizable `AdwWindow` or `AdwApplicationWindow`; one kept and presented again, or a Relm4 root, stays an `adw::Dialog` under `#[expect]`" },
     { path = "libadwaita::Dialog::builder", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::builder`" },
     { path = "gtk4::Switch::set_active", reason = "cancels a click's slide even when the value is unchanged (GTK 4.22), so a refresh swallows the click; use `big_gtk_kit::switch::set_active`" },
-    { path = "gtk4::FileDialog::builder", reason = "opens GTK's own picker instead of the desktop's; use `big_relm4_components::file_dialog::present`, which asks the portal first" },
-    { path = "gtk4::FileDialog::new", reason = "opens GTK's own picker instead of the desktop's; use `big_relm4_components::file_dialog::present`, which asks the portal first" },
+    { path = "gtk4::FileDialog::builder", reason = "opens GTK's own picker instead of the desktop's; use `big_gtk_kit::file_dialog::present`, which asks the portal first" },
+    { path = "gtk4::FileDialog::new", reason = "opens GTK's own picker instead of the desktop's; use `big_gtk_kit::file_dialog::present`, which asks the portal first" },
     { path = "gtk4::DirectoryList::new", reason = "a watched list crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`" },
     { path = "std::fs::rename", reason = "replace a file's contents with `big_os_kit::storage::atomic_write` (or its `_private`, `_durable` and `create` forms); move an entry with `big_os_kit::file_io::rename`" },
     { path = "std::io::stdin", reason = "stdin is a blocking stream; keep it in workers/engines, not UI/app code" },

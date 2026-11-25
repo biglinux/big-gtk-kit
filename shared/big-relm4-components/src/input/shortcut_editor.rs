@@ -6,8 +6,8 @@
 //! Rows are grouped by section in the order the sections first appear:
 //! editable rows first, then the fixed rows a widget owns.
 
-use crate::feedback::tooltip::name_control;
 use adw::prelude::*;
+use big_gtk_kit::tooltip::name_control;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
 

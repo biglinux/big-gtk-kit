@@ -45,7 +45,7 @@ impl BigDetailLines {
 /// named `label` for its tooltip and a screen reader.
 #[must_use]
 pub fn copy_all_button(label: &str, lines: BigDetailLines) -> gtk::Button {
-    let button = crate::feedback::tooltip::icon_button("edit-copy-symbolic", label, &[]);
+    let button = big_gtk_kit::tooltip::icon_button("edit-copy-symbolic", label, &[]);
     button.connect_clicked(move |button| {
         button.clipboard().set_text(&lines.copy_text());
     });

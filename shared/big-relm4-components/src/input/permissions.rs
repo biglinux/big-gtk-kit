@@ -3,7 +3,7 @@
 
 //! Nine Unix access bits, without ownership, special bits or filesystem writes.
 
-use crate::feedback::tooltip::name_control;
+use big_gtk_kit::tooltip::name_control;
 use std::rc::Rc;
 
 use adw::prelude::*;

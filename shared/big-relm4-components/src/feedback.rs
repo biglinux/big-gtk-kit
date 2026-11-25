@@ -16,4 +16,3 @@ pub mod shortcuts_dialog;
 pub mod side_card;
 pub mod statement;
 pub mod text_question;
-pub mod tooltip;

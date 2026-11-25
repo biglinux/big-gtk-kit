@@ -5,7 +5,7 @@
 //! Products supply buttons with their own navigation, middle-click and edit
 //! actions. This module owns only fitting, separators and the ancestor menu.
 
-use crate::feedback::tooltip::name_control;
+use big_gtk_kit::tooltip::name_control;
 use gtk::prelude::*;
 
 /// A trail that keeps the current location visible and moves older locations

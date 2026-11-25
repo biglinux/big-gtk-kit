@@ -117,7 +117,7 @@ pub fn vertical_scale_popover(
         .label(&resolved.title)
         .css_classes(["caption"])
         .build();
-    let scale = crate::input::slider::build(
+    let scale = big_gtk_kit::slider::build(
         gtk::Scale::builder()
             .orientation(gtk::Orientation::Vertical)
             .draw_value(false)

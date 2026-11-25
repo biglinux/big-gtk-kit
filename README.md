@@ -111,10 +111,12 @@ ast-grep rules under `rules/` find the hand-made copies of the last two.
 | `css::provider` | `CssProvider::new` | a program's provider answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` from its own properties, light and no preference, whatever the system says |
 | `dialog::Dialog` | `adw::Dialog::new`, `builder` | the same three breakpoints per opening; a `Dialog` shows one already made, as `Alert` does; one kept and presented again stays an `adw::Dialog` |
 | `dialog::present_kept` | building `AdwShortcutsDialog` per opening | its sections and models outlive it (libadwaita 1.9) |
+| `file_dialog::present`, `present_multiple` | `gtk::FileDialog::new`, `builder` | GTK asks the desktop's own picker through the portal only for sandboxed programs; these ask the portal first, so GNOME, KDE and BigLinux each show theirs |
 | `directory::unwatched` | `gtk::DirectoryList::new`, `builder` | GTK 4.22 to 4.24 (still so on `main`) frees a watched list's queued change while its file lookup runs, and the answer reads freed memory: a crash when lists are rebuilt while files arrive; the list does not follow its folder, so make it again when the folder changes |
 | `menu::append_shared_section`, `append_refilled_section` (items vary per build) | `gio::Menu::append_section` | GTK 4.22's menu tracker keeps every section it shows |
 | `password::password_row` | `PasswordEntryRow::new`, `build()` | libadwaita 1.9 keeps the buffer, and the password |
 | `popover::auto_unparent_on_close` | a popover left on `set_parent` | GTK pins it, and its tree, to the widget forever |
+| `slider::with_range`, `slider::build` | `Scale::new`, `with_range`, `ScaleBuilder::build` | a `GtkScale` takes every wheel turn over it, so scrolling a page moves the slider under the pointer |
 | `source::remove` | `glib::SourceId::remove` | panics, and so aborts the program, when the source already ran |
 | `switch::set_active` | `Switch::set_active` | GTK 4.22 cancels a click's slide on an unchanged value |
 | `timer::OnceTimer` | a `timeout_add_local_once` id kept to cancel | GLib gives the id of a timer that ran to another source, which the cancel then removes |
@@ -153,6 +155,10 @@ deriving the accessible name and description from the tooltip.
   take its place without an input event.
 - `tooltip::set_area_tips(&view, |view, x, y| ...)` gives a widget that draws
   its own items one tip per item, in place of answering GTK's `query-tooltip`.
+- `tooltip::name_control(&widget, label)` gives a control one name: the tooltip
+  a person reads and the label a screen reader announces. `icon_button`,
+  `icon_toggle_button`, `icon_menu_button`, `custom_menu_button` and
+  `labeled_icon_button` build named buttons.
 - In a program made of modules, each linking its own copy of the kit, these
   settings and `hide_all` reach the copy that installed the cards: they live
   on the display, so call them once it is open.

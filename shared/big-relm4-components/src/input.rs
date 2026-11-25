@@ -10,7 +10,6 @@ pub mod permissions;
 pub mod scale_popover;
 pub mod shortcut_editor;
 pub mod shortcut_search;
-pub mod slider;
 pub mod spin_row;
 pub mod spin_unit;
 pub mod switch;

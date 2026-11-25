@@ -259,13 +259,13 @@ pub async fn present_multiple_future(
     parent: Option<&gtk::Window>,
     request: FileRequest,
 ) -> Result<Vec<gio::File>, glib::Error> {
-    let (answer, answered) = relm4::channel();
+    let (answer, answered) = futures_channel::oneshot::channel();
     present_multiple(parent, request, move |picked| {
         let _ = answer.send(picked);
     });
     // Every path above answers once; a dialog that went without answering
     // chose nothing.
-    answered.recv().await.unwrap_or_else(|| Ok(Vec::new()))
+    answered.await.unwrap_or_else(|_| Ok(Vec::new()))
 }
 
 /// The local file of a [`present`] answer, for a caller that takes nothing

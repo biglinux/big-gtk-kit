@@ -8,6 +8,11 @@ allow-panic-in-tests = true
 # no include) and keeps them in step with this file.
 
 disallowed-methods = [
+    { path = "gtk4::Scale::new", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
+    { path = "gtk4::Scale::with_range", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
+    { path = "gtk4::builders::ScaleBuilder::build", reason = "takes every wheel turn over it, so scrolling a page moves the slider; pass the builder to `big_gtk_kit::slider::build`" },
+    { path = "gtk4::FileDialog::builder", reason = "opens GTK's own picker instead of the desktop's; use `big_gtk_kit::file_dialog::present`, which asks the portal first" },
+    { path = "gtk4::FileDialog::new", reason = "opens GTK's own picker instead of the desktop's; use `big_gtk_kit::file_dialog::present`, which asks the portal first" },
     { path = "gtk4::prelude::AccessibleExtManual::update_relation", reason = "leaks the list of targets on every call (gtk-rs 0.11); use `big_gtk_kit::accessible::relate`" },
     { path = "libadwaita::PasswordEntryRow::new", reason = "leaks its buffer and the password in it (libadwaita 1.9); use `big_gtk_kit::password::password_row(adw::PasswordEntryRow::builder())`" },
     { path = "libadwaita::builders::PasswordEntryRowBuilder::build", reason = "leaks its buffer and the password in it (libadwaita 1.9); pass the builder to `big_gtk_kit::password::password_row`" },

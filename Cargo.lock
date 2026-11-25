@@ -264,8 +264,12 @@ dependencies = [
 name = "big-gtk-kit"
 version = "0.1.0"
 dependencies = [
+ "big-testkit",
+ "futures-channel",
+ "gdk4-wayland",
  "gtk4",
  "libadwaita",
+ "log",
 ]
 
 [[package]]

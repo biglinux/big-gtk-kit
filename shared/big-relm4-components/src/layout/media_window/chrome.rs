@@ -65,7 +65,7 @@ impl BigMediaChrome {
         header_start_slot.set_valign(gtk::Align::Center);
         header_end_slot.set_valign(gtk::Align::Center);
         header_end_actions.set_valign(gtk::Align::Center);
-        let menu_button = crate::feedback::tooltip::icon_button(&menu.icon_name, &menu.label, &[]);
+        let menu_button = big_gtk_kit::tooltip::icon_button(&menu.icon_name, &menu.label, &[]);
         // A plain button that opens a menu: a screen reader learns it from this alone.
         menu_button.update_property(&[gtk::accessible::Property::HasPopup(true)]);
         let menu_popover = build_flat_action_popover(&menu_button, &menu.items);

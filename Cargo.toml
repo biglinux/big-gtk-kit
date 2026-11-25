@@ -71,6 +71,14 @@ big-testkit = { path = "shared/big-testkit", version = "0.1.0" }
 # The BigLinux GTK and libadwaita: no older library is supported.
 gtk = { version = "0.11", features = ["v4_22"], package = "gtk4" }
 adw = { version = "0.9", features = ["v1_9"], package = "libadwaita" }
+# The file dialog's portal request: a window handle exported over Wayland, and
+# the one answer its future waits for.
+gdk4-wayland = { version = "0.11", features = ["v4_12"] }
+futures-channel = "0.3"
+log = { version = "0.4", features = ["std"] }
+
+[dev-dependencies]
+big-testkit = { workspace = true }
 
 # glycin 3.1.0 starts every loader at its caller's priority; the copy lets a
 # pool start its loaders at a nice value, which big-image's thumbnails use to

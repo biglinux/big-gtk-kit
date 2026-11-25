@@ -10,7 +10,6 @@
 //! slider of the suite through [`with_range`] and [`build`].
 
 use gtk::prelude::*;
-use relm4::gtk;
 
 /// A slider from `min` to `max` in steps of `step`.
 #[must_use]

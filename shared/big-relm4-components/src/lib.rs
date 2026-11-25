@@ -6,7 +6,6 @@ pub mod chart;
 pub mod css;
 pub mod desktop_entry;
 pub mod feedback;
-pub mod file_dialog;
 pub mod focus;
 pub mod input;
 pub mod layout;

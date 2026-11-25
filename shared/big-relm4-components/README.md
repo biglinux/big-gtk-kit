@@ -12,7 +12,7 @@ Do not use it for one fixed label/box or product-specific policy.
 
 ## Main entry points
 
-modules `chart`, `css`, `desktop_entry`, `feedback`, `file_dialog`, `input`, `layout`, `list`, `qr`,
+modules `chart`, `css`, `desktop_entry`, `feedback`, `input`, `layout`, `list`, `qr`,
 `task`, `text`, `time` and `wayland`.
 
 The exact public API and safety requirements are in crate-level rustdoc. Do not
