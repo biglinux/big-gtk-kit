@@ -13,6 +13,5 @@ pub mod pick_list;
 pub mod popover_lifecycle;
 pub mod save_question;
 pub mod shortcuts_dialog;
-pub mod side_card;
 pub mod statement;
 pub mod text_question;

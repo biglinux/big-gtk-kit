@@ -13,7 +13,7 @@
 //! back to [`SideCards::handle`], so no handler holds a widget. Callers pass
 //! every string already translated.
 
-use crate::layout::widget_container::descendants;
+use crate::widget_tree::descendants;
 use std::rc::Rc;
 
 use adw::prelude::*;

@@ -61,7 +61,7 @@ impl State {
     /// Returns where the keyboard went.
     fn return_focus(&self, banner: &adw::Banner) -> Option<gtk::Widget> {
         let window = banner.root().and_downcast::<gtk::Window>()?;
-        if !crate::focus::holds_focus(banner) {
+        if !big_gtk_kit::focus::holds_focus(banner) {
             return None;
         }
         let before = self
@@ -381,7 +381,7 @@ impl BigNotice {
                 .banner
                 .state_flags()
                 .contains(gtk::StateFlags::PRELIGHT);
-            if hovered || crate::focus::holds_focus(&notice.banner) {
+            if hovered || big_gtk_kit::focus::holds_focus(&notice.banner) {
                 notice.step_down_later();
             } else {
                 notice.clear();

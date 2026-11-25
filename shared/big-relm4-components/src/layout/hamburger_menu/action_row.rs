@@ -11,7 +11,7 @@ use relm4::gtk::glib::translate::IntoGlib;
 use relm4::gtk::prelude::*;
 
 use super::{BigMenuActionItem, BigMenuActionSelection};
-use crate::focus::holds_focus;
+use big_gtk_kit::focus::holds_focus;
 
 const ACTION_ACCELERATOR_CSS_CLASS: &str = "action-accelerator";
 /// On a button whose model item carries its own accel.
