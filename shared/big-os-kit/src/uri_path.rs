@@ -40,16 +40,32 @@ pub fn uri_list(bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// The local path `uri` names: `file:///…` or `file://localhost/…`. `None` for
-/// another host's file, another scheme or a broken escape.
+/// The local path `uri` names: `file:///…` or `file://localhost/…`, in any
+/// letter case. `None` for another host's file, another scheme, a broken
+/// escape, or an escaped `/` or NUL, which GLib refuses too: the first would
+/// join two names into one.
 #[must_use]
 pub fn local_path(uri: &str) -> Option<PathBuf> {
-    let rest = uri.strip_prefix("file://")?;
-    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    let rest = strip_prefix_ignoring_case(uri, "file://")?;
+    let path = strip_prefix_ignoring_case(rest, "localhost").unwrap_or(rest);
     if !path.starts_with('/') || path.contains(['?', '#']) {
         return None;
     }
-    Some(PathBuf::from(OsString::from_vec(percent_decoded(path)?)))
+    let bytes = percent_decoded(path)?;
+    let escapes_slash = path.match_indices('%').any(|(index, _)| {
+        path.get(index + 1..index + 3)
+            .is_some_and(|code| code.eq_ignore_ascii_case("2f"))
+    });
+    if escapes_slash || bytes.contains(&0) {
+        return None;
+    }
+    Some(PathBuf::from(OsString::from_vec(bytes)))
+}
+
+fn strip_prefix_ignoring_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.get(..prefix.len())
+        .filter(|head| head.eq_ignore_ascii_case(prefix))
+        .map(|_| &text[prefix.len()..])
 }
 
 #[cfg(test)]
@@ -77,6 +93,10 @@ mod tests {
             Some(PathBuf::from("/tmp/a"))
         );
         assert_eq!(
+            local_path("FILE://LocalHost/tmp/a"),
+            Some(PathBuf::from("/tmp/a"))
+        );
+        assert_eq!(
             local_path("file:///tmp/caf%E9").map(|path| path.as_os_str().as_bytes().to_vec()),
             Some(b"/tmp/caf\xe9".to_vec())
         );
@@ -86,6 +106,9 @@ mod tests {
             "file:///tmp/%zz",
             "file:///tmp/a%2",
             "file:///tmp/a?b",
+            "file:///tmp/a%2Fb",
+            "file:///tmp/a%2fb",
+            "file:///tmp/a%00b",
             "",
         ] {
             assert_eq!(local_path(refused), None, "{refused}");
