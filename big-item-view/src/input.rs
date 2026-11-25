@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use big_gtk_kit::timer::OnceTimer;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene};
@@ -856,8 +857,12 @@ fn install_focus(view: &ItemView) {
     view.add_controller(focus);
 }
 
-/// A spring-load timer: its source, the item it waits on, where the pointer was.
-type Dwell = (glib::SourceId, u32, (f64, f64));
+/// A spring-load timer, the item it waits on and where the pointer was.
+#[derive(Default)]
+struct Dwell {
+    timer: OnceTimer,
+    at: Cell<Option<(u32, (f64, f64))>>,
+}
 
 /// The one action enter and motion answer with (GTK refuses a set): the
 /// presenter's [`ItemPresenter::drop_action`] once the dragged value has
@@ -933,7 +938,7 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             update_drop_action(&view);
         }
     });
-    let dwell: Rc<RefCell<Option<Dwell>>> = Rc::new(RefCell::new(None));
+    let dwell = Rc::new(Dwell::default());
     let weak = view.downgrade();
     let spring = Rc::clone(&dwell);
     target.connect_motion(move |_, x, y| {
@@ -950,33 +955,28 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             view.queue_draw();
         }
         // Resting on a folder opens it; crossing folders does not.
-        let restart = match (spring.borrow().as_ref(), under) {
-            (Some((_, at, from)), Some(p)) => {
-                *at != p || (x - from.0).hypot(y - from.1) > SPRING_DRIFT
-            }
+        let waiting = spring.timer.is_pending().then(|| spring.at.get()).flatten();
+        let restart = match (waiting, under) {
+            (Some((at, from)), Some(p)) => at != p || (x - from.0).hypot(y - from.1) > SPRING_DRIFT,
             (None, Some(_)) => true,
             (_, None) => false,
         };
-        if (restart || under.is_none())
-            && let Some((source, _, _)) = spring.take()
-        {
-            big_gtk_kit::source::remove(source);
+        if restart || under.is_none() {
+            spring.timer.cancel();
         }
         if restart
             && let Some(position) = under
             && presenter.springs_open(position)
         {
             let view_weak = view.downgrade();
-            let slot = Rc::clone(&spring);
-            let source = glib::timeout_add_local_once(SPRING_DWELL, move || {
-                slot.take();
+            spring.at.set(Some((position, (x, y))));
+            spring.timer.arm(SPRING_DWELL, move || {
                 if let Some(view) = view_weak.upgrade()
                     && view.imp().drop_target.get() == Some(position)
                 {
                     view.emit_by_name::<()>("activate", &[&position]);
                 }
             });
-            spring.replace(Some((source, position, (x, y))));
         }
         answer(
             presenter.as_ref(),
@@ -1004,9 +1004,7 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
     let weak = view.downgrade();
     let spring = Rc::clone(&dwell);
     target.connect_leave(move |_| {
-        if let Some((source, _, _)) = spring.take() {
-            big_gtk_kit::source::remove(source);
-        }
+        spring.timer.cancel();
         if let Some(view) = weak.upgrade() {
             view.imp().drop_target.set(None);
             view.imp().drop_at.set(None);
@@ -1016,9 +1014,7 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
     let weak = view.downgrade();
     let spring = dwell;
     target.connect_drop(move |target, value, x, y| {
-        if let Some((source, _, _)) = spring.take() {
-            big_gtk_kit::source::remove(source);
-        }
+        spring.timer.cancel();
         let Some(view) = weak.upgrade() else {
             return false;
         };

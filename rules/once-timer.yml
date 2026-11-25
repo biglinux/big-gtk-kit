@@ -1,11 +1,8 @@
 id: once-timer
 language: Rust
 severity: error
-message: Keep a once-timer you may cancel or re-arm in big_relm4_components::timer::OnceTimer
+message: Keep a once-timer you may cancel or re-arm in big_gtk_kit::timer::OnceTimer
 note: GLib destroys a once-timer when it runs and may give its id to another source; the owner forgets the id before the action runs, so cancelling never removes a spent or reused source.
-# The owners live in the shared crates; the kit's own crates sit below them.
-files:
-  - shared/**
 rule:
   kind: call_expression
   any:
@@ -49,4 +46,6 @@ rule:
 ignores:
   - "**/tests/**"
   - "**/*tests.rs"
-  - shared/big-relm4-components/src/timer.rs
+  - src/timer.rs
+  # Its tests make the raw sources that source::remove is checked against.
+  - src/source.rs

@@ -19,6 +19,7 @@ mod shadow;
 pub mod source;
 mod surface;
 pub mod switch;
+pub mod timer;
 pub mod tooltip;
 pub mod view_switcher;
 

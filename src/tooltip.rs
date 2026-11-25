@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 
+use crate::timer::OnceTimer;
+
 const SHOW_DELAY: Duration = Duration::from_millis(150);
 /// Reaching another widget this soon after a card hid shows its card at once.
 const BROWSE_WINDOW: Duration = Duration::from_millis(300);
@@ -180,7 +182,7 @@ fn attach(native: &gtk::Widget) {
         owner: RefCell::default(),
         area: RefCell::default(),
         owner_handlers: RefCell::default(),
-        timer: RefCell::default(),
+        timer: OnceTimer::new(),
         shown: Cell::new(false),
         hidden_at: Cell::new(None),
         pressed: Cell::new(false),
@@ -288,7 +290,7 @@ struct Engine {
     /// The owner's tip under the pointer, for a widget with [`set_area_tips`].
     area: RefCell<Area>,
     owner_handlers: RefCell<Vec<glib::SignalHandlerId>>,
-    timer: RefCell<Option<glib::SourceId>>,
+    timer: OnceTimer,
     shown: Cell<bool>,
     hidden_at: Cell<Option<Instant>>,
     /// Pressed on the current owner: no card until the pointer moves to another.
@@ -355,14 +357,11 @@ impl Engine {
             return;
         }
         let weak = Rc::downgrade(self);
-        let timer = glib::timeout_add_local_once(SHOW_DELAY, move || {
+        self.timer.arm(SHOW_DELAY, move || {
             if let Some(engine) = weak.upgrade() {
-                // Ran: nothing left to remove.
-                engine.timer.take();
                 engine.show(false);
             }
         });
-        self.timer.replace(Some(timer));
     }
 
     fn owner(&self) -> Option<gtk::Widget> {
@@ -511,7 +510,7 @@ impl Engine {
 
     /// Close the card for good on its owner: a press acted on it.
     fn dismiss(&self) {
-        self.cancel_timer();
+        self.timer.cancel();
         self.pressed.set(true);
         self.popdown();
         // The next owner waits its delay, as after any action.
@@ -525,7 +524,7 @@ impl Engine {
 
     /// Let go of the owner, leaving the card as it is.
     fn release(&self) {
-        self.cancel_timer();
+        self.timer.cancel();
         self.area.take();
         if let Some(owner) = self.owner.take().and_then(|owner| owner.upgrade()) {
             for handler in self.owner_handlers.take() {
@@ -542,12 +541,6 @@ impl Engine {
                 card.popover.popdown();
             }
             self.hidden_at.set(Some(Instant::now()));
-        }
-    }
-
-    fn cancel_timer(&self) {
-        if let Some(timer) = self.timer.take() {
-            crate::source::remove(timer);
         }
     }
 }
