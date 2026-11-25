@@ -249,6 +249,20 @@ pub fn present_multiple(
     });
 }
 
+/// [`present`] as a future, for a caller inside an async block.
+///
+/// # Errors
+///
+/// The dialog's error, as [`present`] passes it on; a cancel is `Ok(None)`.
+pub async fn present_future(
+    parent: Option<&gtk::Window>,
+    request: FileRequest,
+) -> Result<Option<gio::File>, glib::Error> {
+    present_multiple_future(parent, request)
+        .await
+        .map(|files| files.into_iter().next())
+}
+
 /// [`present_multiple`] as a future, for a caller inside an async block.
 ///
 /// # Errors
