@@ -8,6 +8,7 @@ gitignore = true
 exclude_re = [
   # Equivalent: the flags are distinct single bits, so `|` and `^` agree.
   "shared/big-os-kit/src/file_io.rs:.*replace \\| with \\^ in open_regular_no_follow",
+  "shared/big-os-kit/src/file_io.rs:.*replace \\| with \\^ in open_lock_file",
   "shared/big-os-kit/src/storage.rs:.*replace \\| with \\^ in BigStorageFileLock::acquire",
 
   # Equivalent: readahead advice changes how much the kernel fetches, never

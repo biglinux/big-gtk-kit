@@ -204,13 +204,23 @@ fn abandoned_staging_is_cleared() {
     let dead = private(".stage-999999999-0", 0o700);
     let mine = private(&format!(".stage-{}-999", std::process::id()), 0o700);
     let shared = private(".stage-999999999-1", 0o755);
-    let lookalike = private(".stage-notes", 0o700);
+    let lookalikes = [
+        ".stage-notes",
+        ".stage-999999999-",
+        ".stage-999999999-tmp",
+        // `u32::from_str` takes a sign the name's rule does not.
+        ".stage-+999999999-0",
+    ]
+    .map(|name| private(name, 0o700));
+    // init never exits.
+    let live = private(".stage-1-0", 0o700);
     let other = private(".other-999999999-0", 0o700);
 
     let staged = OwnedPrivateDirectory::create(&parent, ".stage").unwrap();
 
     assert!(!dead.exists());
-    assert!(mine.exists() && shared.exists() && lookalike.exists() && other.exists());
+    assert!(mine.exists() && shared.exists() && live.exists() && other.exists());
+    assert!(lookalikes.iter().all(|lookalike| lookalike.exists()));
     drop(staged);
     let _ = fs::remove_dir_all(parent);
 }
@@ -376,6 +386,38 @@ fn file_predicates_tell_kinds_apart() {
     assert!(!is_executable_file(&missing));
 
     let _ = fs::remove_dir_all(dir);
+}
+
+/// A file this user may not read keeps the kernel's answer: it is neither a
+/// missing `/proc` nor a missing file.
+#[test]
+fn unreadable_file_keeps_its_error() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = file_io_test_dir("unreadable");
+    let path = dir.join("secret");
+    fs::write(&path, "x").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let opened = open_regular(&path).map(drop).map_err(|error| error.kind());
+    let read = read_bounded_if_exists(&path, 16).map_err(|error| error.kind());
+
+    let _ = fs::remove_dir_all(dir);
+    assert_eq!(opened, Err(std::io::ErrorKind::PermissionDenied));
+    assert_eq!(read, Err(std::io::ErrorKind::PermissionDenied));
+}
+
+#[test]
+fn create_dir_keeps_taken_name() {
+    let dir = file_io_test_dir("create-dir");
+    let made = dir.join("made");
+
+    create_dir(&made).unwrap();
+    let again = create_dir(&made).map_err(|error| error.kind());
+
+    let made_directory = made.is_dir();
+    let _ = fs::remove_dir_all(dir);
+    assert!(made_directory);
+    assert_eq!(again, Err(std::io::ErrorKind::AlreadyExists));
 }
 
 #[test]
