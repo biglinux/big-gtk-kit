@@ -95,7 +95,7 @@ fn has_animation_header(path: &Path) -> bool {
 
     const PROBE_BYTES: usize = 64 * 1024;
 
-    let Ok(mut file) = std::fs::File::open(path) else {
+    let Ok(mut file) = big_os_kit::file_io::open_regular_no_follow(path) else {
         return false;
     };
     let mut head = Vec::new();
@@ -240,6 +240,13 @@ mod tests {
         assert!(!has_animation_header(&directory.join("missing.gif")));
 
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn fifo_probe_gives_up() {
+        assert!(crate::thumbnailer::tests::refuses_fifo(
+            has_animation_header
+        ));
     }
 
     #[test]
