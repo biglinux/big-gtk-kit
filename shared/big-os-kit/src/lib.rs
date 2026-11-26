@@ -64,4 +64,4 @@ pub mod uri_path;
 pub mod users;
 pub mod usershare;
 
-pub use process_locale::{decimal_mark, init_c_numeric_locale};
+pub use process_locale::{decimal_mark, init_c_numeric_locale, set_locale_from_environment};

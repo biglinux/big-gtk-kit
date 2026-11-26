@@ -50,6 +50,29 @@ pub unsafe fn init_c_numeric_locale() {
     }
 }
 
+/// Set every locale category from the environment, as `setlocale(LC_ALL, "")`
+/// does; `false` when the environment names a locale this system lacks, which
+/// leaves the locale as it was.
+///
+/// `setlocale` races with any other thread reading the locale or the
+/// environment, so this runs only while the process has one thread.
+///
+/// # Errors
+///
+/// `/proc/self/task` cannot be read, or another thread runs.
+pub fn set_locale_from_environment() -> std::io::Result<bool> {
+    let threads = std::fs::read_dir("/proc/self/task")?.count();
+    if threads != 1 {
+        return Err(std::io::Error::other(format!(
+            "{threads} threads run: the locale is set before any other starts"
+        )));
+    }
+    // SAFETY: this is the process's only thread, and nothing it runs between
+    // the count and the call starts another.
+    let set = unsafe { libc::setlocale(libc::LC_ALL, c"".as_ptr()) };
+    Ok(!set.is_null())
+}
+
 /// The decimal mark of the language the person reads, `,` for `pt_BR`.
 ///
 /// Taken from the numeric data of the message locale the environment names,
@@ -90,6 +113,18 @@ pub fn decimal_mark() -> char {
 
 #[cfg(test)]
 mod tests {
+    /// Beside a second thread the locale is left alone and the call refused;
+    /// the single-thread case runs in `tests/process_locale.rs`.
+    #[test]
+    fn locale_refused_beside_thread() {
+        let (stop, wait) = std::sync::mpsc::channel::<()>();
+        let second = std::thread::spawn(move || wait.recv());
+        let beside = super::set_locale_from_environment();
+        drop(stop);
+        let _ = second.join();
+        assert!(beside.is_err(), "{beside:?}");
+    }
+
     /// An empty `LC_ALL` is unset, as glibc reads it: the language stays the
     /// one `LANG` names. Checked in a child run, which owns its environment.
     #[test]

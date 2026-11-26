@@ -59,5 +59,11 @@ path = "src/bin/big_os_kit_test_client.rs"
 doc = false
 test = false
 
+[[bin]]
+name = "big-os-kit-test-locale"
+path = "src/bin/big_os_kit_test_locale.rs"
+doc = false
+test = false
+
 [lints]
 workspace = true
