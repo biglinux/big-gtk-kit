@@ -68,8 +68,10 @@ mod tests {
         const CHILD: &str = "BIG_OS_KIT_CHILD_CRASH_REPORTS";
         if let Some(switch) = std::env::var_os(CHILD) {
             let limit = getrlimit(Resource::Core);
-            // A hard limit of 0 leaves nothing to lower.
+            let on = switch == "on";
+            // A hard limit of 0 leaves nothing to lower, only the switch to read.
             if limit.maximum == Some(0) {
+                assert_eq!(apply(), on);
                 return;
             }
             let raised = Rlimit {
@@ -77,7 +79,6 @@ mod tests {
                 maximum: limit.maximum,
             };
             setrlimit(Resource::Core, raised).unwrap();
-            let on = switch == "on";
             assert_eq!(apply(), on);
             assert_eq!(getrlimit(Resource::Core).current == Some(0), !on);
             return;
