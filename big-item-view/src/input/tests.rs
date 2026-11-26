@@ -290,6 +290,36 @@ fn enter_and_motion_move_before_load() {
     window.destroy();
 }
 
+/// Oracle: GTK's list widgets activate on a second press only when single
+/// click activation is off (`gtklistfactorywidget.c`).
+#[gtk::test]
+#[ignore = "needs a display"]
+fn single_click_double_activates_once() {
+    let (view, _selection, window) = shown_view();
+    let activations = Rc::new(RefCell::new(Vec::new()));
+    view.connect_closure(
+        "activate",
+        false,
+        glib::closure_local!(
+            #[strong]
+            activations,
+            move |_: ItemView, position: u32| activations.borrow_mut().push(position)
+        ),
+    );
+    let click: gtk::GestureClick = controller(&view);
+    let (x, y) = middle(&view, 1);
+    for single in [true, false] {
+        view.set_single_click_activate(single);
+        activations.borrow_mut().clear();
+        for n_press in [1, 2] {
+            primary_pressed(&view, &click, n_press, view.position_at(x, y), x, y);
+            primary_released(&view, &click, n_press, x, y);
+        }
+        assert_eq!(*activations.borrow(), [1], "single click: {single}");
+    }
+    window.destroy();
+}
+
 /// Copies what comes from elsewhere, and takes drops on item 1 alone.
 struct Across;
 

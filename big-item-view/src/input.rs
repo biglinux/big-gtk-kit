@@ -207,121 +207,131 @@ fn install_click(view: &ItemView) {
         let Some(view) = weak.upgrade() else {
             return;
         };
-        let imp = view.imp();
-        imp.keyboard_cursor.set(false);
+        view.imp().keyboard_cursor.set(false);
         let position = view.position_at(x, y);
         match gesture.current_button() {
-            gdk::BUTTON_PRIMARY => {}
+            gdk::BUTTON_PRIMARY => primary_pressed(&view, gesture, n_press, position, x, y),
             gdk::BUTTON_MIDDLE => {
                 if let Some(position) = position {
                     view.emit_by_name::<()>("middle-click", &[&position]);
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
-                return;
             }
             gdk::BUTTON_SECONDARY => {
                 view.grab_focus();
                 let position = position.unwrap_or(gtk::INVALID_LIST_POSITION);
                 view.emit_by_name::<()>("context-menu", &[&position, &x, &y]);
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                return;
             }
-            _ => return,
-        }
-        view.grab_focus();
-        let (ctrl, shift) = modifiers(gesture);
-        imp.pending.set(None);
-        let Some(position) = position else {
-            if !ctrl
-                && !shift
-                && let Some(model) = view.model()
-            {
-                model.unselect_all();
-            }
-            return;
-        };
-        match control_at(&view, position, x, y) {
-            Some(Control::Expander(row)) => {
-                row.set_expanded(!row.is_expanded());
-                imp.set_cursor(Some(position));
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                return;
-            }
-            Some(Control::Cell { column, value }) => {
-                imp.set_cursor(Some(position));
-                view.emit_by_name::<()>("cell-pressed", &[&position, &column, &value]);
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                return;
-            }
-            None => {}
-        }
-        if on_tick(&view, position, x, y) {
-            if imp.geometry.borrow().tick == TickMode::Check {
-                view.emit_by_name::<()>("check-toggled", &[&position]);
-            } else {
-                toggle(&view, position);
-            }
-            imp.set_cursor(Some(position));
-            imp.anchor.set(Some(position));
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            return;
-        }
-        let selected = view
-            .model()
-            .is_some_and(|model| model.is_selected(position));
-        if shift {
-            select_range(&view, imp.anchor.get().unwrap_or(position), position, !ctrl);
-        } else if ctrl {
-            imp.pending.set(Some(Pending::Toggle(position)));
-            imp.anchor.set(Some(position));
-        } else if selected {
-            // Kept until the release: dragging a selection must carry all of it.
-            imp.pending.set(Some(Pending::SelectOnly(position)));
-            imp.anchor.set(Some(position));
-        } else {
-            if let Some(model) = view.model() {
-                model.select_item(position, true);
-            }
-            imp.anchor.set(Some(position));
-        }
-        imp.set_cursor(Some(position));
-        if n_press == 2 {
-            imp.pending.set(None);
-            view.emit_by_name::<()>("activate", &[&position]);
+            _ => {}
         }
     });
     let weak = view.downgrade();
     click.connect_released(move |gesture, n_press, x, y| {
-        let Some(view) = weak.upgrade() else {
-            return;
-        };
-        if gesture.current_button() != gdk::BUTTON_PRIMARY {
-            return;
-        }
-        let imp = view.imp();
-        let pending = imp.pending.take();
-        match pending {
-            Some(Pending::Toggle(position)) => toggle(&view, position),
-            Some(Pending::SelectOnly(position)) => {
-                if let Some(model) = view.model() {
-                    model.select_item(position, true);
-                }
-            }
-            None => {}
-        }
-        let (ctrl, shift) = modifiers(gesture);
-        if imp.single_click.get()
-            && n_press == 1
-            && !ctrl
-            && !shift
-            && let Some(position) = view.position_at(x, y)
-            && !on_tick(&view, position, x, y)
-            && control_at(&view, position, x, y).is_none()
+        if let Some(view) = weak.upgrade()
+            && gesture.current_button() == gdk::BUTTON_PRIMARY
         {
-            view.emit_by_name::<()>("activate", &[&position]);
+            primary_released(&view, gesture, n_press, x, y);
         }
     });
     view.add_controller(click);
+}
+
+fn primary_pressed(
+    view: &ItemView,
+    gesture: &gtk::GestureClick,
+    n_press: i32,
+    position: Option<u32>,
+    x: f64,
+    y: f64,
+) {
+    let imp = view.imp();
+    view.grab_focus();
+    let (ctrl, shift) = modifiers(gesture);
+    imp.pending.set(None);
+    let Some(position) = position else {
+        if !ctrl
+            && !shift
+            && let Some(model) = view.model()
+        {
+            model.unselect_all();
+        }
+        return;
+    };
+    match control_at(view, position, x, y) {
+        Some(Control::Expander(row)) => {
+            row.set_expanded(!row.is_expanded());
+            imp.set_cursor(Some(position));
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            return;
+        }
+        Some(Control::Cell { column, value }) => {
+            imp.set_cursor(Some(position));
+            view.emit_by_name::<()>("cell-pressed", &[&position, &column, &value]);
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            return;
+        }
+        None => {}
+    }
+    if on_tick(view, position, x, y) {
+        if imp.geometry.borrow().tick == TickMode::Check {
+            view.emit_by_name::<()>("check-toggled", &[&position]);
+        } else {
+            toggle(view, position);
+        }
+        imp.set_cursor(Some(position));
+        imp.anchor.set(Some(position));
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        return;
+    }
+    let selected = view
+        .model()
+        .is_some_and(|model| model.is_selected(position));
+    if shift {
+        select_range(view, imp.anchor.get().unwrap_or(position), position, !ctrl);
+    } else if ctrl {
+        imp.pending.set(Some(Pending::Toggle(position)));
+        imp.anchor.set(Some(position));
+    } else if selected {
+        // Kept until the release: dragging a selection must carry all of it.
+        imp.pending.set(Some(Pending::SelectOnly(position)));
+        imp.anchor.set(Some(position));
+    } else {
+        if let Some(model) = view.model() {
+            model.select_item(position, true);
+        }
+        imp.anchor.set(Some(position));
+    }
+    imp.set_cursor(Some(position));
+    if n_press == 2 && !imp.single_click.get() {
+        imp.pending.set(None);
+        view.emit_by_name::<()>("activate", &[&position]);
+    }
+}
+
+fn primary_released(view: &ItemView, gesture: &gtk::GestureClick, n_press: i32, x: f64, y: f64) {
+    let imp = view.imp();
+    let pending = imp.pending.take();
+    match pending {
+        Some(Pending::Toggle(position)) => toggle(view, position),
+        Some(Pending::SelectOnly(position)) => {
+            if let Some(model) = view.model() {
+                model.select_item(position, true);
+            }
+        }
+        None => {}
+    }
+    let (ctrl, shift) = modifiers(gesture);
+    if imp.single_click.get()
+        && n_press == 1
+        && !ctrl
+        && !shift
+        && let Some(position) = view.position_at(x, y)
+        && !on_tick(view, position, x, y)
+        && control_at(view, position, x, y).is_none()
+    {
+        view.emit_by_name::<()>("activate", &[&position]);
+    }
 }
 
 /// Drag a rectangle from empty space to select what it meets.
