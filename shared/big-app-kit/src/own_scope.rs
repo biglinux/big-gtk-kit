@@ -438,11 +438,9 @@ fn launch_context(
     Some(context)
 }
 
-/// Give what `context` starts the system's environment, without the desktop's
-/// own variables, with the person's numeric locale instead of this process's
-/// `C`, and for [`Renderer::Software`] its variables, set after the removal
-/// since `__EGL_VENDOR_LIBRARY_FILENAMES` is among both.
-/// A GPU's come from switcheroo-control at launch ([`set_gpu_environment`]).
+/// Give what `context` starts the system's environment: no desktop variables,
+/// the person's numeric locale, and the software renderer's variables set last
+/// (`__EGL_VENDOR_LIBRARY_FILENAMES` is in both lists).
 fn set_environment(context: &impl IsA<gio::AppLaunchContext>, renderer: Renderer) {
     for variable in big_os_kit::subprocess::desktop_only_variables() {
         context.unsetenv(variable);

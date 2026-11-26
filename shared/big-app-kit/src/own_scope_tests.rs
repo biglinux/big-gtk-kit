@@ -264,6 +264,31 @@ fn renderer_environment_reaches_program() {
     }
 }
 
+/// In the child of [`person_numeric_locale_reaches_program`]: after this
+/// process pins its own numbers to `C`, a launch carries `expected` as its
+/// `LC_NUMERIC`, none when it is empty, and never the variable that kept it.
+fn launch_has_numeric(expected: &str) {
+    // SAFETY: the child runs this one test, on the only thread that touches
+    // the environment.
+    unsafe { big_os_kit::init_c_numeric_locale() };
+    let (_, environment) = launched_with(Renderer::DefaultGpu, None);
+    let numeric: Vec<_> = environment
+        .iter()
+        .filter(|line| line.starts_with("LC_NUMERIC="))
+        .collect();
+    if expected.is_empty() {
+        assert!(numeric.is_empty(), "{numeric:?}");
+    } else {
+        assert_eq!(numeric, [&format!("LC_NUMERIC={expected}")]);
+    }
+    assert!(
+        !environment
+            .iter()
+            .any(|line| line.starts_with("BIG_PERSON_LC_NUMERIC=")),
+        "{environment:?}"
+    );
+}
+
 /// A program started for the person reads numbers in the person's locale, not
 /// in the `C` this process pinned for itself: `LC_ALL` over `LC_NUMERIC`, and
 /// none when the person named none.
@@ -271,28 +296,7 @@ fn renderer_environment_reaches_program() {
 fn person_numeric_locale_reaches_program() {
     const EXPECTED: &str = "BIG_APP_KIT_EXPECTED_NUMERIC";
     if let Some(expected) = std::env::var_os(EXPECTED) {
-        // SAFETY: the child runs this one test, on the only thread that
-        // touches the environment.
-        unsafe { big_os_kit::init_c_numeric_locale() };
-        let (_, environment) = launched_with(Renderer::DefaultGpu, None);
-        let numeric: Vec<_> = environment
-            .iter()
-            .filter(|line| line.starts_with("LC_NUMERIC="))
-            .collect();
-        if expected.is_empty() {
-            assert!(numeric.is_empty(), "{numeric:?}");
-        } else {
-            assert_eq!(
-                numeric,
-                [&format!("LC_NUMERIC={}", expected.to_string_lossy())]
-            );
-        }
-        assert!(
-            !environment
-                .iter()
-                .any(|line| line.starts_with("BIG_PERSON_LC_NUMERIC=")),
-            "{environment:?}"
-        );
+        launch_has_numeric(&expected.to_string_lossy());
         return;
     }
     let cases: [(&[(&str, &str)], &str); 4] = [
