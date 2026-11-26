@@ -18,7 +18,7 @@ build/reftrace.so: reftrace/reftrace.c
 build/census-control: census/tests/control.c build/libgobject-census.so
 	$(CC) $(CFLAGS) $(WARN) -Icensus -o $@ census/tests/control.c -Lbuild -lgobject-census -Wl,-rpath,'$$ORIGIN' $(GLIB)
 
-check: build/census-control
+check: build/census-control build/reftrace.so
 	build/census-control build
 	python3 -m unittest discover -s static/tests
 	python3 -m unittest discover -s sweep/tests
