@@ -121,11 +121,9 @@ pub fn install_spin_row_unit(row: &adw::SpinRow, unit: BigSpinUnit) {
     row.set_text(&unit.display(row.value()));
 }
 
-/// The value a unit field's `text` stands for. The text the field wrote for
-/// `value` keeps it, rounding and all, so `1.5 MB` shown as `2 MB` survives
-/// leaving the field and a half step still moves. Text that is not a number
-/// keeps it too: reporting a failed conversion makes the control jump to its
-/// maximum instead.
+/// The value a unit field's `text` stands for: the field's own text for
+/// `value`, rounded, keeps it, and so does text that is not a number, which
+/// reported as a failed conversion would send the control to its maximum.
 fn read_back(unit: BigSpinUnit, text: &str, value: f64) -> f64 {
     if text == unit.display(value) {
         return value;

@@ -73,11 +73,9 @@ impl BigBreadcrumbBar {
     /// A crumb that had the focus hands it to the new last crumb.
     pub fn set_items(&self, items: Vec<(String, gtk::Button)>) {
         self.overflow.popdown();
-        // GTK keeps a removed focused crumb's ancestors pointing at the trail
-        // when the focus moves on before it settles, and Tab then enters
-        // there, past the controls before the trail. The overflow button counts:
-        // the keyboard is on it after an ancestor was chosen from its menu, and
-        // `fit` may hide it.
+        // GTK leaves a removed focused crumb's ancestors pointing at the trail,
+        // where Tab then enters past the controls before it; the overflow
+        // button, which `fit` may hide, counts as a crumb here.
         let had_focus = self.bar.focus_child().is_some();
         while let Some(child) = self.overflow.next_sibling() {
             self.bar.remove(&child);
