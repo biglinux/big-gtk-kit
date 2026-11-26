@@ -388,9 +388,19 @@ pub async fn mount(connection: &Connection, id: &str) -> Result<Vec<Storage>, Mo
 }
 
 /// Where `rest` of a phone is, among its `storages`: a first component naming
-/// a storage selects it, otherwise the internal storage holds `rest`.
+/// a storage selects it, otherwise the internal storage holds `rest`. `None`
+/// for a `rest` that is absolute or climbs with `..`, which would leave the
+/// phone.
 #[must_use]
 pub fn place(storages: &[Storage], rest: &Path) -> Option<PathBuf> {
+    if !rest.components().all(|part| {
+        matches!(
+            part,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    }) {
+        return None;
+    }
     let mut parts = rest.components();
     let named = parts.next().and_then(|first| {
         storages

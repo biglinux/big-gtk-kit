@@ -98,6 +98,9 @@ fn storage_name_selects_its_storage() {
         Some(PathBuf::from("/m/storage/emulated/0"))
     );
     assert_eq!(place(&[], Path::new("DCIM")), None);
+    assert_eq!(place(&storages, Path::new("../../.ssh")), None);
+    assert_eq!(place(&storages, Path::new("/etc")), None);
+    assert_eq!(place(&storages, Path::new("DCIM/../..")), None);
 }
 
 // A private bus that serves no activation files: a call to a name nobody owns
