@@ -36,7 +36,8 @@ pub fn toggles_for(stack: &gtk::Stack, icons: bool) -> adw::ToggleGroup {
             adw::Toggle::builder()
                 .name(name.as_str())
                 .icon_name(page.icon_name().unwrap_or_default().as_str())
-                .tooltip(title.as_str())
+                // Pango markup, which libadwaita 1.10 aborts on when it does not parse.
+                .tooltip(gtk::glib::markup_escape_text(&title).as_str())
                 .build()
         } else {
             adw::Toggle::builder()
@@ -61,6 +62,24 @@ mod tests {
 
     use super::*;
     use crate::testing::{init, pump, watch};
+
+    #[test]
+    fn icon_toggle_is_named_by_a_title_with_markup_characters() {
+        big_testkit::harness::require_gtk_test(|| {
+            adw::init().expect("libadwaita");
+            let stack = gtk::Stack::new();
+            let page = stack.add_titled(&gtk::Label::new(None), Some("media"), "Sound & <Video>");
+            page.set_icon_name("audio-x-generic-symbolic");
+
+            let group = toggles_for(&stack, true);
+
+            assert!(big_testkit::harness::has_named_descendant(
+                &group,
+                gtk::AccessibleRole::Radio,
+                "Sound & <Video>",
+            ));
+        });
+    }
 
     #[gtk::test]
     #[ignore = "needs a display"]
