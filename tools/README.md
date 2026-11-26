@@ -38,7 +38,8 @@ seen from a component) with its id thrown away, a repeating GLib source
 closure can return `Continue` but never `Break` when a weak reference fails to
 upgrade. `--strict` fails on warnings too, which is what a gate runs: a warning
 is fixed or waived. Reads `.rs` files only; test code is ignored and an
-unreadable file is skipped with a warning.
+unreadable file is skipped with a warning. A path that is neither a `.rs` file
+nor a directory is a usage error (exit 2), so a mistyped path fails the gate.
 
 A finding is waived with a reason; a waiver without one is an error:
 

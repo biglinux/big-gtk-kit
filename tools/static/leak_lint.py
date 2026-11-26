@@ -839,6 +839,8 @@ def check(paths: list[Path], icons: set[str]) -> list[Finding]:
 
 
 def rust_files(paths: list[str]) -> list[Path]:
+    """The `.rs` files named and under the directories named. ValueError for any
+    other path: a mistyped one must not leave a gate green."""
     out = []
     for raw in paths:
         p = Path(raw)
@@ -850,6 +852,8 @@ def rust_files(paths: list[str]) -> list[Path]:
                 for f in sorted(p.rglob("*.rs"))
                 if not ({"target", ".git"} & set(f.relative_to(p).parts))
             )
+        else:
+            raise ValueError(f"{raw} is neither a .rs file nor a directory")
     return out
 
 
@@ -868,7 +872,11 @@ def main(argv=None) -> int:
         "--strict", action="store_true", help="fail on warnings as well as errors"
     )
     options = parser.parse_args(argv)
-    files = rust_files(options.paths)
+    try:
+        files = rust_files(options.paths)
+    except ValueError as error:
+        print(f"leak_lint: {error}", file=sys.stderr)
+        return 2
     if not files:
         print("leak_lint: no Rust sources under the given paths", file=sys.stderr)
         return 2
