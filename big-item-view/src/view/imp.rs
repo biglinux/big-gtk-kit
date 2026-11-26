@@ -330,7 +330,7 @@ impl WidgetImpl for ItemView {
                     (width, 0.0),
                     false,
                 ));
-                let full = self.sections.borrow().content_size(&metrics).1;
+                let full = self.sections.borrow().over(&metrics).content_size().1;
                 (if scrolls_here { cell_h.min(full) } else { full }, full)
             }
             (Flow::ColumnMajor, gtk::Orientation::Vertical) => {
@@ -381,7 +381,7 @@ impl WidgetImpl for ItemView {
             rtl,
         ));
         self.metrics.replace(metrics.clone());
-        let (content_w, content_h) = self.sections.borrow().content_size(&metrics);
+        let (content_w, content_h) = self.sections.borrow().over(&metrics).content_size();
         let (pitch_x, pitch_y) = metrics.cell_size();
         // Headings over the columns move when a line changes width.
         if self.line_width.replace(pitch_x) != pitch_x && !self.geometry.borrow().columns.is_empty()
@@ -409,12 +409,15 @@ impl WidgetImpl for ItemView {
         let (width, height) = (obj.width() as f32, obj.height() as f32);
         snapshot.push_clip(&graphene::Rect::new(0.0, 0.0, width, height));
         let sections = self.sections.borrow().clone();
-        let range = sections.visible_range(&metrics, scroll);
-        for index in sections.visible_headings(&metrics, scroll) {
-            self.draw_heading(snapshot, &sections, &metrics, index, scroll);
+        let runs = sections.over(&metrics);
+        let range = runs.visible_range(scroll);
+        for index in runs.visible_headings(scroll) {
+            if let Some(rect) = runs.heading(index) {
+                self.draw_heading(snapshot, rect, sections.starts[index], scroll);
+            }
         }
         for position in range.clone() {
-            let Some(rect) = sections.rect(&metrics, position) else {
+            let Some(rect) = runs.rect(position) else {
                 continue;
             };
             let Some(node) = self.item_node(position, (rect.width, rect.height)) else {
@@ -788,7 +791,8 @@ impl ItemView {
         let range = self
             .sections
             .borrow()
-            .visible_range(&metrics, self.scroll());
+            .over(&metrics)
+            .visible_range(self.scroll());
         if self.last_range.get() == (range.start, range.end) {
             return;
         }

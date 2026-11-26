@@ -33,7 +33,7 @@ mod view;
 use gtk::{gdk, gio, glib};
 
 pub use header::ColumnHeader;
-pub use layout::{Flow, Sections, Step};
+pub use layout::{Flow, Runs, Sections, Step};
 pub use view::ItemView;
 
 /// Draws `icon` at `size` and `scale` for the display, and hands the picture to

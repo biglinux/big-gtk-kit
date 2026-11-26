@@ -211,7 +211,8 @@ impl ItemView {
         let rect = imp
             .sections
             .borrow()
-            .rect(&imp.metrics.borrow().clone(), position)?;
+            .over(&imp.metrics.borrow().clone())
+            .rect(position)?;
         let scroll = imp.scroll();
         Some(graphene::Rect::new(
             rect.x - scroll.0,
@@ -226,11 +227,11 @@ impl ItemView {
     pub fn position_at(&self, x: f64, y: f64) -> Option<u32> {
         let imp = self.imp();
         let scroll = imp.scroll();
-        let position = imp.sections.borrow().position_at(
-            &imp.metrics.borrow().clone(),
-            x as f32 + scroll.0,
-            y as f32 + scroll.1,
-        )?;
+        let position = imp
+            .sections
+            .borrow()
+            .over(&imp.metrics.borrow().clone())
+            .position_at(x as f32 + scroll.0, y as f32 + scroll.1)?;
         if !self.hits_drawn_only() {
             return Some(position);
         }
@@ -441,7 +442,8 @@ impl ItemView {
         let imp = self.imp();
         imp.sections
             .borrow()
-            .visible_range(&imp.metrics.borrow().clone(), imp.scroll())
+            .over(&imp.metrics.borrow().clone())
+            .visible_range(imp.scroll())
     }
 
     /// Give each run of items a heading ([`ItemPresenter::section_title`]),

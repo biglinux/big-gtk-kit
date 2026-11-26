@@ -12,7 +12,7 @@ use gtk::{gdk, glib, graphene, gsk, pango};
 
 use crate::draw;
 use crate::icons::{IconKey, IconState, Icons};
-use crate::layout::{self, Metrics};
+use crate::layout;
 use crate::{IconFrame, IconSource, ItemContent};
 
 use super::{HEADING_BELOW, imp, tree_of};
@@ -59,23 +59,18 @@ impl Cache {
 }
 
 impl imp::ItemView {
-    /// Draw heading `index`: the presenter's words for the run under it.
+    /// Draw the heading at `rect`: the presenter's words for the run that
+    /// starts at `start`.
     pub(super) fn draw_heading(
         &self,
         snapshot: &gtk::Snapshot,
-        sections: &layout::Sections,
-        metrics: &Metrics,
-        index: usize,
+        rect: layout::Rect,
+        start: u32,
         scroll: (f32, f32),
     ) {
-        let (Some(rect), Some(model), Some(presenter)) = (
-            sections.heading(metrics, index),
-            self.model(),
-            self.presenter.borrow().clone(),
-        ) else {
+        let (Some(model), Some(presenter)) = (self.model(), self.presenter.borrow().clone()) else {
             return;
         };
-        let start = sections.starts[index];
         let Some(title) = model
             .item(start)
             .and_then(|item| presenter.section_title(start, &crate::view::presented(&item)))

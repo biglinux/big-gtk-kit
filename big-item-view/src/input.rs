@@ -389,7 +389,8 @@ fn install_band(view: &ItemView) {
         let met: Vec<u32> = imp
             .sections
             .borrow()
-            .positions_in(&imp.metrics.borrow().clone(), &rect)
+            .over(&imp.metrics.borrow().clone())
+            .positions_in(&rect)
             .into_iter()
             .filter(|position| {
                 !drawn_only
@@ -551,7 +552,8 @@ pub(crate) fn bring_into_view(view: &ItemView, position: u32) {
     let Some(rect) = imp
         .sections
         .borrow()
-        .rect(&imp.metrics.borrow().clone(), position)
+        .over(&imp.metrics.borrow().clone())
+        .rect(position)
     else {
         return;
     };
@@ -617,7 +619,8 @@ fn move_cursor(view: &ItemView, step: Step, ctrl: bool, shift: bool) -> bool {
     let Some(target) = imp
         .sections
         .borrow()
-        .step(&imp.metrics.borrow().clone(), from, step)
+        .over(&imp.metrics.borrow().clone())
+        .step(from, step)
     else {
         return false;
     };

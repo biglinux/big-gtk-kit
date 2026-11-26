@@ -526,9 +526,9 @@ impl Metrics {
 /// all `metrics.cell_size().1` tall here: a run's rows are not fitted. With no
 /// runs, or in a column flow, this is [`Metrics`] unchanged.
 ///
-/// Runs are few (the months of a photo library, the days of Recent), so each
-/// question walks them rather than keeping a table that would have to follow
-/// every resize.
+/// Where things are is asked of the [`Runs`] that [`Sections::over`] lays over
+/// one [`Metrics`]: it finds every run's top once, since a photo library by
+/// day has thousands of runs and a frame asks where dozens of items are.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sections {
     /// Where each run starts, ascending; the first is 0.
@@ -537,164 +537,188 @@ pub struct Sections {
     pub height: f32,
 }
 
+impl Sections {
+    /// The runs laid over `metrics`.
+    #[must_use]
+    pub fn over<'a>(&'a self, metrics: &'a Metrics) -> Runs<'a> {
+        let mut tops = Vec::new();
+        if !self.starts.is_empty() && matches!(metrics.flow, Flow::RowMajor { .. }) {
+            let (n, pitch) = (metrics.n_items(), metrics.cell_size().1);
+            let lanes = metrics.items_per_line().max(1);
+            tops.reserve_exact(self.starts.len() + 1);
+            tops.push(self.height);
+            let mut lines = 0;
+            for (index, &start) in self.starts.iter().enumerate() {
+                let end = self.starts.get(index + 1).copied().unwrap_or(n).min(n);
+                lines += (end - start.min(n)).div_ceil(lanes);
+                tops.push((index + 2) as f32 * self.height + lines as f32 * pitch);
+            }
+        }
+        Runs {
+            sections: self,
+            metrics,
+            tops,
+        }
+    }
+}
+
+/// [`Sections`] laid over one [`Metrics`]: where items and headings are.
+pub struct Runs<'a> {
+    sections: &'a Sections,
+    metrics: &'a Metrics,
+    /// Where the first line of each run starts, under its heading, then where
+    /// one more run would; empty when the runs change nothing (there are none,
+    /// or the flow is a column flow).
+    tops: Vec<f32>,
+}
+
 /// Where a content line falls among the runs.
 enum Line {
-    /// On a heading.
-    Heading,
+    /// On the heading of run `index`.
+    Heading { index: usize },
     /// On line `line` of run `index`.
     Items { index: usize, line: u32 },
     /// Below everything.
     Past,
 }
 
-impl Sections {
-    /// Whether the runs change anything: they do in a list or grid with runs.
-    fn applies(&self, metrics: &Metrics) -> bool {
-        !self.starts.is_empty() && matches!(metrics.flow, Flow::RowMajor { .. })
+impl Runs<'_> {
+    fn applies(&self) -> bool {
+        !self.tops.is_empty()
     }
 
-    fn lanes(metrics: &Metrics) -> u32 {
-        metrics.items_per_line().max(1)
+    fn lanes(&self) -> u32 {
+        self.metrics.items_per_line().max(1)
     }
 
     /// The run `position` belongs to.
     fn run_of(&self, position: u32) -> usize {
-        self.starts
+        self.sections
+            .starts
             .partition_point(|start| *start <= position)
             .saturating_sub(1)
     }
 
     /// Where run `index` ends (exclusive).
-    fn end_of(&self, metrics: &Metrics, index: usize) -> u32 {
-        self.starts
+    fn end_of(&self, index: usize) -> u32 {
+        let n = self.metrics.n_items();
+        self.sections
+            .starts
             .get(index + 1)
             .copied()
-            .unwrap_or(metrics.n_items())
-            .min(metrics.n_items())
+            .unwrap_or(n)
+            .min(n)
     }
 
     /// How many lines run `index` takes.
-    fn lines_of(&self, metrics: &Metrics, index: usize) -> u32 {
-        (self.end_of(metrics, index) - self.starts[index].min(metrics.n_items()))
-            .div_ceil(Self::lanes(metrics))
-    }
-
-    /// Where the first line of run `index` starts, under its heading.
-    fn top_of(&self, metrics: &Metrics, index: usize) -> f32 {
-        let pitch = metrics.cell_size().1;
-        (0..index)
-            .map(|run| self.height + self.lines_of(metrics, run) as f32 * pitch)
-            .sum::<f32>()
-            + self.height
+    fn lines_of(&self, index: usize) -> u32 {
+        (self.end_of(index) - self.sections.starts[index].min(self.metrics.n_items()))
+            .div_ceil(self.lanes())
     }
 
     /// What the content line at `y` is.
-    fn line_at(&self, metrics: &Metrics, y: f32) -> Line {
-        let pitch = metrics.cell_size().1;
-        let mut top = 0.0_f32;
-        for index in 0..self.starts.len() {
-            if y < top + self.height {
-                return Line::Heading;
-            }
-            top += self.height;
-            let lines = self.lines_of(metrics, index);
-            if y < top + lines as f32 * pitch {
-                let line = ((y - top) / pitch).floor() as u32;
-                return Line::Items { index, line };
-            }
-            top += lines as f32 * pitch;
+    fn line_at(&self, y: f32) -> Line {
+        let height = self.sections.height;
+        let runs = self.sections.starts.len();
+        // The last run whose heading starts at or above `y`.
+        let Some(index) = self.tops[..runs]
+            .partition_point(|top| top - height <= y)
+            .checked_sub(1)
+        else {
+            return Line::Heading { index: 0 };
+        };
+        let top = self.tops[index];
+        if y < top {
+            return Line::Heading { index };
         }
-        Line::Past
+        let line = ((y - top) / self.metrics.cell_size().1).floor() as u32;
+        let lines = self.lines_of(index);
+        if line >= lines && index + 1 == runs {
+            return Line::Past;
+        }
+        // Below a run's last line is the next heading, found above unless
+        // rounding put `y` a hair short of it.
+        Line::Items {
+            index,
+            line: line.min(lines.saturating_sub(1)),
+        }
     }
 
     /// The position at `line` and `lane` of run `index`, the run's last item
     /// when that line is short.
-    fn at(&self, metrics: &Metrics, index: usize, line: u32, lane: u32) -> u32 {
-        let lanes = Self::lanes(metrics);
-        (self.starts[index] + line * lanes + lane).min(self.end_of(metrics, index) - 1)
+    fn at(&self, index: usize, line: u32, lane: u32) -> u32 {
+        (self.sections.starts[index] + line * self.lanes() + lane).min(self.end_of(index) - 1)
     }
 
     /// Where item `position` sits, headings included.
     #[must_use]
-    pub fn rect(&self, metrics: &Metrics, position: u32) -> Option<Rect> {
-        if !self.applies(metrics) {
-            return metrics.rect(position);
+    pub fn rect(&self, position: u32) -> Option<Rect> {
+        if !self.applies() {
+            return self.metrics.rect(position);
         }
-        if position >= metrics.n_items() {
+        if position >= self.metrics.n_items() {
             return None;
         }
-        let lanes = Self::lanes(metrics);
+        let lanes = self.lanes();
         let index = self.run_of(position);
-        let offset = position - self.starts[index];
+        let offset = position - self.sections.starts[index];
         // A lane's place across is the same on every line; line 0 of the
         // whole grid already knows it, right to left included.
-        let lane = metrics.rect(offset % lanes)?;
+        let lane = self.metrics.rect(offset % lanes)?;
+        let pitch = self.metrics.cell_size().1;
         Some(Rect {
-            y: self.top_of(metrics, index) + (offset / lanes) as f32 * metrics.cell_size().1,
-            height: metrics.cell_size().1,
+            y: self.tops[index] + (offset / lanes) as f32 * pitch,
+            height: pitch,
             ..lane
         })
     }
 
-    /// Where heading `index` sits.
+    /// Where the heading of run `index` sits.
     #[must_use]
-    pub fn heading(&self, metrics: &Metrics, index: usize) -> Option<Rect> {
-        if !self.applies(metrics) || index >= self.starts.len() {
+    pub fn heading(&self, index: usize) -> Option<Rect> {
+        if !self.applies() || index >= self.sections.starts.len() {
             return None;
         }
         Some(Rect {
             x: 0.0,
-            y: self.top_of(metrics, index) - self.height,
-            width: metrics.content_size().0,
-            height: self.height,
+            y: self.tops[index] - self.sections.height,
+            width: self.metrics.content_size().0,
+            height: self.sections.height,
         })
     }
 
     /// The item under `(x, y)`, headings included; `None` on a heading.
     #[must_use]
-    pub fn position_at(&self, metrics: &Metrics, x: f32, y: f32) -> Option<u32> {
-        if !self.applies(metrics) {
-            return metrics.position_at(x, y);
+    pub fn position_at(&self, x: f32, y: f32) -> Option<u32> {
+        if !self.applies() {
+            return self.metrics.position_at(x, y);
         }
-        let Line::Items { index, line } = self.line_at(metrics, y) else {
+        let Line::Items { index, line } = self.line_at(y) else {
             return None;
         };
         // Line 0 of the whole grid tells the lane under `x`.
-        let lane = metrics.position_at(x, 0.0)?;
-        let position = self.starts[index] + line * Self::lanes(metrics) + lane;
-        (position < self.end_of(metrics, index)).then_some(position)
+        let lane = self.metrics.position_at(x, 0.0)?;
+        let position = self.sections.starts[index] + line * self.lanes() + lane;
+        (position < self.end_of(index)).then_some(position)
     }
 
     /// The items whose lines meet the content band from `top` to `bottom`.
-    fn between(&self, metrics: &Metrics, top: f32, bottom: f32) -> Range<u32> {
-        let n = metrics.n_items();
-        let lanes = Self::lanes(metrics);
+    fn between(&self, top: f32, bottom: f32) -> Range<u32> {
+        let n = self.metrics.n_items();
+        let lanes = self.lanes();
+        let starts = &self.sections.starts;
         // The first item on a line that reaches below `top`.
-        let first = match self.line_at(metrics, top.max(0.0)) {
-            Line::Heading => {
-                let index = self
-                    .starts
-                    .iter()
-                    .enumerate()
-                    .find(|(index, _)| self.top_of(metrics, *index) > top)
-                    .map_or(self.starts.len(), |(index, _)| index);
-                self.starts.get(index).copied().unwrap_or(n)
-            }
-            Line::Items { index, line } => self.starts[index] + line * lanes,
+        let first = match self.line_at(top.max(0.0)) {
+            Line::Heading { index } => starts[index],
+            Line::Items { index, line } => starts[index] + line * lanes,
             Line::Past => n,
         };
         // One past the last item on a line that starts above `bottom`.
-        let end = match self.line_at(metrics, bottom.max(0.0)) {
+        let end = match self.line_at(bottom.max(0.0)) {
             // Everything before this heading's run.
-            Line::Heading => {
-                let index = (0..self.starts.len())
-                    .rev()
-                    .find(|index| self.top_of(metrics, *index) - self.height <= bottom)
-                    .unwrap_or(0);
-                self.starts[index]
-            }
+            Line::Heading { index } => starts[index],
             Line::Items { index, line } => {
-                (self.starts[index] + (line + 1) * lanes).min(self.end_of(metrics, index))
+                (starts[index] + (line + 1) * lanes).min(self.end_of(index))
             }
             Line::Past => n,
         };
@@ -704,41 +728,37 @@ impl Sections {
 
     /// The items a viewport scrolled by `scroll` shows, headings included.
     #[must_use]
-    pub fn visible_range(&self, metrics: &Metrics, scroll: (f32, f32)) -> Range<u32> {
-        if !self.applies(metrics) {
-            return metrics.visible_range(scroll);
+    pub fn visible_range(&self, scroll: (f32, f32)) -> Range<u32> {
+        if !self.applies() {
+            return self.metrics.visible_range(scroll);
         }
         let top = scroll.1.max(0.0);
-        self.between(metrics, top, top + metrics.viewport_height())
+        self.between(top, top + self.metrics.viewport_height())
     }
 
     /// The headings a viewport scrolled by `scroll` shows.
     #[must_use]
-    pub fn visible_headings(&self, metrics: &Metrics, scroll: (f32, f32)) -> Range<usize> {
-        let (top, bottom) = (scroll.1, scroll.1 + metrics.viewport_height());
-        let shown = |index: &usize| {
-            self.heading(metrics, *index)
-                .is_some_and(|rect| rect.y + rect.height > top && rect.y < bottom)
-        };
-        let first = (0..self.starts.len())
-            .find(shown)
-            .unwrap_or(self.starts.len());
-        let last = (first..self.starts.len())
-            .take_while(shown)
-            .last()
-            .map_or(first, |last| last + 1);
-        first..last
+    pub fn visible_headings(&self, scroll: (f32, f32)) -> Range<usize> {
+        if !self.applies() {
+            return 0..0;
+        }
+        let (top, bottom) = (scroll.1, scroll.1 + self.metrics.viewport_height());
+        let height = self.sections.height;
+        let tops = &self.tops[..self.sections.starts.len()];
+        let first = tops.partition_point(|run| *run <= top);
+        let last = tops.partition_point(|run| run - height < bottom);
+        first..last.max(first)
     }
 
     /// Every item whose cell meets `band`, headings included.
     #[must_use]
-    pub fn positions_in(&self, metrics: &Metrics, band: &Rect) -> Vec<u32> {
-        if !self.applies(metrics) {
-            return metrics.positions_in(band);
+    pub fn positions_in(&self, band: &Rect) -> Vec<u32> {
+        if !self.applies() {
+            return self.metrics.positions_in(band);
         }
-        self.between(metrics, band.y, band.y + band.height)
+        self.between(band.y, band.y + band.height)
             .filter(|position| {
-                self.rect(metrics, *position)
+                self.rect(*position)
                     .is_some_and(|rect| rect.intersects(band))
             })
             .collect()
@@ -746,12 +766,11 @@ impl Sections {
 
     /// The size of everything laid out, headings included.
     #[must_use]
-    pub fn content_size(&self, metrics: &Metrics) -> (f32, f32) {
-        if !self.applies(metrics) {
-            return metrics.content_size();
-        }
-        let height = self.top_of(metrics, self.starts.len()) - self.height;
-        (metrics.content_size().0, height)
+    pub fn content_size(&self) -> (f32, f32) {
+        let Some(below) = self.tops.last() else {
+            return self.metrics.content_size();
+        };
+        (self.metrics.content_size().0, below - self.sections.height)
     }
 
     /// Where the keyboard cursor goes from `from` when moved by `step`, the way
@@ -759,37 +778,37 @@ impl Sections {
     /// Up and Down keep the lane across a heading, and land on a short line's
     /// last item.
     #[must_use]
-    pub fn step(&self, metrics: &Metrics, from: u32, step: Step) -> Option<u32> {
-        if !self.applies(metrics) {
-            return metrics.step(from, step);
+    pub fn step(&self, from: u32, step: Step) -> Option<u32> {
+        if !self.applies() {
+            return self.metrics.step(from, step);
         }
-        let n = metrics.n_items();
+        let n = self.metrics.n_items();
         if n == 0 {
             return None;
         }
         let last = n - 1;
         let from = from.min(last);
-        let lanes = Self::lanes(metrics);
+        let lanes = self.lanes();
         let line_step = |at: u32, down: bool| -> Option<u32> {
             let index = self.run_of(at);
-            let offset = at - self.starts[index];
+            let offset = at - self.sections.starts[index];
             let (line, lane) = (offset / lanes, offset % lanes);
             if down {
-                if line + 1 < self.lines_of(metrics, index) {
-                    Some(self.at(metrics, index, line + 1, lane))
+                if line + 1 < self.lines_of(index) {
+                    Some(self.at(index, line + 1, lane))
                 } else {
-                    (index + 1 < self.starts.len()).then(|| self.at(metrics, index + 1, 0, lane))
+                    (index + 1 < self.sections.starts.len()).then(|| self.at(index + 1, 0, lane))
                 }
             } else if line > 0 {
-                Some(self.at(metrics, index, line - 1, lane))
+                Some(self.at(index, line - 1, lane))
             } else {
                 index
                     .checked_sub(1)
-                    .map(|above| self.at(metrics, above, self.lines_of(metrics, above) - 1, lane))
+                    .map(|above| self.at(above, self.lines_of(above) - 1, lane))
             }
         };
         let page = |down: bool| -> u32 {
-            let lines = (metrics.viewport_height() / metrics.cell_size().1)
+            let lines = (self.metrics.viewport_height() / self.metrics.cell_size().1)
                 .floor()
                 .max(1.0) as u32;
             let mut at = from;
