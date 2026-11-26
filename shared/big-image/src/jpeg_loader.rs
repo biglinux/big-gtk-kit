@@ -43,7 +43,6 @@ pub unsafe fn activate() {
 pub unsafe fn activate_with(loader: &Path) {
     // glycin then reads that directory alone and ignores the ones routed here,
     // so no type is claimed: the size cap is lifted only for our loader.
-    // test-seam: allow read to match glycin, which takes this directory alone
     if std::env::var_os("GLYCIN_DATA_DIR").is_some() {
         return;
     }

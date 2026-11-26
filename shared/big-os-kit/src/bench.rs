@@ -20,7 +20,6 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 static SINK: LazyLock<Option<Mutex<std::fs::File>>> = LazyLock::new(|| {
-    // test-seam: allow profiling switch for installed builds, set by the same account
     let path = std::env::var_os("BIG_BENCH_TIMING")?;
     // The log names the programs that open and when: the person's alone.
     let opened = std::fs::OpenOptions::new()

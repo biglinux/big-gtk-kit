@@ -352,7 +352,6 @@ impl Config {
 
     fn data_dirs() -> Vec<PathBuf> {
         // Force only specific data dir via env variable
-        // test-seam: allow upstream configuration, as a file in the user data directory
         if let Some(data_dir) = std::env::var_os("GLYCIN_DATA_DIR") {
             vec![data_dir.into()]
         } else {
