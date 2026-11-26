@@ -331,6 +331,7 @@ impl BigSubprocessSpec {
                 })
                 .collect(),
             env_inherit: self.env_inherit,
+            for_person: self.for_person,
             stdin_len: self.stdin.as_ref().map(Vec::len).unwrap_or(0),
             inherited_fd_count: self.inherited_fds.len(),
             stdout: self.stdout,
@@ -551,6 +552,8 @@ pub struct BigSubprocessResolved {
     /// Inherits the parent environment when `true`; set `false` for
     /// reproducible builds and to keep host secrets out of child procs.
     pub env_inherit: bool,
+    /// Starts a program for the person ([`person_environment`]).
+    pub for_person: bool,
     /// Length of the stdin payload (0 = none).
     pub stdin_len: usize,
     /// Number of explicitly inherited Unix descriptors; descriptor numbers

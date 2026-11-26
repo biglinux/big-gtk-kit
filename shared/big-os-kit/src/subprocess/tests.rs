@@ -54,6 +54,16 @@ fn argv_never_uses_shell() {
     assert_eq!(r.program, "echo");
 }
 
+/// A spec test sees whether a spawn is the person's.
+#[test]
+fn person_spawn_shows_in_resolved() {
+    let spec = BigSubprocessSpec::builder()
+        .program("echo")
+        .for_person(true)
+        .build();
+    assert!(spec.resolved().for_person);
+}
+
 #[test]
 fn defaults_are_safe() {
     let spec = BigSubprocessSpec::builder().program("echo").build();
@@ -62,6 +72,7 @@ fn defaults_are_safe() {
     assert_eq!(r.stderr, BigSubprocessOutputMode::Capture);
     assert_eq!(r.timeout_ms, 30_000);
     assert!(r.env_inherit);
+    assert!(!r.for_person);
     assert_eq!(r.stdin_len, 0);
     assert_eq!(r.inherited_fd_count, 0);
     assert!(!r.unix_process_group);
