@@ -334,12 +334,9 @@ fn group_kill_outlives_exited_leader() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
-// A process-group child that exits after spawning a grandchild
-// which inherited stdout must not hang `run()`. The reader threads see EOF only
-// when every write end closes, so the tear-down of the group on the normal exit
-// path is the only thing that lets the joins finish. `sh` exits at once while
-// the backgrounded `sleep 30` keeps the stdout pipe open; without the group kill
-// the join would block ~30 s, far past the timeout, which does not cover joins.
+// A process-group child that exits after spawning a grandchild which
+// inherited stdout must not hang `run()`: the readers see EOF only when every
+// write end closes, and the group's tear-down at the child's exit closes them.
 fn run_returns_despite_grandchild_stdout() {
     let started = std::time::Instant::now();
     let out = BigSubprocessSpec::builder()
@@ -355,6 +352,27 @@ fn run_returns_despite_grandchild_stdout() {
     assert!(
         started.elapsed() < Duration::from_secs(15),
         "run() blocked on the reader join past the deadline: {:?}",
+        started.elapsed()
+    );
+}
+
+/// Outside a process group nothing can kill the grandchild holding the pipe,
+/// so the output waits only until the deadline.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn grandchild_pipe_ends_at_the_deadline() {
+    let started = std::time::Instant::now();
+    let run = BigSubprocessSpec::builder()
+        .program("sh")
+        .arg("-c")
+        .arg("sleep 30 & exit 0")
+        .timeout(Duration::from_secs(1))
+        .build()
+        .run();
+    assert!(matches!(run, Err(BigSubprocessError::Timeout)), "{run:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
         started.elapsed()
     );
 }

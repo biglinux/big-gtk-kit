@@ -1171,19 +1171,26 @@ fn run_validated(
     // the OS pipe buffer (~64 KiB) blocks on write until a reader consumes it;
     // draining only after the child exited would run every large-output
     // subprocess (`pw-dump` writes ~300 KiB) to the timeout.
+    //
+    // Each sends its bytes when its pipe closes, so the call can stop waiting
+    // for a pipe a grandchild still holds (see `collect`).
     let stdout_reader = child.stdout.take().map(|mut pipe| {
+        let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let truncated = drain_capped(&mut pipe, &mut buf).unwrap_or(false);
-            (buf, truncated)
-        })
+            let _ = sent.send((buf, truncated));
+        });
+        received
     });
     let stderr_reader = child.stderr.take().map(|mut pipe| {
+        let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let _ = drain_capped(&mut pipe, &mut buf);
-            buf
-        })
+            let _ = sent.send(buf);
+        });
+        received
     });
 
     // The stdin write happens here, after the drains exist. Written first, a
@@ -1208,17 +1215,16 @@ fn run_validated(
     // an observer needs looking at.
     let exited = child::pidfd(child.id());
     let outcome = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break WaitOutcome::Exited(status),
-            // A failed `try_wait` must not return early: that abandons the child
-            // and leaves the reader threads to block forever. Reap it and fall
-            // through to the joins with the error instead.
-            Err(error) => {
+        match finished(spec, &mut child) {
+            Some(Ok(status)) => break WaitOutcome::Exited(status),
+            // A failed wait must not return early: that abandons the child.
+            // Reap it and report the error instead.
+            Some(Err(error)) => {
                 terminate_or_kill_child_group(spec, &mut child);
                 let _ = child.wait();
                 break WaitOutcome::Failed(error);
             }
-            Ok(None) => {
+            None => {
                 // Cancel is the caller's explicit intent: check it before the
                 // deadline. Both take the same kill/wait path.
                 if cancel.load(Ordering::Relaxed) {
@@ -1248,38 +1254,26 @@ fn run_validated(
         }
     };
 
-    // A child spawned in its own process group can leave descendants that
-    // inherited the stdout/stderr write ends. The reader threads see EOF only
-    // when every write end closes, so joining them below would block past the
-    // deadline while a lingering grandchild still holds a pipe. When we created
-    // that group for subordinate work, drop any stragglers now so the pipes
-    // close and the joins finish. The cancel and timeout paths already tore the
-    // group down; durable launches that keep descendants alive spawn without a
-    // process group and go through `spawn`/`reap_detached`, not here.
-    #[cfg(unix)]
-    if matches!(outcome, WaitOutcome::Exited(_)) && spec.unix_process_group {
-        // The group `setsid` made for this child keeps its id while it has
-        // members; an empty one answers ESRCH, which needs nothing more.
-        let _ = kill_process_group(Pid::from_child(&child), Signal::KILL);
-    }
-
-    // Join the reader threads once, after the child has exited or been killed
-    // (its pipes are closed by then, so the reads complete).
     // The child is finished either way by here, so the writer is unblocked: it
     // either wrote everything or took EPIPE. Joining keeps the thread from
     // outliving the call.
     if let Some(writer) = stdin_writer {
         let _ = writer.join();
     }
-    let (stdout_buf, stdout_truncated) =
-        stdout_reader.map_or_else(Default::default, |h| h.join().unwrap_or_default());
-    let stderr_buf = stderr_reader.map_or_else(Vec::new, |h| h.join().unwrap_or_default());
-
+    // The readers end when every write end of their pipes closes, which a
+    // grandchild outside a process group may hold long after the child: the
+    // output waits until the deadline, a refusal only a moment.
     let status = match outcome {
         WaitOutcome::Exited(status) => status,
         WaitOutcome::TimedOut => return Err(BigSubprocessError::Timeout),
         WaitOutcome::Cancelled => return Err(BigSubprocessError::Cancelled),
         WaitOutcome::Failed(error) => return Err(BigSubprocessError::Io(error)),
+    };
+    let (Some((stdout_buf, stdout_truncated)), Some(stderr_buf)) = (
+        collect(stdout_reader, deadline),
+        collect(stderr_reader, deadline),
+    ) else {
+        return Err(BigSubprocessError::Timeout);
     };
     let code = status.code();
     Ok(BigSubprocessOutput {
@@ -1288,6 +1282,46 @@ fn run_validated(
         stdout_truncated,
         stderr: stderr_buf,
     })
+}
+
+/// What a reader thread sent once its pipe closed, or the empty value for a
+/// pipe nobody captured; `None` when the pipe is still open at `deadline`.
+fn collect<T: Default>(
+    reader: Option<std::sync::mpsc::Receiver<T>>,
+    deadline: std::time::Instant,
+) -> Option<T> {
+    let Some(reader) = reader else {
+        return Some(T::default());
+    };
+    reader
+        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        .ok()
+}
+
+/// The child's exit status once it has exited, reaping it; `None` while it runs.
+///
+/// A child in a process group of its own is seen exiting without being
+/// reaped: its pid is the group's id until then, so the group's stragglers,
+/// which may hold the output pipes, are killed before that id is freed for
+/// reuse.
+fn finished(
+    spec: &BigSubprocessSpec,
+    child: &mut std::process::Child,
+) -> Option<std::io::Result<std::process::ExitStatus>> {
+    #[cfg(unix)]
+    if spec.unix_process_group {
+        use rustix::process::{WaitId, WaitIdOptions, waitid};
+        let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        return match waitid(WaitId::Pid(Pid::from_child(child)), options) {
+            Ok(None) => None,
+            Ok(Some(_)) => {
+                let _ = kill_process_group(Pid::from_child(child), Signal::KILL);
+                Some(child.wait())
+            }
+            Err(error) => Some(Err(error.into())),
+        };
+    }
+    child.try_wait().transpose()
 }
 
 fn terminate_or_kill_child_group(spec: &BigSubprocessSpec, child: &mut std::process::Child) {
