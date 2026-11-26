@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn frames_past_the_byte_ceiling_are_refused() {
+    fn frames_past_ceiling_refused() {
         let mut writer = BigAnimationWriter::new().expect("private directory");
         writer.frame_bytes = MAX_FRAME_BYTES;
         let pixel = BigRgbaImage {
