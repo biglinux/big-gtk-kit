@@ -292,7 +292,7 @@ mod tests {
     /// The runtime directory and `/tmp` are memory: a long animation staged
     /// there filled them for every program of the session.
     #[test]
-    fn frames_are_staged_in_the_cache_folder() {
+    fn frames_stage_in_the_cache() {
         let writer = BigAnimationWriter::new().expect("private directory");
         assert!(
             writer

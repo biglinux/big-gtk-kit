@@ -617,7 +617,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn staging_with_a_closed_folder_is_removed() {
+    fn closed_staging_is_removed() {
         let staging = private_staging().expect("staging");
         let path = staging.path().to_owned();
         let closed = path.join("closed");

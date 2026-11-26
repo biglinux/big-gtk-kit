@@ -212,44 +212,49 @@ fn assert_unavailable(error: Option<BigImageError>) {
 /// as a decode instead.
 #[test]
 fn decoding_refused_without_sandbox() {
+    if std::env::var_os(WITHOUT_SANDBOX).is_some() {
+        every_entry_point_refuses();
+    } else if Path::new(big_os_kit::confinement::BWRAP).exists() {
+        run_without_user_namespaces();
+    }
+}
+
+/// This test again, in a namespace that may not make another, where
+/// bubblewrap fails the way it does with user namespaces off.
+fn run_without_user_namespaces() {
     use big_os_kit::subprocess::BigSubprocessSpec;
 
-    if std::env::var_os(WITHOUT_SANDBOX).is_none() {
-        if !Path::new(big_os_kit::confinement::BWRAP).exists() {
-            return;
-        }
-        let nowhere = glib::user_runtime_dir().join("big-image/unconfined-test");
-        // Named as our JPEG loader's directory, so a region decoder is asked
-        // for; nothing is read from it before the refusal.
-        let mut data_dirs = nowhere.join("jpg").into_os_string();
-        data_dirs.push(":/usr/share");
-        // Run this test again in a namespace that may not make another,
-        // where bubblewrap fails the way it does with user namespaces off.
-        let out = BigSubprocessSpec::builder()
-            .program(big_os_kit::confinement::BWRAP)
-            .args(["--dev-bind", "/", "/", "--unshare-user", "--disable-userns"])
-            .arg("--")
-            .arg(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "secure::tests::decoding_refused_without_sandbox",
-                "--quiet",
-            ])
-            .env(WITHOUT_SANDBOX, "1")
-            .env("GLYCIN_DATA_DIR", nowhere)
-            .env("XDG_DATA_DIRS", data_dirs)
-            .timeout(std::time::Duration::from_secs(60))
-            .allow_list([big_os_kit::confinement::BWRAP])
-            .build()
-            .run()
-            .unwrap();
-        assert!(
-            out.status.success() && out.stdout_lossy().contains("1 passed"),
-            "{}",
-            out.stdout_lossy()
-        );
-        return;
-    }
+    let nowhere = glib::user_runtime_dir().join("big-image/unconfined-test");
+    // Named as our JPEG loader's directory, so a region decoder is asked
+    // for; nothing is read from it before the refusal.
+    let mut data_dirs = nowhere.join("jpg").into_os_string();
+    data_dirs.push(":/usr/share");
+    let out = BigSubprocessSpec::builder()
+        .program(big_os_kit::confinement::BWRAP)
+        .args(["--dev-bind", "/", "/", "--unshare-user", "--disable-userns"])
+        .arg("--")
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "secure::tests::decoding_refused_without_sandbox",
+            "--quiet",
+        ])
+        .env(WITHOUT_SANDBOX, "1")
+        .env("GLYCIN_DATA_DIR", nowhere)
+        .env("XDG_DATA_DIRS", data_dirs)
+        .timeout(std::time::Duration::from_secs(60))
+        .allow_list([big_os_kit::confinement::BWRAP])
+        .build()
+        .run()
+        .unwrap();
+    assert!(
+        out.status.success() && out.stdout_lossy().contains("1 passed"),
+        "{}",
+        out.stdout_lossy()
+    );
+}
+
+fn every_entry_point_refuses() {
     let svg = temp_path("unconfined.svg");
     std::fs::write(&svg, SVG).unwrap();
     let gif = temp_path("unconfined.gif");

@@ -47,10 +47,9 @@ const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// On-disk entry layout version. Bump when the header or pixel format changes.
 const DISK_FORMAT: &str = "rgba-premul-1";
-/// Entries unchanged this long are removed. Keys carry the source's size and
-/// time, so an updated theme or a size no longer drawn leaves entries that
-/// nothing reads again; a read does not refresh an entry (homes are often
-/// `noatime`), so an icon still in use is drawn again once a month.
+/// Entries unchanged this long are removed: a key names its source's size and
+/// time, so one whose source changed is never read again, and a read leaves
+/// the time alone (homes are often `noatime`).
 const DISK_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// How often the programs sharing the cache prune it, between them.
 const DISK_PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -758,7 +757,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disk_cache_drops_old_entries_once_a_day() {
+    fn old_disk_entries_are_pruned() {
         let dir = std::env::temp_dir().join(format!("big-icon-prune-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let now = SystemTime::now();
