@@ -534,6 +534,18 @@ mod tests {
         });
     }
 
+    /// The search field and the list of the picker shown over `window`.
+    fn picker_parts(window: &adw::Window) -> (gtk::SearchEntry, gtk::ListView) {
+        let dialog = window.visible_dialog().expect("the picker");
+        let entry = subtree(&dialog)
+            .find_map(|widget| widget.downcast::<gtk::SearchEntry>().ok())
+            .expect("the search field");
+        let list = subtree(&dialog)
+            .find_map(|widget| widget.downcast::<gtk::ListView>().ok())
+            .expect("the list");
+        (entry, list)
+    }
+
     /// The keys hold with the keyboard in the list: Up from the first row goes
     /// back to the entry, and Shift+Enter picks the selected row beside.
     #[test]
@@ -558,13 +570,7 @@ mod tests {
                     move |_, row, _, how| *picked.borrow_mut() = Some((row.key, how))
                 },
             );
-            let dialog = window.visible_dialog().expect("the picker");
-            let entry = subtree(&dialog)
-                .find_map(|widget| widget.downcast::<gtk::SearchEntry>().ok())
-                .expect("the search field");
-            let list = subtree(&dialog)
-                .find_map(|widget| widget.downcast::<gtk::ListView>().ok())
-                .expect("the list");
+            let (entry, list) = picker_parts(&window);
             let content = entry.parent().expect("the content");
             let press = |key: Key, modifiers: ModifierType| {
                 big_testkit::harness::press_key(

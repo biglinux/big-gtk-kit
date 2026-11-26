@@ -127,11 +127,9 @@ fn fit_where_shown(label: &gtk::Label) {
     }
 }
 
-/// GTK opens the popup with focus on its first item, the first time since the
-/// list has no items yet when the popup maps, and on a drop-down every time;
-/// the first key goes to that item. Once the popover is shown, which is when
-/// it has focused a child, the chosen item takes the focus, or, where the
-/// popup has a search field, is only scrolled to: typing searches.
+/// GTK opens the popup with the focus on its first item; once the popover has
+/// shown, the chosen item takes it, or only scrolls into view where a search
+/// field keeps the keyboard.
 fn focus_chosen_item_on_open<W: IsA<gtk::Widget>>(owner: &W, selected: fn(&W) -> u32) {
     let Some(popover) = first_descendant::<gtk::Popover>(owner.upcast_ref()) else {
         return;

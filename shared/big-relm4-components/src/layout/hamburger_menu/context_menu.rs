@@ -712,6 +712,38 @@ mod tests {
         });
     }
 
+    /// `win.open` on `window` moves the focus to `target`.
+    fn focus_on_open(window: &gtk::Window, target: &gtk::Button) {
+        let actions = gio::SimpleActionGroup::new();
+        let open = gio::SimpleAction::new("open", None);
+        open.connect_activate({
+            let target = target.downgrade();
+            move |_, _| {
+                if let Some(target) = target.upgrade() {
+                    target.grab_focus();
+                }
+            }
+        });
+        actions.add_action(&open);
+        window.insert_action_group("win", Some(&actions));
+    }
+
+    /// The mapped button under `root` whose action is `action`.
+    fn mapped_action_button(root: &gtk::Widget, action: &str) -> Option<gtk::Button> {
+        let mut pending = vec![root.clone()];
+        let mut item = None;
+        while let Some(widget) = pending.pop() {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                && button.action_name().as_deref() == Some(action)
+                && button.is_mapped()
+            {
+                item = Some(button.clone());
+            }
+            pending.extend(children(&widget));
+        }
+        item
+    }
+
     /// Escape that only leaves the menu's search closes nothing: an item
     /// chosen afterwards keeps the focus it moved on purpose.
     #[test]
@@ -725,18 +757,7 @@ mod tests {
             host.append(&row);
             host.append(&elsewhere);
             window.set_child(Some(&host));
-            let actions = gio::SimpleActionGroup::new();
-            let open = gio::SimpleAction::new("open", None);
-            open.connect_activate({
-                let elsewhere = elsewhere.downgrade();
-                move |_, _| {
-                    if let Some(elsewhere) = elsewhere.upgrade() {
-                        elsewhere.grab_focus();
-                    }
-                }
-            });
-            actions.add_action(&open);
-            window.insert_action_group("win", Some(&actions));
+            focus_on_open(&window, &elsewhere);
             window.present();
             pump();
             row.grab_focus();
@@ -769,17 +790,7 @@ mod tests {
                 .expect("the letter opened the search");
             press_on_menu(Key::Escape);
             entry.emit_by_name::<()>("stop-search", &[]);
-            let mut pending = vec![menu.popover().clone().upcast::<gtk::Widget>()];
-            let mut item = None;
-            while let Some(widget) = pending.pop() {
-                if let Some(button) = widget.downcast_ref::<gtk::Button>()
-                    && button.action_name().as_deref() == Some("win.open")
-                    && button.is_mapped()
-                {
-                    item = Some(button.clone());
-                }
-                pending.extend(children(&widget));
-            }
+            let item = mapped_action_button(menu.popover().upcast_ref(), "win.open");
             item.expect("the menu's Open").emit_clicked();
             assert!(pump_until(|| !menu.popover().is_visible()));
             for _ in 0..10 {
