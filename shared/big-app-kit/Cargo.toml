@@ -24,6 +24,7 @@ big-os-kit = { workspace = true }
 relm4 = { workspace = true }
 
 [dev-dependencies]
+big-os-kit = { workspace = true, features = ["test-bus"] }
 big-testkit = { workspace = true }
 
 [package.metadata.cargo-machete]
