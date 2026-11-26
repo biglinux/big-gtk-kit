@@ -232,19 +232,30 @@ pub fn check_name(wanted: &str, others: &[Share]) -> Result<(), NameRefused> {
     if wanted.is_empty() {
         return Err(NameRefused::Empty);
     }
-    if wanted.contains(['/', '\\', '[', ']', ':', '"', '*', '?', '<', '>', '|', '%'])
-        || wanted.starts_with('-')
+    // Samba's `INVALID_SHARENAME_CHARS`, which `net` refuses in English, and
+    // the brackets that would end the name in the share list.
+    if wanted.contains([
+        '%', '<', '>', '*', '?', '|', '/', '\\', '+', '=', ';', ':', '"', ',', '[', ']',
+    ]) || wanted.starts_with('-')
     {
         return Err(NameRefused::Characters);
     }
-    // Samba matches names without case: a second one would replace the first.
-    if others
-        .iter()
-        .any(|share| share.name.eq_ignore_ascii_case(wanted))
-    {
+    // Samba names a share's file by the name in lower case, so a second name
+    // that differs only in case, accented letters included, replaces the first.
+    let folded = lower_case(wanted);
+    if others.iter().any(|share| lower_case(&share.name) == folded) {
         return Err(NameRefused::Taken);
     }
     Ok(())
+}
+
+/// `name` in lower case one character at a time, as Samba's `strlower_m`
+/// does: no final sigma, and `İ` becomes `i`, the first of the two
+/// characters Rust gives it.
+fn lower_case(name: &str) -> String {
+    name.chars()
+        .map(|character| character.to_lowercase().next().unwrap_or(character))
+        .collect()
 }
 
 const OTHERS_READ: u32 = 0o004;
@@ -341,8 +352,19 @@ mod tests {
         );
         assert_eq!(check_name("a\\b", &others), Err(NameRefused::Characters));
         assert_eq!(check_name("-hidden", &others), Err(NameRefused::Characters));
+        // What `net` refuses, and the share list's brackets.
+        for name in ["Fotos+Videos", "a=b", "a;b", "a,b", "[a]"] {
+            assert_eq!(
+                check_name(name, &others),
+                Err(NameRefused::Characters),
+                "{name}"
+            );
+        }
         assert_eq!(check_name("public", &others), Err(NameRefused::Taken));
         assert_eq!(check_name("Family photos", &others), Ok(()));
+        let accented = parse("[Músicas]\npath=/srv/music\n");
+        assert_eq!(check_name("MÚSICAS", &accented), Err(NameRefused::Taken));
+        assert_eq!(check_name("Musicas", &accented), Ok(()));
     }
 
     #[test]
