@@ -496,6 +496,8 @@ def match_arm_patterns(body: str) -> list[tuple[int, int, int]]:
                 if comma < 0:
                     break  # the last arm
                 start = comma + 1
+        if not arms:  # `match never {}`, or a brace this reader took for the arms
+            continue
         ends = [lo for lo, _ in arms[1:]] + [close]
         spans += [(lo, hi, end) for (lo, hi), end in zip(arms, ends, strict=True)]
     return spans

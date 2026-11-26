@@ -409,6 +409,19 @@ class WarningRules(unittest.TestCase):
             with self.subTest(scrutinee=scrutinee):
                 self.assertEqual(lint(case.replace("SCRUTINEE", scrutinee)), [])
 
+    def test_match_without_arms_read(self):
+        for scrutinee in ("never {}", "unsafe { read() } { _ => () }"):
+            with self.subTest(scrutinee=scrutinee):
+                self.assertEqual(
+                    lint(f"""
+                    fn attach(widget: &gtk::Widget) {{
+                        let button = gtk::Button::new();
+                        button.connect_clicked(move |_| match {scrutinee});
+                    }}
+                    """),
+                    [],
+                )
+
     def test_arm_binding_ends_with_its_arm(self):
         # The second arm reads the function's `widget`: it is captured.
         self.assertIn(
