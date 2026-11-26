@@ -258,32 +258,51 @@ fn primary_pressed(
         }
         return;
     };
+    if press_control(view, position, x, y) {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        return;
+    }
+    select_on_press(view, position, ctrl, shift);
+    imp.set_cursor(Some(position));
+    if n_press == 2 && !imp.single_click.get() {
+        imp.pending.set(None);
+        view.emit_by_name::<()>("activate", &[&position]);
+    }
+}
+
+/// Act on the expander, cell control or tick under a press on `position`;
+/// whether there was one, so the press is the view's alone.
+fn press_control(view: &ItemView, position: u32, x: f64, y: f64) -> bool {
+    let imp = view.imp();
     match control_at(view, position, x, y) {
         Some(Control::Expander(row)) => {
             row.set_expanded(!row.is_expanded());
             imp.set_cursor(Some(position));
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            return;
+            return true;
         }
         Some(Control::Cell { column, value }) => {
             imp.set_cursor(Some(position));
             view.emit_by_name::<()>("cell-pressed", &[&position, &column, &value]);
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            return;
+            return true;
         }
         None => {}
     }
-    if on_tick(view, position, x, y) {
-        if imp.geometry.borrow().tick == TickMode::Check {
-            view.emit_by_name::<()>("check-toggled", &[&position]);
-        } else {
-            toggle(view, position);
-        }
-        imp.set_cursor(Some(position));
-        imp.anchor.set(Some(position));
-        gesture.set_state(gtk::EventSequenceState::Claimed);
-        return;
+    if !on_tick(view, position, x, y) {
+        return false;
     }
+    if imp.geometry.borrow().tick == TickMode::Check {
+        view.emit_by_name::<()>("check-toggled", &[&position]);
+    } else {
+        toggle(view, position);
+    }
+    imp.set_cursor(Some(position));
+    imp.anchor.set(Some(position));
+    true
+}
+
+/// The selection a press on `position` makes now, or leaves for the release.
+fn select_on_press(view: &ItemView, position: u32, ctrl: bool, shift: bool) {
+    let imp = view.imp();
     let selected = view
         .model()
         .is_some_and(|model| model.is_selected(position));
@@ -301,11 +320,6 @@ fn primary_pressed(
             model.select_item(position, true);
         }
         imp.anchor.set(Some(position));
-    }
-    imp.set_cursor(Some(position));
-    if n_press == 2 && !imp.single_click.get() {
-        imp.pending.set(None);
-        view.emit_by_name::<()>("activate", &[&position]);
     }
 }
 

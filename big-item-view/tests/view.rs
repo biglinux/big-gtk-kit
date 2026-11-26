@@ -481,6 +481,32 @@ fn luminance(pixel: &[u8]) -> f64 {
     0.2126 * linear(pixel[0]) + 0.7152 * linear(pixel[1]) + 0.0722 * linear(pixel[2])
 }
 
+/// What `page` drew in its last frame, as RGBA rows of `stride` bytes, once
+/// it has drawn one.
+fn rendered(window: &gtk::Window, page: &gtk::Box) -> (glib::Bytes, usize) {
+    // A widget paintable shows what the widget drew in its last frame.
+    let paint = || {
+        let snapshot = gtk::Snapshot::new();
+        gtk::WidgetPaintable::new(Some(page)).snapshot(
+            &snapshot,
+            f64::from(page.width()),
+            f64::from(page.height()),
+        );
+        snapshot.to_node()
+    };
+    assert!(pump_until(|| paint().is_some()), "the page never painted");
+    let node = paint().expect("the page painted");
+    let (width, height) = (page.width(), page.height());
+    let viewport = gtk::graphene::Rect::new(0.0, 0.0, width as f32, height as f32);
+    let texture = window
+        .renderer()
+        .expect("a realized window")
+        .render_texture(&node, Some(&viewport));
+    let mut downloader = gdk::TextureDownloader::new(&texture);
+    downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
+    downloader.download_bytes()
+}
+
 /// Oracle: WCAG 2.2 success criterion 1.4.3 asks 4.5:1 of text this size,
 /// measured between the strongest glyph pixel and the heading's background.
 #[gtk::test]
@@ -517,27 +543,7 @@ fn heading_title_meets_text_contrast() {
         .and_then(|content| content.first_child())
         .expect("the heading's title");
 
-    // A widget paintable shows what the widget drew in its last frame.
-    let paint = || {
-        let snapshot = gtk::Snapshot::new();
-        gtk::WidgetPaintable::new(Some(&page)).snapshot(
-            &snapshot,
-            f64::from(page.width()),
-            f64::from(page.height()),
-        );
-        snapshot.to_node()
-    };
-    assert!(pump_until(|| paint().is_some()), "the page never painted");
-    let node = paint().expect("the page painted");
-    let (width, height) = (page.width(), page.height());
-    let viewport = gtk::graphene::Rect::new(0.0, 0.0, width as f32, height as f32);
-    let texture = window
-        .renderer()
-        .expect("a realized window")
-        .render_texture(&node, Some(&viewport));
-    let mut downloader = gdk::TextureDownloader::new(&texture);
-    downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
-    let (pixels, stride) = downloader.download_bytes();
+    let (pixels, stride) = rendered(&window, &page);
     let pixel = |x: usize, y: usize| &pixels[y * stride + x * 4..][..4];
 
     let corner = heading
