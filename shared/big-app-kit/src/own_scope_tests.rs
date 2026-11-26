@@ -264,6 +264,77 @@ fn renderer_environment_reaches_program() {
     }
 }
 
+/// A program started for the person reads numbers in the person's locale, not
+/// in the `C` this process pinned for itself: `LC_ALL` over `LC_NUMERIC`, and
+/// none when the person named none.
+#[test]
+fn person_numeric_locale_reaches_program() {
+    const EXPECTED: &str = "BIG_APP_KIT_EXPECTED_NUMERIC";
+    if let Some(expected) = std::env::var_os(EXPECTED) {
+        // SAFETY: the child runs this one test, on the only thread that
+        // touches the environment.
+        unsafe { big_os_kit::init_c_numeric_locale() };
+        let (_, environment) = launched_with(Renderer::DefaultGpu, None);
+        let numeric: Vec<_> = environment
+            .iter()
+            .filter(|line| line.starts_with("LC_NUMERIC="))
+            .collect();
+        if expected.is_empty() {
+            assert!(numeric.is_empty(), "{numeric:?}");
+        } else {
+            assert_eq!(
+                numeric,
+                [&format!("LC_NUMERIC={}", expected.to_string_lossy())]
+            );
+        }
+        assert!(
+            !environment
+                .iter()
+                .any(|line| line.starts_with("BIG_PERSON_LC_NUMERIC=")),
+            "{environment:?}"
+        );
+        return;
+    }
+    let cases: [(&[(&str, &str)], &str); 4] = [
+        (&[("LC_NUMERIC", "pt_BR.UTF-8")], "pt_BR.UTF-8"),
+        (
+            &[("LC_ALL", "de_DE.UTF-8"), ("LC_NUMERIC", "pt_BR.UTF-8")],
+            "de_DE.UTF-8",
+        ),
+        (&[("LANG", "pt_BR.UTF-8")], ""),
+        (&[("LC_ALL", ""), ("LANG", "pt_BR.UTF-8")], ""),
+    ];
+    for (locale, expected) in cases {
+        let mut child = big_os_kit::subprocess::BigSubprocessSpec::builder()
+            .program(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "own_scope::tests::person_numeric_locale_reaches_program",
+                "--quiet",
+            ])
+            .env_inherit(false)
+            .env(EXPECTED, expected);
+        for variable in ["PATH", "TMPDIR"] {
+            if let Some(value) = std::env::var_os(variable) {
+                child = child.env(variable, value);
+            }
+        }
+        for (variable, value) in locale {
+            child = child.env(variable, value);
+        }
+        let out = child
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .run()
+            .expect("child test runs");
+        assert!(
+            out.status.success() && out.stdout_lossy().contains("1 passed"),
+            "{locale:?}: {}",
+            out.stdout_lossy()
+        );
+    }
+}
+
 /// GIO asks the session bus to start a `DBusActivatable` entry, and the
 /// bus's service would run without the chosen environment.
 #[test]

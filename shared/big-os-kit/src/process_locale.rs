@@ -4,10 +4,17 @@
 //! The process locale: numbers in `C` for native libraries, and the decimal
 //! mark people read.
 
+/// The person's own numeric locale, kept by [`init_c_numeric_locale`] for the
+/// programs started for them ([`person_numeric_locale`]). In the environment,
+/// not a static: a module library links its own copy of this crate.
+pub(crate) const PERSON_NUMERIC_LOCALE: &str = "BIG_PERSON_LC_NUMERIC";
+
 /// Force the process numeric locale to `C` before any worker thread starts.
 ///
 /// Native libraries that parse machine-readable decimal values through libc
 /// require a dot separator even when the user session uses another locale.
+/// Every program this process starts inherits the pin; one started for the
+/// person gets their own back from [`person_numeric_locale`].
 ///
 /// # Safety
 ///
@@ -31,6 +38,15 @@ pub unsafe fn init_c_numeric_locale() {
     ];
     // SAFETY: the caller guarantees no other thread runs.
     unsafe {
+        // A second pin would keep `C` as the person's.
+        if std::env::var_os(PERSON_NUMERIC_LOCALE).is_none() {
+            let person = ["LC_ALL", "LC_NUMERIC"]
+                .into_iter()
+                .filter_map(std::env::var_os)
+                .find(|value| !value.is_empty())
+                .unwrap_or_default();
+            std::env::set_var(PERSON_NUMERIC_LOCALE, person);
+        }
         // A user-set LC_ALL overrides every LC_* variable when gettext later
         // calls `setlocale(LC_ALL, "")`, undoing the LC_NUMERIC pin below:
         // libmpv's `mpv_create` then returns NULL under, for example,
@@ -48,6 +64,15 @@ pub unsafe fn init_c_numeric_locale() {
         std::env::set_var("LC_NUMERIC", "C");
         libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
     }
+}
+
+/// The numeric locale the person's environment named before
+/// [`init_c_numeric_locale`] pinned this process's to `C`, as `LC_NUMERIC` for
+/// a program started for the person: `LC_ALL` when set, else `LC_NUMERIC`,
+/// else empty, which glibc reads as unset. `None` when nothing was pinned.
+#[must_use]
+pub fn person_numeric_locale() -> Option<std::ffi::OsString> {
+    std::env::var_os(PERSON_NUMERIC_LOCALE)
 }
 
 /// Set every locale category from the environment, as `setlocale(LC_ALL, "")`

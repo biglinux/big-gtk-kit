@@ -754,7 +754,8 @@ const INHERITED_LIMITS: &str = "BIG_HOST_INHERITED_LIMITS";
 /// must not inherit: the socket its systemd unit waits on for
 /// [`crate::service_ready::notify`], which speaks for this process alone, the
 /// limits it inherited, which they get as limits instead, the PID of its
-/// pressure watcher ([`crate::pressure_protocol::PROCESS_WATCHER`]), a renderer big-host
+/// pressure watcher ([`crate::pressure_protocol::PROCESS_WATCHER`]), the
+/// person's numeric locale it kept ([`crate::person_numeric_locale`]), a renderer big-host
 /// chose for itself, so a GTK program started from the desktop keeps GTK's
 /// own choice, and the desktop's GPU variables ([`DESKTOP_GPU`]), so
 /// `prime-run` and `PrefersNonDefaultGPU` still reach the NVIDIA GPU.
@@ -764,6 +765,7 @@ pub fn desktop_only_variables() -> Vec<&'static str> {
         "NOTIFY_SOCKET",
         INHERITED_LIMITS,
         crate::pressure_protocol::PROCESS_WATCHER,
+        crate::process_locale::PERSON_NUMERIC_LOCALE,
     ];
     if std::env::var_os(DESKTOP_RENDERER).is_some() {
         variables.extend(["GSK_RENDERER", DESKTOP_RENDERER]);
