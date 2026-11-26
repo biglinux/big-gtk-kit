@@ -14,7 +14,7 @@ leaves it idle. Fixes to send upstream are kept apart, in `upstream/`.
 
 The `big-gtk-kit` crate needs GTK 4.22 and libadwaita 1.9 or newer, the
 crates in `shared/` GTK 4.24; BigLinux ships GTK 4.24 and libadwaita 1.10.
-Older libraries are not supported.
+Older libraries are not supported. Every crate here needs Rust 1.100.
 
 ## Use
 
@@ -44,7 +44,7 @@ big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
 loading in glycin's sandbox), `big-relm4-components` (Relm4 and libadwaita
 components), `big-app-kit` (the application shell) and `big-testkit` (the test
 harness). Each is a git dependency the same way, at the same revision as the
-kit. They need Rust 1.100. `big-image` calls what only this repository's copy
+kit. `big-image` calls what only this repository's copy
 of glycin has (`third_party/glycin/BIGLINUX-PATCH.md`), and Cargo reads
 `[patch]` only in the workspace it builds, so a program that uses it names the
 copy in its own `Cargo.toml`:
