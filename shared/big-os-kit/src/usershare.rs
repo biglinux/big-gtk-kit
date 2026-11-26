@@ -59,7 +59,7 @@ pub enum NameRefused {
     Characters,
     /// Something is already shared under this name, ignoring case.
     Taken,
-    /// An account on this computer has this name, ignoring case; `net`
+    /// An account on this computer has this name ([`account_named`]); `net`
     /// refuses it.
     Account,
 }
@@ -224,7 +224,8 @@ fn parse(text: &str) -> Vec<Share> {
     found
 }
 
-/// A name Samba will take next to `others`.
+/// A name Samba will take next to `others`, from the name alone: whether an
+/// account has it is [`account_named`], which reads the account database.
 ///
 /// Refused, never corrected: it is printed on other people's screens.
 ///
@@ -244,21 +245,37 @@ pub fn check_name(wanted: &str, others: &[Share]) -> Result<(), NameRefused> {
     {
         return Err(NameRefused::Characters);
     }
-    if crate::users::id_of(&lower_case(wanted)).is_some() {
-        return Err(NameRefused::Account);
-    }
-    if others.iter().any(|share| same_name(&share.name, wanted)) {
+    // Samba names a share's file by the name in lower case, so a second name
+    // that differs only in case, accented letters included, replaces the first.
+    let folded = lower_case(wanted);
+    if others.iter().any(|share| lower_case(&share.name) == folded) {
         return Err(NameRefused::Taken);
     }
     Ok(())
 }
 
-/// Whether `a` and `b` name one share: Samba names a share's file by the name
-/// in lower case, so adding one of them replaces the other and deleting one
-/// deletes the other. A rename to a name that is the same skips the delete.
+/// Whether an account on this computer has `name`, ignoring case, which `net`
+/// refuses as a share name ([`NameRefused::Account`]). Reads the account
+/// database, which may ask a directory server: run it on a worker.
 #[must_use]
-pub fn same_name(a: &str, b: &str) -> bool {
-    lower_case(a) == lower_case(b)
+pub fn account_named(name: &str) -> bool {
+    crate::users::id_of(&lower_case(name.trim())).is_some()
+}
+
+/// Share `share` in place of the share named `old`, which goes unless Samba
+/// stored `share` under it: a name that differs only in case replaces the
+/// same file, and deleting `old` then would delete `share`.
+///
+/// # Errors
+///
+/// As [`shares`]; a failed `add` leaves `old` shared as it was.
+pub fn rename(old: &str, share: &Share) -> Result<(), Error> {
+    add(share)?;
+    if old != share.name && shares()?.iter().any(|listed| listed.name == old) {
+        remove(old)
+    } else {
+        Ok(())
+    }
 }
 
 /// `name` in lower case one character at a time, with no final sigma: a
@@ -377,9 +394,12 @@ mod tests {
         let accented = parse("[Músicas]\npath=/srv/music\n");
         assert_eq!(check_name("MÚSICAS", &accented), Err(NameRefused::Taken));
         assert_eq!(check_name("Musicas", &accented), Ok(()));
-        assert_eq!(check_name("ROOT", &others), Err(NameRefused::Account));
-        assert!(same_name("Músicas", "MÚSICAS"));
-        assert!(!same_name("Músicas", "Musicas"));
+    }
+
+    #[test]
+    fn account_names_are_found() {
+        assert!(account_named("ROOT"));
+        assert!(!account_named("Family photos"));
     }
 
     #[test]
