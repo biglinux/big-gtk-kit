@@ -17,8 +17,9 @@ cache entry, so each frame that draws it adds one more reference, and the font
 stays with its cairo scaled font and glyph images. The count only stops growing
 when later animations repeat the scales of earlier ones.
 
-`glyph-scaled-font-leak.patch` (2 files, +65 −1) applies on 4.24.1 and on main
-b9cd9290d5.
+`glyph-scaled-font-leak.patch` (2 files, +71 −1) applies on 4.24.1 and on main
+b9cd9290d5. GTK main fixed the leak on its own with the same change, commit
+8c4460ce ("gsk: Fix a leak in the glyph cache"); only the test is not there.
 
 ## Change
 
@@ -28,8 +29,8 @@ b9cd9290d5.
   is freed when its last user drops it. It is skipped when GL is not available.
   It opens a second display, as `/renderer/gl` does, because with Mesa a GL
   renderer on the default display aborts once another display that used GL was
-  closed. So it runs on Linux only (Wayland or X11) and would fail on macOS and
-  Windows, where GDK opens one display; BigLinux's programs are Linux-only.
+  closed. So it runs on Linux only (Wayland or X11) and is skipped on macOS and
+  Windows, where GDK opens one display.
 
 ## Measurements
 

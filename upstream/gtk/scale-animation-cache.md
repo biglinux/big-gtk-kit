@@ -18,11 +18,12 @@ looks glyphs up at `MAX (scale.width, scale.height)`, and
 Only under rotations and other transforms that are not a scale do they round
 the scale, up to the next power of two.
 
-`scale-animation-cache.patch` (5 files, +157 −12) applies on 4.24.1 and on main
-b9cd9290d5, alone or after the other held patches. After
-glyph-scaled-font-leak it needs a three-way apply (`git apply -3` or
-`git am -3`, as the package uses), because both add the same include to
-`testsuite/gsk/misc.c`.
+`scale-animation-cache.patch` (5 files, +267 −14) applies on 4.24.1, alone or
+after the other held patches. After glyph-scaled-font-leak it needs a three-way
+apply (`git apply -3` or `git am -3`, as the package uses), because both add the
+same include to `testsuite/gsk/misc.c`. It does not apply on main (b9cd9290d5
+and later): there the fill and stroke caches match paths up to a translation
+and keep a color, and the cache key and snap lines conflict in both files.
 
 ## Change
 
@@ -39,14 +40,23 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
   on a quarter pixel grid instead of a 1/32 one and resampled down, as the
   renderer already does under rotations. The frames of one animation, and the
   openings after it, then share entries.
+- A cached fill or stroke is snapped to the pixel grid of the scale it is
+  rendered at, not of the frame that made it, and its key holds its subpixel
+  grid, so a mask made on the quarter pixel grid is never taken for a phase on
+  the 1/32 one. Under rotations, where masks are rendered at the next power of
+  two, they are snapped to that scale too instead of the frame's.
 - `testsuite/gsk/misc.c` gains `/renderer/gl/scaled-text`: "Abc" in the test
   suite's Cantarell, hinted as in the compare tests, renders the same pixels
   under a 1.003 scale as without it. It fails without the change. It opens a
   second display, as `/renderer/gl` does, because with Mesa a GL renderer on
   the default display aborts once another display that used GL was closed, and
   it loads the font file through fontconfig and FreeType. So it runs on Linux
-  only (Wayland or X11) and would fail on macOS and Windows, where GDK opens one
-  display; BigLinux's programs are Linux-only.
+  only (Wayland or X11) and is skipped on macOS and Windows, where GDK opens one
+  display.
+- `/renderer/gl/scaled-fill`: a circle filled at 1.006 after 1.003 renders as
+  when 1.006 fills it first, and filled at 121/120 after 1.003 as when 121/120
+  fills it first. Each half fails without the change it checks. It opens a
+  second display for the same reason.
 
 Which scales count as at rest is decided by the scale alone, not by watching it
 change: the renderer draws only on damage, so the last frame of an animation
@@ -61,6 +71,11 @@ loaded through `LD_LIBRARY_PATH` and checked in `/proc/PID/maps`.
 `GSK_CACHE_TIMEOUT=60` as in the BigLinux session, `GSK_DEBUG=cache` and
 `GDK_DEBUG=frames`. Memory from `smaps_rollup` in KiB, VRAM from `nvidia-smi`
 in MiB, the cache at the last periodic collection.
+
+These runs, and those under Same results, used this patch without the mask snap
+and cache key described under Change; with them, the fill, stroke and atlas
+counts and the pixel differences between steps can differ. They were not
+repeated.
 
 | journey | Pss_Anon | VRAM | glyphs | fills | strokes | atlases |
 |---|---|---|---|---|---|---|
@@ -116,6 +131,16 @@ change (`glyph-hinting-none`, `big-checkerboard-scaled-down2`,
 `fill-subpixel-offsets-*-nocairo`), as they do on the GTX 1660 Ti with the
 other held patches.
 
+`/renderer/gl/scaled-fill` passes on 4.24.1 with the four held patches, on the
+GTX 1660 Ti and on Mesa llvmpipe. It fails at its first assertion with masks
+snapped to the frame's scale, and at its second with the subpixel grid left out
+of the cache key. All GL compare tests (2 850) on 4.24.1 with the four held
+patches, one run with that snap and key and one without: the same 50 fail
+outside the `clip` variant in both, among them `fill-subpixel-offsets-*-nocairo`
+in every variant but `opaque`, `rotate` included. 4 fail in the `clip` variant
+in each, which GTK marks failing; rerun alone, those differ from run to run
+with the change.
+
 ## Costs and risks
 
 - Fills and strokes drawn at rest at a scale between multiples of 1/120 are
@@ -123,7 +148,5 @@ other held patches.
   quarter pixel grid, so their edges move by up to 1/8 pixel.
 - Glyphs under such a scale are at most 0.05 pixels (for 12 pixels) off their
   exact size.
-- A mask is snapped to the pixel grid of the scale that first cached it, as
-  under rotations, so a shared mask depends on which frame made it: BigImages'
-  empty-window icon differed by up to 5/255 between two runs with the change,
-  and not at all between two runs without it.
+- A mask drawn at a step and the same mask drawn between steps are two cache
+  entries, since their subpixel grids differ.
