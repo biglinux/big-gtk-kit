@@ -19,6 +19,7 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub struct BigSubprocessChild {
     child: Arc<Mutex<std::process::Child>>,
+    id: u32,
     unix_process_group: bool,
 }
 
@@ -174,6 +175,7 @@ fn child_reaper(receiver: &mpsc::Receiver<BigSubprocessChild>, bell: &OwnedFd) {
 impl BigSubprocessChild {
     pub(super) fn new(child: std::process::Child, unix_process_group: bool) -> Self {
         Self {
+            id: child.id(),
             child: Arc::new(Mutex::new(child)),
             unix_process_group,
         }
@@ -181,8 +183,8 @@ impl BigSubprocessChild {
 
     /// OS process id of the child.
     #[must_use]
-    pub fn id(&self) -> u32 {
-        self.lock_child().map_or(0, |child| child.id())
+    pub const fn id(&self) -> u32 {
+        self.id
     }
 
     /// Take the captured stdout pipe (present only when the spec's stdout
