@@ -68,14 +68,16 @@ pub(crate) fn installed_guide_page(page: &str) -> PathBuf {
     guide_page(&root, &glib::language_names(), page)
 }
 
-/// The page in the guide's language for the person's: Brazilian Portuguese for
-/// any `pt`, English for the rest.
+/// The page in the guide's language the person prefers: Brazilian Portuguese
+/// when a `pt` language comes before English, English otherwise.
 fn guide_page(root: &Path, languages: &[glib::GString], page: &str) -> PathBuf {
-    let language = if languages.iter().any(|language| language.starts_with("pt")) {
-        "pt-BR"
-    } else {
-        "en"
-    };
+    let portuguese_first = languages
+        .iter()
+        .find(|language| {
+            language.starts_with("pt") || language.starts_with("en") || language.as_str() == "C"
+        })
+        .is_some_and(|language| language.starts_with("pt"));
+    let language = if portuguese_first { "pt-BR" } else { "en" };
     root.join(language).join(format!("{page}.html"))
 }
 
@@ -105,5 +107,15 @@ mod tests {
             "terminal",
         );
         assert_eq!(path, Path::new("/guide/en/terminal.html"));
+    }
+
+    #[test]
+    fn english_before_portuguese_gets_english() {
+        let path = guide_page(
+            Path::new("/guide"),
+            &languages(&["en_US", "en", "pt_BR", "pt", "C"]),
+            "files",
+        );
+        assert_eq!(path, Path::new("/guide/en/files.html"));
     }
 }
