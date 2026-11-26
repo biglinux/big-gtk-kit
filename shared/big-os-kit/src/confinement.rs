@@ -10,7 +10,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 
-/// The Bubblewrap this suite runs.
+/// The Bubblewrap the sandboxes run.
 pub const BWRAP: &str = "/usr/bin/bwrap";
 
 /// The start of a bwrap command line: a namespace holding the system's
@@ -98,8 +98,8 @@ const CHANGE: u64 = WRITE_FILE | REMOVE_DIR | REMOVE_FILE | MAKE_DIR | MAKE_REG 
 /// (a Wayland socket, a pipe) keep working. Landlock binds this thread and the
 /// ones it starts later: a thread the driver started before this, a shader
 /// compiler's among them, reads with no limit. Call it after EGL and the GL
-/// context are open. A
-/// kernel without Landlock leaves the process unconfined, which is logged.
+/// context are open. A kernel without Landlock leaves the process unconfined,
+/// which is logged.
 ///
 /// # Errors
 ///

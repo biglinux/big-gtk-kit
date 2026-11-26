@@ -84,7 +84,8 @@ impl MemoryCapacity {
 }
 
 /// Read current capacity constraints, with bounded reads and no subprocess.
-/// Missing/invalid inputs remain unknown. Prefer the cached baseline for hot paths.
+/// Missing or invalid inputs remain unknown. [`effective_memory_bytes`] keeps
+/// the first answer for the rest of the process.
 #[must_use]
 pub(crate) fn read_capacity() -> MemoryCapacity {
     let limits = cgroup::read();
@@ -98,9 +99,8 @@ pub(crate) fn read_capacity() -> MemoryCapacity {
     }
 }
 
-/// Cached boot-time capacity used by adaptive budgets. Unlike total_memory_bytes,
-/// this accounts for visible cgroup v2 ancestors and the memory.high boundary.
-/// Pressure monitoring remains necessary after limits change or jobs start.
+/// The capacity adaptive budgets size from, read once per process. Unlike
+/// [`total_memory_bytes`], it counts the visible cgroup v2 ancestors' limits.
 #[must_use]
 pub(crate) fn effective_memory_bytes() -> Option<u64> {
     static CAPACITY: OnceLock<Option<u64>> = OnceLock::new();

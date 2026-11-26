@@ -8,7 +8,7 @@
 //! series and must not be added to PSS, especially on unified-memory GPUs.
 //! This is not a hard RSS limit: decoder scratch, drivers and unadopted callers
 //! can allocate elsewhere. Dynamically linked Rust copies do not share statics;
-//! [`shared`] is shared only inside one linked composition (e.g. Workbench).
+//! [`shared`] is shared only inside one linked composition.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};

@@ -418,7 +418,7 @@ pub fn atomic_create_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.write_all(bytes)?;
     file.sync_all()?;
     pending.install_new(path)?;
-    drop(pending); // Removes a link fallback's owned temporary, never the destination.
+    drop(pending);
     sync_parent_directory(path)
 }
 

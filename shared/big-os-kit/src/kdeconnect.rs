@@ -58,9 +58,9 @@ pub trait KdeConnectDevice {
     /// Whether the phone answers right now.
     #[zbus(property, name = "isReachable")]
     fn is_reachable(&self) -> zbus::Result<bool>;
-    /// This desktop's KDE Connect calls it `isPaired`; older ones said
-    /// `isTrusted`. Read as a property so a version without it degrades to
-    /// "not paired" instead of failing the whole list.
+    /// KDE Connect calls it `isPaired`; older versions said `isTrusted`. Read
+    /// as a property, so a version without it fails this read alone, not the
+    /// whole list.
     #[zbus(property, name = "isPaired")]
     fn is_paired(&self) -> zbus::Result<bool>;
     /// The plugins running on this device.
