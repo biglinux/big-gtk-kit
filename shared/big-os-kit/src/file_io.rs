@@ -275,12 +275,7 @@ fn clear_files(folder: &std::os::fd::OwnedFd) -> std::io::Result<Vec<CString>> {
 fn remove_abandoned(parent: &Path, prefix: &str, mount_table: &str) {
     const ABANDONED_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    // A table that could not be read may hide a share.
-    let local = fs::canonicalize(parent).is_ok_and(|parent| {
-        crate::mount_table::mount_holding(mount_table, &parent)
-            .is_some_and(|(_, filesystem)| !crate::mount_table::is_network(&filesystem))
-    });
-    if !local {
+    if !crate::mount_table::is_local(mount_table, parent) {
         return;
     }
     let Ok(entries) = fs::read_dir(parent) else {

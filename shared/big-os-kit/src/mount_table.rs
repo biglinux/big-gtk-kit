@@ -135,6 +135,15 @@ pub fn mount_of<'a>(table: &'a str, path: &Path) -> Option<Mount<'a>> {
         .max_by_key(|mount| mount.point.as_os_str().len())
 }
 
+/// Whether `folder` is on a mount of `table` that is not a network share: a
+/// process id found there is this machine's. A folder the table holds no mount
+/// for, as when it could not be read, is not.
+pub(crate) fn is_local(table: &str, folder: &Path) -> bool {
+    std::fs::canonicalize(folder).is_ok_and(|folder| {
+        mount_holding(table, &folder).is_some_and(|(_, filesystem)| !is_network(&filesystem))
+    })
+}
+
 /// The source and the filesystem type of the mount [`mount_of`] finds.
 #[must_use]
 pub fn mount_holding(table: &str, path: &Path) -> Option<(String, String)> {

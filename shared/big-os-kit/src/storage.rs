@@ -275,12 +275,11 @@ impl<T: Serialize + DeserializeOwned> BigAtomicJsonStore<T> {
 
 /// Remove what writers of `target` killed mid-write left beside it: the
 /// temporaries of `atomic_sibling_temp_path` whose process is gone, owned by
-/// this user, untouched for `DEAD_TEMP_AGE`. One listing of the folder per
-/// write, under 2 ms for 10,000 files.
+/// this user, untouched for `DEAD_TEMP_AGE`, in a folder on a local mount. One
+/// listing of the folder per write, under 2 ms for 10,000 files.
 fn remove_dead_writers_temps(target: &Path) {
     // A PID names no process here when its writer runs in another PID
-    // namespace or on another host sharing the folder; a live writer touches
-    // its temporary more often than this.
+    // namespace; a live writer touches its temporary more often than this.
     const DEAD_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(60);
     let Some(name) = target.file_name() else {
         return;
@@ -289,6 +288,10 @@ fn remove_dead_writers_temps(target: &Path) {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    // On a share, the writer may run on another host.
+    if !crate::mount_table::is_local(&crate::mount_table::mountinfo(), parent) {
+        return;
+    }
     let prefix = format!(".{}.tmp.", name.to_string_lossy());
     let Ok(entries) = fs::read_dir(parent) else {
         return;
