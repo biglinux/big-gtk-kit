@@ -23,45 +23,57 @@ use gtk::glib;
 pub fn add(owner: &impl IsA<gtk::Widget>, breakpoint: adw::Breakpoint) {
     let owner = owner.as_ref();
     let weak = breakpoint.downgrade();
+    let leaks = BINS_LEAK_BREAKPOINTS.with(|leak| *leak);
+    // The handler libadwaita connects is the one `notify::condition` handler
+    // left unblocked once those already there are blocked: the bin it goes to
+    // may not be in `owner`'s tree yet (an `AdwDialog` not presented).
+    let earlier = if leaks {
+        block_condition_handlers(&breakpoint)
+    } else {
+        Vec::new()
+    };
     #[expect(
         clippy::disallowed_methods,
         reason = "the one place allowed to add them"
     )]
-    if let Some(window) = owner.downcast_ref::<adw::ApplicationWindow>() {
-        window.add_breakpoint(breakpoint);
+    let added = if let Some(window) = owner.downcast_ref::<adw::ApplicationWindow>() {
+        window.add_breakpoint(breakpoint.clone());
+        true
     } else if let Some(window) = owner.downcast_ref::<adw::Window>() {
-        window.add_breakpoint(breakpoint);
+        window.add_breakpoint(breakpoint.clone());
+        true
     } else if let Some(dialog) = owner.downcast_ref::<adw::Dialog>() {
-        dialog.add_breakpoint(breakpoint);
+        dialog.add_breakpoint(breakpoint.clone());
+        true
     } else if let Some(bin) = owner.downcast_ref::<adw::BreakpointBin>() {
-        bin.add_breakpoint(breakpoint);
+        bin.add_breakpoint(breakpoint.clone());
+        true
     } else {
+        false
+    };
+    let bins_handler = if added && leaks {
+        condition_handler(&breakpoint)
+    } else {
+        0
+    };
+    for handler in earlier {
+        // SAFETY: `breakpoint` is alive and `handler` one of its handlers this
+        // function blocked.
+        unsafe { glib::gobject_ffi::g_signal_handler_unblock(breakpoint.as_ptr().cast(), handler) };
+    }
+    if !(added && leaks) {
         return;
     }
-    if !BINS_LEAK_BREAKPOINTS.with(|leak| *leak) {
-        return;
-    }
-    // The bin the breakpoint went to is one of these. Only their addresses are
-    // kept: the handler's data is matched, never read, after the bins are freed.
-    let bins: Vec<glib::ffi::gpointer> = crate::widget_tree::subtree(owner)
-        .filter(|widget| widget.is::<adw::BreakpointBin>())
-        .map(|bin| bin.as_ptr().cast())
-        .collect();
+    drop(breakpoint);
     owner.connect_destroy(move |_| {
-        if let Some(breakpoint) = weak.upgrade() {
-            for &bin in &bins {
-                // SAFETY: `breakpoint` is alive, and GLib compares `bin` with each
-                // handler's data without following it.
-                unsafe {
-                    glib::gobject_ffi::g_signal_handlers_disconnect_matched(
-                        breakpoint.as_ptr().cast(),
-                        glib::gobject_ffi::G_SIGNAL_MATCH_DATA,
-                        0,
-                        0,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        bin,
-                    );
+        if let Some(breakpoint) = weak.upgrade()
+            && bins_handler != 0
+        {
+            let instance = breakpoint.as_ptr().cast();
+            // SAFETY: `breakpoint` is alive; the id is checked before it is used.
+            unsafe {
+                if glib::gobject_ffi::g_signal_handler_is_connected(instance, bins_handler) != 0 {
+                    glib::gobject_ffi::g_signal_handler_disconnect(instance, bins_handler);
                 }
             }
         }
@@ -76,6 +88,41 @@ pub fn add(owner: &impl IsA<gtk::Widget>, breakpoint: adw::Breakpoint) {
             }
         });
     });
+}
+
+/// The first unblocked `notify::condition` handler of `breakpoint`, 0 for none.
+fn condition_handler(breakpoint: &adw::Breakpoint) -> glib::ffi::gulong {
+    // SAFETY: `breakpoint` is alive; GLib only compares the signal and detail.
+    unsafe {
+        glib::gobject_ffi::g_signal_handler_find(
+            breakpoint.as_ptr().cast(),
+            glib::gobject_ffi::G_SIGNAL_MATCH_ID
+                | glib::gobject_ffi::G_SIGNAL_MATCH_DETAIL
+                | glib::gobject_ffi::G_SIGNAL_MATCH_UNBLOCKED,
+            glib::gobject_ffi::g_signal_lookup(
+                c"notify".as_ptr(),
+                glib::gobject_ffi::g_object_get_type(),
+            ),
+            glib::ffi::g_quark_from_static_string(c"condition".as_ptr()),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    }
+}
+
+/// Block every `notify::condition` handler `breakpoint` has, returning them.
+fn block_condition_handlers(breakpoint: &adw::Breakpoint) -> Vec<glib::ffi::gulong> {
+    let mut blocked = Vec::new();
+    loop {
+        let handler = condition_handler(breakpoint);
+        if handler == 0 {
+            return blocked;
+        }
+        // SAFETY: `breakpoint` is alive and `handler` one of its handlers.
+        unsafe { glib::gobject_ffi::g_signal_handler_block(breakpoint.as_ptr().cast(), handler) };
+        blocked.push(handler);
+    }
 }
 
 thread_local! {
@@ -109,8 +156,6 @@ thread_local! {
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
-
-    use gtk::glib::translate::IntoGlib;
 
     use super::*;
     use crate::testing::{init, pump, watch};
@@ -152,35 +197,55 @@ mod tests {
         drop(kept);
     }
 
+    /// A kept breakpoint keeps no handler aimed at its owner's freed bin, from
+    /// a window, a dialog never presented and one presented after the add (its
+    /// bin is out of the tree until then).
     #[gtk::test]
     #[ignore = "needs a display"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a plain AdwDialog is the owner under test"
+    )]
     fn kept_breakpoint_leaves_no_handler() {
         init();
-        let window = adw::Window::new();
-        let condition = adw::BreakpointCondition::parse("max-width: 500sp").expect("valid");
-        let kept = adw::Breakpoint::new(condition);
-        add(&window, kept.clone());
-        window.destroy();
-        drop(window);
-        pump();
-        let notify =
-            glib::subclass::signal::SignalId::lookup("notify", glib::Object::static_type())
-                .expect("GObject's notify");
-        // SAFETY: `kept` is alive; the lookup only reads its handler list.
-        let handler = unsafe {
-            glib::gobject_ffi::g_signal_handler_find(
-                kept.as_ptr().cast(),
-                glib::gobject_ffi::G_SIGNAL_MATCH_ID | glib::gobject_ffi::G_SIGNAL_MATCH_DETAIL,
-                notify.into_glib(),
-                glib::Quark::from_str("condition").into_glib(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        assert_eq!(
-            handler, 0,
-            "a notify::condition handler aimed at the freed bin"
-        );
+        let parent = adw::Window::new();
+        parent.present();
+        let condition = || adw::BreakpointCondition::parse("max-width: 500sp").expect("valid");
+        for owner in ["window", "unpresented dialog", "dialog"] {
+            let kept = adw::Breakpoint::new(condition());
+            match owner {
+                "window" => {
+                    let window = adw::Window::new();
+                    add(&window, kept.clone());
+                    window.destroy();
+                }
+                "unpresented dialog" => add(&adw::Dialog::new(), kept.clone()),
+                _ => {
+                    let dialog = adw::Dialog::new();
+                    add(&dialog, kept.clone());
+                    dialog.present(Some(&parent));
+                    pump();
+                    dialog.force_close();
+                    // The host lets go of a closed sheet on a later turn.
+                    let gone = dialog.downgrade();
+                    drop(dialog);
+                    for _ in 0..200 {
+                        pump();
+                        if gone.upgrade().is_none() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    assert!(gone.upgrade().is_none(), "the closed dialog went");
+                }
+            }
+            pump();
+            assert_eq!(
+                condition_handler(&kept),
+                0,
+                "{owner}: a notify::condition handler aimed at the freed bin"
+            );
+        }
+        parent.destroy();
     }
 }
