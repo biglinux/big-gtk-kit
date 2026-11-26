@@ -92,7 +92,7 @@ pub fn read_media_tags_cancellable(media: &Path, cancellation: &AtomicBool) -> O
     if cancellation.load(Ordering::Acquire) || !crate::thumbnailer::sandbox_works() {
         return None;
     }
-    let source = big_os_kit::file_io::open_regular_no_follow(media).ok()?;
+    let source = crate::thumbnailer::open_source(media)?;
     let parent = big_os_kit::microdaemon::user_runtime_directory().ok()?;
     with_owned_private_directory(
         &parent,
@@ -196,9 +196,10 @@ fn extract_frame(
     if bound <= 0 || i64::from(bound) * i64::from(bound) > MAX_VIDEO_FRAME_PIXELS {
         return Err(FrameFailure::NoPicture);
     }
-    // A link or anything but a plain file has no picture; anything else that
-    // stops the open may pass.
-    let source = big_os_kit::file_io::open_regular_no_follow(video_path).map_err(|error| {
+    // Through any links, as a document's page is: anything but a plain file,
+    // or a loop of links, has no picture; anything else that stops the open
+    // may pass.
+    let source = big_os_kit::file_io::open_regular(video_path).map_err(|error| {
         if error.raw_os_error() == Some(libc::ELOOP)
             || error.kind() == std::io::ErrorKind::InvalidInput
         {
@@ -426,6 +427,12 @@ mod tests {
                 .unwrap_or_else(|failure| panic!("a frame of the {length} s clip: {failure:?}"));
             assert_eq!((frame.width, frame.height), (32, 24));
         }
+        // A link draws what it names, as a document's link does.
+        let link = directory.join("link.mp4");
+        std::os::unix::fs::symlink(directory.join("clip-2.mp4"), &link).unwrap();
+        let frame = extract_video_frame_rgba_cancellable(&link, 32, &AtomicBool::new(false))
+            .unwrap_or_else(|failure| panic!("a frame through the link: {failure:?}"));
+        assert_eq!((frame.width, frame.height), (32, 24));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -518,7 +525,9 @@ mod tests {
             .run()
             .unwrap();
         assert!(made.status.success());
-        let tags = read_media_tags_cancellable(&song, &AtomicBool::new(false)).unwrap();
+        let link = directory.join("link.ogg");
+        std::os::unix::fs::symlink(&song, &link).unwrap();
+        let tags = read_media_tags_cancellable(&link, &AtomicBool::new(false)).unwrap();
         assert_eq!(tags.title.as_deref(), Some("Canção"));
         assert_eq!(tags.artist.as_deref(), Some("Fulano"));
         assert_eq!(tags.duration.map(|length| length.as_secs()), Some(3));
@@ -558,25 +567,5 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
         assert_eq!(cancelled.err(), Some(FrameFailure::Transient));
         assert_eq!(missing.err(), Some(FrameFailure::Transient));
-    }
-
-    #[test]
-    fn cancellable_frame_extractor_rejects_symlink_sources() {
-        use std::os::unix::fs::symlink;
-
-        let directory = std::env::temp_dir().join(format!(
-            "big-image-video-frame-symlink-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        let target = directory.join("target.mp4");
-        let link = directory.join("link.mp4");
-        std::fs::write(&target, b"not a video").unwrap();
-        symlink(&target, &link).unwrap();
-        assert_eq!(
-            extract_video_frame_rgba_cancellable(&link, 96, &AtomicBool::new(false)).err(),
-            Some(FrameFailure::NoPicture)
-        );
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }
