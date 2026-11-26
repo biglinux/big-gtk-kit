@@ -96,8 +96,8 @@ static PRIVATE_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 ///
 /// The name carries the owner's process id. A process killed before its drop
 /// leaves its directory behind, and the next creation with the same prefix in
-/// the same parent removes it ([`remove_abandoned`]).
-struct OwnedPrivateDirectory {
+/// the same parent removes it once it has gone an hour unchanged.
+pub struct OwnedPrivateDirectory {
     path: PathBuf,
 }
 
@@ -108,7 +108,7 @@ impl OwnedPrivateDirectory {
     ///
     /// Returns the underlying filesystem error or `AlreadyExists` after the
     /// bounded collision budget is exhausted.
-    fn create(parent: &Path, prefix: &str) -> std::io::Result<Self> {
+    pub fn create(parent: &Path, prefix: &str) -> std::io::Result<Self> {
         // A NUL is refused by the path syscall itself, with InvalidInput.
         if prefix.is_empty() || prefix.contains('/') || prefix.contains('\\') {
             return Err(std::io::Error::new(
@@ -136,7 +136,7 @@ impl OwnedPrivateDirectory {
 
     /// Absolute or caller-relative path created and owned by this guard.
     #[must_use]
-    fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 }

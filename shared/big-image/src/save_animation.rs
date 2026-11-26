@@ -5,13 +5,16 @@
 //! takes a per-frame delay. It runs confined to the private directory that
 //! holds the frames and the animation it writes, and is handed only raw RGBA
 //! this process decoded; frames are written to disk as they come, since a
-//! minute of 1080p is gigabytes of RGBA.
+//! minute of 1080p is gigabytes of RGBA. They are staged in the cache folder,
+//! never the runtime directory or `/tmp`, which are memory.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::DirBuilderExt as _;
+use std::path::Path;
 use std::time::Duration;
 
 use big_os_kit::confinement::BWRAP;
+use big_os_kit::file_io::OwnedPrivateDirectory;
 use big_os_kit::subprocess::{BigSubprocessOutputMode, BigSubprocessSpec};
 
 use super::{BigImageError, BigRgbaImage};
@@ -21,6 +24,13 @@ const MAGICK: &str = "/usr/bin/magick";
 const ENCODE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Frames beyond this are refused rather than written slowly forever.
 const MAX_FRAMES: usize = 2_000;
+/// RGBA bytes of every frame together, which keeps the frames and the
+/// encoder's cache of them within a few gigabytes of disk.
+const MAX_FRAME_BYTES: u64 = 1 << 30;
+/// ImageMagick's Q16-HDRI pixel cache holds a float per channel, four times
+/// the RGBA, and spills what its memory and map limits do not take into the
+/// frames' folder.
+const ENCODER_CACHE_FACTOR: u64 = 4;
 
 /// A format that can hold more than one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,32 +67,33 @@ impl BigAnimationFormat {
 
 /// Collects transformed frames on disk and encodes them in one pass.
 pub struct BigAnimationWriter {
-    directory: PathBuf,
+    directory: OwnedPrivateDirectory,
     arguments: Vec<OsString>,
     frames: usize,
-}
-
-impl Drop for BigAnimationWriter {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.directory);
-    }
+    frame_bytes: u64,
 }
 
 impl BigAnimationWriter {
-    /// Open a private directory for the frames.
+    /// Open a private directory for the frames in this user's cache folder.
     ///
     /// # Errors
     ///
     /// Fails when no private directory can be created.
     pub fn new() -> Result<Self, BigImageError> {
-        let directory =
-            super::secure::create_private_directory().map_err(|_| BigImageError::SaveFailed {
+        let parent = big_os_kit::settings::cache_home().join("big-image");
+        let directory = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&parent)
+            .and_then(|()| OwnedPrivateDirectory::create(&parent, "animation"))
+            .map_err(|_| BigImageError::SaveFailed {
                 reason: "a private frame buffer could not be created".to_owned(),
             })?;
         Ok(Self {
             directory,
             arguments: Vec::new(),
             frames: 0,
+            frame_bytes: 0,
         })
     }
 
@@ -90,8 +101,9 @@ impl BigAnimationWriter {
     ///
     /// # Errors
     ///
-    /// Fails when the frame is malformed, cannot be written, or the animation
-    /// is longer than this build accepts.
+    /// Fails when the frame is malformed, cannot be written, the animation is
+    /// longer than this build accepts, or the frames and the encoder's work
+    /// would not fit the free space of the cache folder.
     pub fn push(&mut self, image: &BigRgbaImage, delay: Duration) -> Result<(), BigImageError> {
         if self.frames >= MAX_FRAMES {
             return Err(BigImageError::SaveFailed {
@@ -107,7 +119,30 @@ impl BigAnimationWriter {
             return Err(BigImageError::InvalidBytePixels);
         }
         let image = &crate::save::in_srgb(image)?;
-        let frame_path = self.directory.join(format!("{:05}.rgba", self.frames));
+        let frame_bytes = image.rgba.len() as u64;
+        let staged = self.frame_bytes + frame_bytes;
+        if staged > MAX_FRAME_BYTES {
+            return Err(BigImageError::SaveFailed {
+                reason: format!(
+                    "an animation of more than {} MiB of frames is refused",
+                    MAX_FRAME_BYTES >> 20
+                ),
+            });
+        }
+        let available = big_os_kit::filesystem_capacity::filesystem_capacity(self.directory.path())
+            .map_err(|error| BigImageError::SaveFailed {
+                reason: error.to_string(),
+            })?
+            .available_bytes;
+        if available < frame_bytes + ENCODER_CACHE_FACTOR * staged {
+            return Err(BigImageError::SaveFailed {
+                reason: "the cache folder has no room for the animation's frames".to_owned(),
+            });
+        }
+        let frame_path = self
+            .directory
+            .path()
+            .join(format!("{:05}.rgba", self.frames));
         big_os_kit::storage::atomic_write_private(&frame_path, &image.rgba).map_err(|error| {
             BigImageError::SaveFailed {
                 reason: error.to_string(),
@@ -127,6 +162,7 @@ impl BigAnimationWriter {
         source.push(&frame_path);
         self.arguments.push(source);
         self.frames += 1;
+        self.frame_bytes = staged;
         Ok(())
     }
 
@@ -148,7 +184,7 @@ impl BigAnimationWriter {
         // saved picture is, so an interrupted encode never leaves a
         // half-written file where the person's file should be, and the
         // encoder never sees the destination's folder.
-        let staged = self.directory.join("animation");
+        let staged = self.directory.path().join("animation");
         self.run_encoder(format, &staged)?;
         std::fs::read(&staged)
             .and_then(|bytes| big_os_kit::storage::atomic_save_document(destination, &bytes))
@@ -169,13 +205,20 @@ impl BigAnimationWriter {
                 "/etc/ImageMagick-7",
                 "--bind",
             ])
-            .arg(&self.directory)
-            .arg(&self.directory)
+            .arg(self.directory.path())
+            .arg(self.directory.path())
             .arg("--")
             .args([
                 MAGICK, "-limit", "memory", "512MiB", "-limit", "map", "1GiB", "-limit", "area",
-                "256MP", "-limit", "time", "110", "-loop", "0",
+                "256MP", "-limit", "time", "110", "-loop", "0", "-define",
             ])
+            // Its pixel cache spills beside the frames, on disk, and not into
+            // the sandbox's `/tmp`, which is memory.
+            .arg({
+                let mut temporary = OsString::from("registry:temporary-path=");
+                temporary.push(self.directory.path());
+                temporary
+            })
             .args(self.arguments.iter().map(OsString::as_os_str))
             .arg({
                 let mut output = OsString::from(format.magick_prefix());
@@ -244,6 +287,34 @@ mod tests {
             "zero is what players replace with a default; never write it"
         );
         assert_eq!(centiseconds(Duration::from_secs(5)), "500");
+    }
+
+    /// The runtime directory and `/tmp` are memory: a long animation staged
+    /// there filled them for every program of the session.
+    #[test]
+    fn frames_are_staged_in_the_cache_folder() {
+        let writer = BigAnimationWriter::new().expect("private directory");
+        assert!(
+            writer
+                .directory
+                .path()
+                .starts_with(big_os_kit::settings::cache_home())
+        );
+    }
+
+    #[test]
+    fn frames_past_the_byte_ceiling_are_refused() {
+        let mut writer = BigAnimationWriter::new().expect("private directory");
+        writer.frame_bytes = MAX_FRAME_BYTES;
+        let pixel = BigRgbaImage {
+            rgba: vec![255; 4],
+            width: 1,
+            height: 1,
+            cicp: None,
+            opaque: false,
+        };
+        assert!(writer.push(&pixel, Duration::from_millis(50)).is_err());
+        assert_eq!(writer.frames, 0, "nothing was written");
     }
 
     #[test]

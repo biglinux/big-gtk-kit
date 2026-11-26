@@ -474,7 +474,7 @@ fn link_private_decode_path(source_path: &Path, file: File) -> std::io::Result<S
     })
 }
 
-pub(super) fn create_private_directory() -> std::io::Result<std::path::PathBuf> {
+fn create_private_directory() -> std::io::Result<std::path::PathBuf> {
     let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
     let mut last_error = None;
     for base in runtime_dir.into_iter().chain([std::env::temp_dir()]) {
