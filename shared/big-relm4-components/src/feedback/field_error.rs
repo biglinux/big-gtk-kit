@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
-use super::announce::announce;
+use super::announce::announce_from_window;
 
 /// A refusal line and the field it speaks for. Its clones are the same line.
 #[derive(Clone)]
@@ -115,8 +115,10 @@ impl FieldError {
             self.line.remove_css_class("error");
         }
         self.mark(refused);
+        // From the window: the line was hidden until now, and GTK drops an
+        // announcement from a widget no screen reader has met.
         if new_reason {
-            announce(
+            announce_from_window(
                 &self.line,
                 message,
                 if refused {
@@ -298,6 +300,30 @@ mod tests {
             assert!(row.is_visible());
             error.clear();
             assert!(!row.is_visible());
+        });
+    }
+
+    /// The first refusal is said aloud, though its line was hidden until then.
+    #[test]
+    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-relm4-components -- --ignored"]
+    fn first_refusal_is_announced() {
+        big_testkit::harness::require_gtk_test(|| {
+            use big_testkit::atspi::{Announcements, accessibility_bus, settle};
+            let field = gtk::Entry::new();
+            let error = FieldError::under(&field);
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            column.append(&field);
+            column.append(error.line());
+            let window = gtk::Window::builder().child(&column).build();
+            window.present();
+            settle();
+            let (bus, application) =
+                accessibility_bus().expect("the AT-SPI bridge (headless-gate.sh --accessible)");
+            let heard = Announcements::listen(&bus, &application);
+            error.show("A folder with that name exists");
+            settle();
+            assert_eq!(heard.take(), ["A folder with that name exists"]);
+            window.destroy();
         });
     }
 }
