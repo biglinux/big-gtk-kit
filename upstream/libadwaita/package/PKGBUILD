@@ -65,6 +65,20 @@ check() (
 
   trap "kill $_w; wait" EXIT
 
+  # GTK cannot open the display before weston makes its socket.
+  for _ in {1..50}; do
+    [[ -S $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY ]] && break
+    if ! kill -0 "$_w" 2>/dev/null; then
+      echo "weston exited before its socket appeared" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [[ ! -S $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY ]]; then
+    echo "weston's socket did not appear within 5 seconds" >&2
+    exit 1
+  fi
+
   meson test -C build --print-errorlogs
 )
 
