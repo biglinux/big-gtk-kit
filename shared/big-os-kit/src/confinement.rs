@@ -95,8 +95,10 @@ const CHANGE: u64 = WRITE_FILE | REMOVE_DIR | REMOVE_FILE | MAKE_DIR | MAKE_REG 
 /// `/dev`, the driver's device nodes, and the drivers' shader caches under
 /// `$XDG_CACHE_HOME`. Nothing else of the person's home: a shader's
 /// `#include "../../.ssh/id_ed25519"` fails to open. Descriptors already open
-/// (a Wayland socket, a pipe) keep working, and so do threads the driver
-/// started before this. Call it after EGL and the GL context are open. A
+/// (a Wayland socket, a pipe) keep working. Landlock binds this thread and the
+/// ones it starts later: a thread the driver started before this, a shader
+/// compiler's among them, reads with no limit. Call it after EGL and the GL
+/// context are open. A
 /// kernel without Landlock leaves the process unconfined, which is logged.
 ///
 /// # Errors
@@ -160,7 +162,7 @@ pub fn confine_gpu_process<'a>(
     ]);
     if let Some(caches) = caches {
         for cache in ["mesa_shader_cache", "mesa_shader_cache_db", "nvidia"] {
-            rules.push((caches.join(cache), READ | CHANGE));
+            rules.push((caches.join(cache), READ | CHANGE | TRUNCATE));
         }
     }
     for (path, access) in rules {
