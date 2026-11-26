@@ -180,21 +180,24 @@ impl BigSystemKeyring {
     /// # Errors
     ///
     /// Returns a redacted [`BigKeyringError`] when Secret Service cannot store
-    /// the value.
+    /// the value, and [`BigKeyringError::NoAnswer`] after [`LOOKUP_LIMIT`]
+    /// without an answer.
     pub fn store(
         &self,
         reference: &BigKeyringReference,
         secret: &BigSecretValue,
     ) -> Result<(), BigKeyringError> {
-        libsecret::password_store_sync(
-            Some(&schema()),
-            reference.attributes(),
-            Some(libsecret::COLLECTION_DEFAULT.as_str()),
-            &reference.label(),
-            secret.expose_secret(),
-            gio::Cancellable::NONE,
-        )
-        .map_err(classify_backend_error)
+        let (stored, timed_out) = within(LOOKUP_LIMIT, |cancellable| {
+            libsecret::password_store_sync(
+                Some(&schema()),
+                reference.attributes(),
+                Some(libsecret::COLLECTION_DEFAULT.as_str()),
+                &reference.label(),
+                secret.expose_secret(),
+                Some(cancellable),
+            )
+        });
+        stored.map_err(|error| answer_error(error, timed_out))
     }
 
     /// Look up a secret. This is a blocking operation.
@@ -217,13 +220,7 @@ impl BigSystemKeyring {
             )
         });
         let secret = found
-            .map_err(|error| {
-                if timed_out {
-                    BigKeyringError::NoAnswer
-                } else {
-                    classify_backend_error(error)
-                }
-            })?
+            .map_err(|error| answer_error(error, timed_out))?
             .ok_or(BigKeyringError::MissingSecret)?;
         BigSecretValue::new(secret.as_str())
     }
@@ -233,14 +230,29 @@ impl BigSystemKeyring {
     ///
     /// # Errors
     ///
-    /// Returns a redacted backend error when Secret Service rejects the clear.
+    /// Returns a redacted backend error when Secret Service rejects the clear,
+    /// and [`BigKeyringError::NoAnswer`] after [`LOOKUP_LIMIT`] without an
+    /// answer.
     pub fn clear(&self, reference: &BigKeyringReference) -> Result<(), BigKeyringError> {
-        libsecret::password_clear_sync(
-            Some(&schema()),
-            reference.attributes(),
-            gio::Cancellable::NONE,
-        )
-        .map_err(classify_backend_error)
+        let (cleared, timed_out) = within(LOOKUP_LIMIT, |cancellable| {
+            libsecret::password_clear_sync(
+                Some(&schema()),
+                reference.attributes(),
+                Some(cancellable),
+            )
+        });
+        cleared
+            .map(drop)
+            .map_err(|error| answer_error(error, timed_out))
+    }
+}
+
+/// The error of a call [`within`] cancelled, or the backend's own.
+fn answer_error(error: glib::Error, timed_out: bool) -> BigKeyringError {
+    if timed_out {
+        BigKeyringError::NoAnswer
+    } else {
+        classify_backend_error(error)
     }
 }
 
@@ -273,7 +285,7 @@ fn validate_identity(value: &str) -> Result<(), BigKeyringError> {
     }
 }
 
-/// How long a lookup waits for Secret Service, which may be asking the person
+/// How long a call waits for Secret Service, which may be asking the person
 /// to unlock the keyring: time to type a password, and not forever when
 /// nobody is there, as when a program restores a connection at login.
 pub const LOOKUP_LIMIT: Duration = Duration::from_secs(60);
