@@ -171,7 +171,7 @@ pub fn remove_tree(path: &Path) -> std::io::Result<()> {
         rustix::fs::fstat(folder).map(|stat| (stat.st_dev, stat.st_ino))
     };
     let moved = || std::io::Error::other("a folder moved while its tree was removed");
-    let mut current = open_owned_folder(rustix::fs::CWD, path)?;
+    let mut current = open_owned_folder(rustix::fs::CWD, path, None)?;
     let root = identity(&current)?;
     let mut levels = vec![Level {
         name: None,
@@ -180,11 +180,8 @@ pub fn remove_tree(path: &Path) -> std::io::Result<()> {
     }];
     while let Some(level) = levels.last_mut() {
         if let Some(child) = level.folders.pop() {
-            current = open_owned_folder(&current, child.as_c_str())?;
+            current = open_owned_folder(&current, child.as_c_str(), Some(root.0))?;
             let child_identity = identity(&current)?;
-            if child_identity.0 != root.0 {
-                return Err(moved());
-            }
             let folders = clear_files(&current)?;
             levels.push(Level {
                 name: Some(child),
@@ -212,24 +209,32 @@ pub fn remove_tree(path: &Path) -> std::io::Result<()> {
 }
 
 /// Open the folder `name` under `parent` for listing, as its owner's with
-/// mode `0700`; a link is refused.
-fn open_owned_folder<Fd: std::os::fd::AsFd, P: rustix::path::Arg + Copy>(
+/// mode `0700`; a link is refused, and so is a folder off `device` before its
+/// mode changes.
+fn open_owned_folder<Fd: std::os::fd::AsFd, P: rustix::path::Arg>(
     parent: Fd,
     name: P,
+    device: Option<u64>,
 ) -> std::io::Result<std::os::fd::OwnedFd> {
-    let parent = parent.as_fd();
     let place = rustix::fs::openat(
         parent,
         name,
         OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )?;
+    if let Some(device) = device
+        && rustix::fs::fstat(&place)?.st_dev != device
+    {
+        return Err(std::io::Error::other(
+            "a folder moved while its tree was removed",
+        ));
+    }
+    // Through the descriptor, so the folder opened is the one whose mode changed.
     let named = format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&place));
     rustix::fs::chmod(named.as_str(), Mode::RWXU)?;
-    Ok(rustix::fs::openat(
-        parent,
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+    Ok(rustix::fs::open(
+        named.as_str(),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
     )?)
 }
@@ -312,7 +317,8 @@ fn remove_abandoned(parent: &Path, prefix: &str, mount_table: &str) {
             && metadata.uid() == crate::microdaemon::current_effective_user_id()
             && metadata.permissions().mode() & 0o7777 == 0o700
         {
-            let _ = fs::remove_dir_all(entry.path());
+            // A confined program may have left folders it took the modes off.
+            let _ = remove_tree(&entry.path());
         }
     }
 }

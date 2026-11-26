@@ -203,6 +203,11 @@ fn abandoned_staging_is_cleared() {
         let staging = parent.join(name);
         fs::create_dir_all(&staging).unwrap();
         fs::write(staging.join("archive.zip"), b"half").unwrap();
+        // A folder its program took the modes off.
+        let locked = staging.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("part"), b"half").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
         // Left two hours ago.
         let left = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
         fs::File::open(&staging)
@@ -239,7 +244,7 @@ fn abandoned_staging_is_cleared() {
     assert!(recent.exists());
     assert!(lookalikes.iter().all(|lookalike| lookalike.exists()));
     drop(staged);
-    let _ = fs::remove_dir_all(parent);
+    remove_tree(&parent).unwrap();
 }
 
 /// On a network share the process id may be another machine's, so a dead
