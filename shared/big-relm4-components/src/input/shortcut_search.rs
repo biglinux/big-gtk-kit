@@ -64,9 +64,17 @@ impl ShortcutSearch {
     /// GTK shows it (`Return` reads `Enter`).
     #[must_use]
     pub fn finds(&self, title: &str, label: &str, keys: &[(ModifierType, &str)]) -> bool {
+        // `+` and spaces join keys alike: "ctrl page up" reads "Ctrl+Page Up".
+        let joined = |text: &str| {
+            text.to_lowercase()
+                .split(|letter: char| letter == '+' || letter.is_whitespace())
+                .filter(|word| !word.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         if self.text.is_empty()
             || title.to_lowercase().contains(&self.text)
-            || label.to_lowercase().contains(&self.text)
+            || joined(label).contains(&joined(&self.text))
         {
             return true;
         }
@@ -122,8 +130,9 @@ mod tests {
             );
             let unbound = ("Zoom in", "Disabled", vec![]);
             let zoom_out = ("Shrink text", "Ctrl+-", vec![(control, "minus")]);
+            let page = ("Previous page", "Ctrl+Page Up", vec![(control, "Page_Up")]);
             let rows = [
-                &new_tab, &reopen, &close, &menu, &terminal, &unbound, &zoom_out,
+                &new_tab, &reopen, &close, &menu, &terminal, &unbound, &zoom_out, &page,
             ];
             for (typed, expected) in [
                 (
@@ -136,6 +145,7 @@ mod tests {
                         "Terminal",
                         "Zoom in",
                         "Shrink text",
+                        "Previous page",
                     ],
                 ),
                 ("ctrl+t", vec!["New tab", "Reopen closed tab"]),
@@ -148,6 +158,7 @@ mod tests {
                         "Reopen closed tab",
                         "Close window",
                         "Shrink text",
+                        "Previous page",
                     ],
                 ),
                 ("Super", vec!["Open the menu", "Terminal"]),
@@ -157,6 +168,7 @@ mod tests {
                 ("zoom", vec!["Zoom in"]),
                 ("ctrl -", vec!["Shrink text"]),
                 ("ctrl minus", vec!["Shrink text"]),
+                ("ctrl page up", vec!["Previous page"]),
                 ("ctrl+q", vec![]),
                 ("paste the text", vec![]),
             ] {
