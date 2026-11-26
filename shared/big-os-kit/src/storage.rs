@@ -508,6 +508,12 @@ pub fn atomic_replace_document(
 #[cfg(target_os = "linux")]
 pub fn atomic_save_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = written_through(path)?;
+    // Replace a file seen to exist at once: creating it first would write the
+    // whole document twice. A file made after this look still comes back as
+    // `AlreadyExists`.
+    if fs::symlink_metadata(&target).is_ok() {
+        return atomic_replace_document(&target, bytes, || true).map(drop);
+    }
     match atomic_create_document(&target, bytes) {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             atomic_replace_document(&target, bytes, || true).map(drop)
