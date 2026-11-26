@@ -346,7 +346,7 @@ struct BigSettingsDocumentInner<T> {
     store: BigVersionedJsonStore<T>,
     /// False when the file could not be read: it is left for whoever can.
     saves: Cell<bool>,
-    /// Why the file could not be read, until the first change reports it.
+    /// Why the file could not be read, which each change reports.
     unread: RefCell<Option<BigStorageError>>,
     changes: BigSettingChangeStream,
     /// A background write is running; [`BigSettingsDocument::apply`] marks
@@ -432,8 +432,8 @@ where
     ///
     /// A file this build cannot read (damaged, too large, or written by a newer
     /// build) is left as it is: the defaults live in memory, changes still
-    /// apply and notify, nothing is written over the file, and the first
-    /// change reports why through its `report`.
+    /// apply and notify, nothing is written over the file, and each change
+    /// reports why through its `report`.
     #[must_use]
     pub fn open(store: BigVersionedJsonStore<T>) -> Self
     where
@@ -511,9 +511,8 @@ where
         self.inner.document.replace(document);
         self.inner.changes.emit(key);
         if !self.inner.saves.get() {
-            let unread = self.inner.unread.take();
-            if let Some(error) = unread {
-                report(&error);
+            if let Some(error) = self.inner.unread.borrow().as_ref() {
+                report(error);
             }
             return;
         }
@@ -903,7 +902,7 @@ mod tests {
         }
 
         /// An unreadable file is never replaced by the defaults standing in for
-        /// it, and the first change says why it is not saved.
+        /// it, and every change says why it is not saved.
         #[test]
         fn unreadable_file_is_kept() {
             for bytes in [
@@ -925,7 +924,7 @@ mod tests {
                     );
                 }
 
-                assert_eq!(reports.get(), 1);
+                assert_eq!(reports.get(), 2);
                 assert!(document.snapshot().enabled);
                 assert!(!document.inner.saving.get());
                 assert_eq!(fs::read(&path).unwrap(), bytes);
