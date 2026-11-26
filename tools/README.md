@@ -129,9 +129,13 @@ higher.
 Each event is `N|R|S|s|U address count frames…`, with the count before the
 operation: `N` is creation (`g_object_new` called from outside libgobject),
 `s` sinks the floating reference (takes it over, adds nothing), `U 1` is the
-last release. A survivor whose traced references balance is held by something
-that never called `g_object_ref` on it: GTK's window list (a window never
-destroyed) or a Rust value never dropped.
+last release. Only calls from outside libgobject are traced: a reference
+libgobject takes itself (`g_value_dup_object`, a property, a signal emission, a
+binding) is not logged and shows only as a count higher than the event before
+it. A survivor whose traced references balance is held by such an untraced
+reference (the `GdkWaylandToplevel` leak below is one), or by something that
+never called `g_object_ref` on it: GTK's window list (a window never destroyed)
+or a Rust value never dropped.
 
 ## Known library leaks
 
