@@ -99,7 +99,7 @@ home_environment=(
 	SCCACHE_DIR="${SCCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/sccache}"
 )
 # A new home has no GStreamer registry, so every process that loads GStreamer
-# scans the plugins itself; dozens of tests doing it at once ran past their time
+# would scan the plugins itself, and tests doing it at once outrun their time
 # limits. One scan here leaves the registry in the home for all of them.
 if command -v gst-inspect-1.0 >/dev/null; then
 	env "${home_environment[@]}" gst-inspect-1.0 >/dev/null 2>&1 || true

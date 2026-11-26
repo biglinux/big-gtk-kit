@@ -1,6 +1,6 @@
 # big-testkit
 
-Dev-only test harness: finalization census in a headless KWin session, RSS-slope leak verdicts and the AT-SPI reader of the process for the big/ suite.
+Dev-only test harness: finalization census in a headless KWin session, RSS-slope leak verdicts and the AT-SPI reader of the process under test.
 
 ## Use when
 
@@ -23,7 +23,7 @@ Test harnesses create and fully tear down their GTK/application state.
 
 ## Native dependencies
 
-GTK/Weston/D-Bus for graphical tests; `/proc` for Linux memory probes.
+GTK, KWin and D-Bus for graphical tests; `/proc` for Linux memory probes.
 
 The workspace feature gates and nearest product PKGBUILD define exact versions.
 

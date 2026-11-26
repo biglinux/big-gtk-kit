@@ -17,7 +17,7 @@ cache entry, so each frame that draws it adds one more reference, and the font
 stays with its cairo scaled font and glyph images. The count only stops growing
 when later animations repeat the scales of earlier ones.
 
-`glyph-scaled-font-leak.patch` (2 files, +71 −1) applies on 4.24.1 and on main
+`glyph-scaled-font-leak.patch` (2 files, +74 −1) applies on 4.24.1 and on main
 b9cd9290d5. GTK main fixed the leak on its own with the same change, commit
 8c4460ce ("gsk: Fix a leak in the glyph cache"); only the test is not there.
 

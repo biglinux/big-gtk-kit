@@ -268,7 +268,8 @@ pub fn account_named(name: &str) -> bool {
 ///
 /// # Errors
 ///
-/// As [`shares`]; a failed `add` leaves `old` shared as it was.
+/// As [`shares`]; a failed `add` leaves `old` shared as it was, and a failure
+/// after it leaves the folder shared under both names.
 pub fn rename(old: &str, share: &Share) -> Result<(), Error> {
     add(share)?;
     if old != share.name && shares()?.iter().any(|listed| listed.name == old) {

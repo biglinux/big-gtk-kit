@@ -51,7 +51,6 @@ macro_rules! link_jemalloc {
         /// What jemalloc reads before `main`, in this process only.
         #[cfg(feature = "gtk-jemalloc")]
         #[unsafe(no_mangle)]
-        // bigdesktop's census measures with the same string.
         pub static malloc_conf: &[u8; 47] = b"narenas:2,dirty_decay_ms:0,slab_sizes:1-4096:1\0";
 
         /// Reference the library so the linker keeps the dependency, and with

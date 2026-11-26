@@ -18,7 +18,7 @@ looks glyphs up at `MAX (scale.width, scale.height)`, and
 Only under rotations and other transforms that are not a scale do they round
 the scale, up to the next power of two.
 
-`scale-animation-cache.patch` (5 files, +267 −14) applies on 4.24.1, alone or
+`scale-animation-cache.patch` (5 files, +270 −14) applies on 4.24.1, alone or
 after the other held patches. After glyph-scaled-font-leak it needs a three-way
 apply (`git apply -3` or `git am -3`, as the package uses), because both add the
 same include to `testsuite/gsk/misc.c`. It does not apply on main (b9cd9290d5

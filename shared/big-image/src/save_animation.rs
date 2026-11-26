@@ -302,8 +302,8 @@ mod tests {
         assert_eq!(centiseconds(Duration::from_secs(5)), "500");
     }
 
-    /// The runtime directory and `/tmp` are memory: a long animation staged
-    /// there filled them for every program of the session.
+    /// The runtime directory and `/tmp` are memory, shared by every program of
+    /// the session: frames stage in the cache instead.
     #[test]
     fn frames_stage_in_the_cache() {
         let writer = BigAnimationWriter::new().expect("private directory");
