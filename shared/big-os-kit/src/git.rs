@@ -46,8 +46,9 @@ mod tests {
     use super::*;
     use crate::subprocess::BigSubprocessSpec;
 
-    /// A diff under [`HARDENING`] with `--no-ext-diff` and `--no-textconv`
-    /// runs none of the commands a repository names for it, and is git's own.
+    /// A diff under [`HARDENING`] runs none of the commands a repository names
+    /// for it: without `--no-ext-diff` it fails, and with both flags it is
+    /// git's own.
     #[test]
     fn repository_diff_commands_never_run() {
         let repository = std::env::temp_dir().join(format!("big-git-{}", std::process::id()));
@@ -77,12 +78,16 @@ mod tests {
             assert!(git(&["config", key, value]).status.success());
         }
         std::fs::write(repository.join(".gitattributes"), "file diff=named\n").unwrap();
-        std::fs::write(repository.join("file"), "one\n").unwrap();
-        assert!(git(&["add", "file"]).status.success());
-        std::fs::write(repository.join("file"), "two\n").unwrap();
+        for name in ["file", "plain"] {
+            std::fs::write(repository.join(name), "one\n").unwrap();
+            assert!(git(&["add", name]).status.success());
+            std::fs::write(repository.join(name), "two\n").unwrap();
+        }
+        let unflagged = git(&["diff", "--", "plain"]);
         let diff = git(&["diff", "--no-ext-diff", "--no-textconv", "--", "file"]);
         let commands_ran = ran.exists();
         std::fs::remove_dir_all(&repository).unwrap();
+        assert!(!unflagged.status.success(), "the empty diff.external fails");
         assert!(diff.status.success(), "{}", diff.stderr_lossy());
         assert!(!commands_ran);
         assert!(

@@ -22,7 +22,7 @@ use std::path::Path;
 /// libraries loaded by the programs these checks vouch for (GLib, GTK,
 /// GdkPixbuf, GStreamer, PipeWire, Mesa, EGL, NVIDIA's EGL, Vulkan, VA-API,
 /// VDPAU, Qt, Fcitx, Python).
-pub const CODE_LOADING_VARIABLES: [&str; 43] = [
+pub const CODE_LOADING_VARIABLES: [&str; 45] = [
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
     "LD_AUDIT",
@@ -40,6 +40,8 @@ pub const CODE_LOADING_VARIABLES: [&str; 43] = [
     "GST_PLUGIN_PATH_1_0",
     "GST_PLUGIN_SYSTEM_PATH",
     "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "GST_PLUGIN_SCANNER",
+    "GST_PLUGIN_SCANNER_1_0",
     "GST_REGISTRY",
     "GST_REGISTRY_1_0",
     "PIPEWIRE_MODULE_DIR",
@@ -86,20 +88,24 @@ pub fn runs_installed(pid: u32, path: &str) -> bool {
     let exe = format!("/proc/{pid}/exe");
     std::fs::read_link(&exe).is_ok_and(|running| installed_path(&running) == Some(path))
         && std::fs::metadata(&exe).is_ok_and(|running| {
-            std::fs::metadata(path).is_ok_and(|installed| installed_file(&running, &installed))
+            std::fs::metadata(path).is_ok_and(|installed| {
+                let same = running.dev() == installed.dev() && running.ino() == installed.ino();
+                installed_file(running.uid(), running.mode(), same, running.nlink())
+            })
         })
         && loads_no_foreign_code(pid)
 }
 
-/// Whether `running`, the file a process runs, is root's, writable by nobody
-/// else, and either `installed` itself (a hardened unit's read-only `/usr` is
-/// the same file) or a file an upgrade unlinked. Any other program mounted
-/// over the path in a namespace of the user's is refused, root's included.
+/// Whether the file a process runs, of `owner` with `mode` and `links` names,
+/// is root's, writable by nobody else, and either the file at the installed
+/// path (`same`: a hardened unit's read-only `/usr` holds the same file) or
+/// one an upgrade unlinked. Another program mounted over the path in a
+/// namespace of the user's is refused, root's included, until an upgrade
+/// unlinks it: a route no stronger than a parent tracing the installed
+/// program it started.
 #[cfg(feature = "bus-caller")]
-fn installed_file(running: &std::fs::Metadata, installed: &std::fs::Metadata) -> bool {
-    let same = running.dev() == installed.dev() && running.ino() == installed.ino();
-    let replaced = running.nlink() == 0;
-    running.uid() == 0 && running.mode() & 0o022 == 0 && (same || replaced)
+fn installed_file(owner: u32, mode: u32, same: bool, links: u64) -> bool {
+    owner == 0 && mode & 0o022 == 0 && (same || links == 0)
 }
 
 /// The entries of [`CODE_LOADING_VARIABLES`] in the systemd user manager's
@@ -427,25 +433,26 @@ mod tests {
     }
 
     /// Only root's file that nobody else can write passes, and only the file
-    /// at the installed path.
+    /// at the installed path or one an upgrade unlinked.
     #[cfg(feature = "bus-caller")]
     #[test]
     fn installed_file_is_roots_alone() {
-        let metadata = |path: &Path| std::fs::metadata(path).expect("a file");
-        let sleep = metadata(Path::new("/usr/bin/sleep"));
-        let shared = metadata(Path::new("/tmp"));
+        const PROGRAM: u32 = 0o100_755;
+        assert!(installed_file(0, PROGRAM, true, 1));
         assert!(
-            shared.uid() == 0 && shared.mode() & 0o022 != 0,
-            "/tmp is root's and writable by all"
+            installed_file(0, PROGRAM, false, 0),
+            "unlinked by an upgrade"
         );
-        let built = metadata(&std::env::current_exe().expect("test program"));
-        assert!(installed_file(&sleep, &sleep));
         assert!(
-            !installed_file(&sleep, &metadata(Path::new("/usr/bin/true"))),
+            !installed_file(0, PROGRAM, false, 1),
             "another of root's files"
         );
-        assert!(!installed_file(&shared, &shared), "writable by others");
-        assert!(!installed_file(&built, &built), "the user's");
+        assert!(
+            !installed_file(0, 0o100_775, true, 1),
+            "writable by the group"
+        );
+        assert!(!installed_file(0, 0o100_757, true, 1), "writable by all");
+        assert!(!installed_file(1000, PROGRAM, true, 1), "the user's");
     }
 
     /// Another user's process, whose environment this one cannot read,
