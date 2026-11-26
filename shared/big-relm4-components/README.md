@@ -58,25 +58,17 @@ plus a strip of side-by-side buttons, a switch row and a slider
 Context menus use `build_menu_model_action_popover_menu`, which returns a
 `PopoverMenu` with the `menu` accessible role; anchor it yourself, build a
 fresh one per opening and unparent the previous one on the next opening,
-never in `closed`. The catalog entry is in
-[widget catalog](https://github.com/biglinux/big/blob/main/docs/reference/widgets.md#menus).
+never in `closed`.
 
 ## Native dependencies
 
 GTK 4.24, libadwaita 1.10, Relm4 0.11.
 
 The workspace feature gates and nearest product PKGBUILD define exact versions.
-See [getting started](https://github.com/biglinux/big/blob/main/docs/handbook/getting-started.md).
 
 ## Example
 
 `cargo run -p big-relm4-components --example shortcut_editor`.
-
-The complete learning map is [framework examples](https://github.com/biglinux/big/blob/main/docs/reference/framework-examples.md).
-
-## Consumers
-
-bigdesktop's [package catalog](https://github.com/biglinux/big/blob/main/docs/reference/packages.md) lists its packages that use this one.
 
 ## Validate
 
@@ -88,7 +80,7 @@ cargo test -p big-relm4-components --doc --locked
 ```
 
 Run graphical tests through `tools/headless-gate.sh` when the changed behavior
-needs GTK. Follow [validation](https://github.com/biglinux/big/blob/main/docs/handbook/validation.md) for the full matrix.
+needs GTK.
 
 The `feedback::links` test reads this process's AT-SPI cache, so it is ignored
 by default and needs the real bridge:

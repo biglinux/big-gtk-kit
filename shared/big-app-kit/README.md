@@ -36,17 +36,10 @@ registration nor release drops user captures under the registry borrow.
 GTK 4.24, libadwaita 1.10, GLib/GIO.
 
 The workspace feature gates and nearest product PKGBUILD define exact versions.
-See [getting started](https://github.com/biglinux/big/blob/main/docs/handbook/getting-started.md).
 
 ## Example
 
 `cargo run -p big-app-kit --example relm4_lifecycle`.
-
-The complete learning map is [framework examples](https://github.com/biglinux/big/blob/main/docs/reference/framework-examples.md).
-
-## Consumers
-
-bigdesktop's [package catalog](https://github.com/biglinux/big/blob/main/docs/reference/packages.md) lists its packages that use this one.
 
 ## Validate
 
@@ -58,4 +51,4 @@ cargo test -p big-app-kit --doc --locked
 ```
 
 Run graphical tests through `tools/headless-gate.sh` when the changed behavior
-needs GTK. Follow [validation](https://github.com/biglinux/big/blob/main/docs/handbook/validation.md) for the full matrix.
+needs GTK.

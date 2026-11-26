@@ -3,7 +3,7 @@
 
 //! Decode an image through glycin at its full size and write the frame glycin
 //! hands over (sRGB, ICC profile already applied) as an 8-bit RGBA PNG.
-//! `scripts/jpeg-loader-delta-e.py` runs it once with the `glycin-jpegturbo`
+//! bigdesktop's `scripts/jpeg-loader-delta-e.py` runs it once with the `glycin-jpegturbo`
 //! loader and once without, and compares the two outputs.
 //!
 //! ```text

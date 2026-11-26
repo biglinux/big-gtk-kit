@@ -26,17 +26,10 @@ Test harnesses create and fully tear down their GTK/application state.
 GTK/Weston/D-Bus for graphical tests; `/proc` for Linux memory probes.
 
 The workspace feature gates and nearest product PKGBUILD define exact versions.
-See [getting started](https://github.com/biglinux/big/blob/main/docs/handbook/getting-started.md).
 
 ## Example
 
 `cargo test -p big-testkit --all-targets --locked`.
-
-The complete learning map is [framework examples](https://github.com/biglinux/big/blob/main/docs/reference/framework-examples.md).
-
-## Consumers
-
-bigdesktop's [package catalog](https://github.com/biglinux/big/blob/main/docs/reference/packages.md) lists its packages that use this one.
 
 ## Validate
 
@@ -48,4 +41,4 @@ cargo test -p big-testkit --doc --locked
 ```
 
 Run graphical tests through `tools/headless-gate.sh` when the changed behavior
-needs GTK. Follow [validation](https://github.com/biglinux/big/blob/main/docs/handbook/validation.md) for the full matrix.
+needs GTK.

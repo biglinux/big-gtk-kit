@@ -116,14 +116,6 @@ pub(crate) const DEFAULT_MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 /// All fields use owned types so the spec is easy to build in tests and
 /// pass across thread boundaries. Construct with [`BigSubprocessSpec::builder`].
 ///
-/// # Capabilities
-///
-/// `subprocess`, `subprocess+timeout`, `subprocess+allow-list`
-///
-/// # Archetypes
-///
-/// `terminal`, `pkg-manager`, `system-monitor`, `network-manager`, `container-manager`, `clipboard`, `screenshot`
-///
 /// # Examples
 ///
 /// ```
@@ -545,7 +537,7 @@ impl BigSubprocessSpec {
     }
 }
 
-/// Display-free, serde-friendly view of a resolved subprocess spec.
+/// Display-free view of a resolved subprocess spec.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BigSubprocessResolved {
     /// Validated program (argv\[0\]).

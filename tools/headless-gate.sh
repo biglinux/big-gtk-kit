@@ -142,8 +142,8 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 	sleep 0.1
 done
 if [[ ! -S "$runtime_dir/$socket" ]]; then
-	# 1, not 2. Exit 2 means "a tool this machine lacks", and the release gate
-	# writes it to the ledger as SKIP. A compositor that was found and then failed
+	# 1, not 2. Exit 2 means "a tool this machine lacks", which a gate reads
+	# as a skipped step. A compositor that was found and then failed
 	# to come up is a failure: reporting it as "not applicable" turns every
 	# display-dependent test in the run into a silent pass.
 	echo "FAIL headless-gate: kwin_wayland socket never appeared" >&2

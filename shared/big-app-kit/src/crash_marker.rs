@@ -4,7 +4,7 @@
 //! glib's signal and closure paths have no `catch_unwind`, so a panic inside a
 //! GTK callback unwinds out of an `extern "C"` trampoline and aborts. GUI
 //! processes record the panic as one file in the app's own state directory,
-//! which the release gate reads; nothing leaves the machine.
+//! where a release check reads it; nothing leaves the machine.
 
 use std::fs::File;
 use std::io::Write as _;
@@ -25,12 +25,20 @@ pub fn crash_dir(app: &str) -> Option<PathBuf> {
     big_os_kit::settings::state_home_checked().map(|state| state.join(app).join("crash"))
 }
 
-/// A new record file in `directory`, numbered after the files already there.
+/// The most records a directory keeps: a program crashing in a loop keeps its
+/// first ones, not a file per start for good.
+const MAX_RECORDS: usize = 100;
+
+/// A new record file in `directory`, numbered after the files already there;
+/// `None` once it holds [`MAX_RECORDS`].
 ///
 /// Created exclusively, so a record a person deleted, or another process
 /// panicking at the same moment, moves the number on instead of overwriting one.
 fn create_record(directory: &Path) -> Option<File> {
     let mut number = std::fs::read_dir(directory).map_or(0, Iterator::count);
+    if number >= MAX_RECORDS {
+        return None;
+    }
     loop {
         let path = directory.join(format!("{number:04}.panic"));
         match File::options().write(true).create_new(true).open(path) {
@@ -50,8 +58,8 @@ pub fn install(app: &str) {
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
-    // A test would leave records in the real home, which the release gate
-    // cannot tell from a real crash.
+    // A test would leave records in the real home, which nothing can tell
+    // from a real crash.
     if cfg!(test) {
         return;
     }
@@ -110,9 +118,25 @@ mod tests {
         std::fs::remove_dir_all(&directory).expect("remove test directory");
     }
 
+    #[test]
+    fn a_full_directory_takes_no_more() {
+        let directory = std::env::temp_dir().join(format!(
+            "big-crash-marker-full-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("test directory");
+        for number in 0..MAX_RECORDS {
+            std::fs::write(directory.join(format!("{number:04}.panic")), "").expect("seed record");
+        }
+        let refused = create_record(&directory).is_none();
+        std::fs::remove_dir_all(&directory).expect("remove test directory");
+        assert!(refused);
+    }
+
     /// Installing twice must not chain two hooks: the second call is the one a
     /// library and its host would both make, and two records for one panic would
-    /// make the count the gate reads wrong.
+    /// make the count of panics wrong.
     #[test]
     fn a_second_install_is_refused() {
         INSTALLED.store(false, Ordering::SeqCst);

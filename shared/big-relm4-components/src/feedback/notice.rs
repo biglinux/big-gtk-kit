@@ -5,7 +5,7 @@
 //! a time. A confirmation steps down on its own, a problem stays with Close, and
 //! at most one button acts on what was said.
 //!
-//! Never an `adw::Toast` (`docs/contracts/DESKTOP-UX.md` section 2): a toast
+//! Never an `adw::Toast`: a toast
 //! floats out of Tab's reach and takes its way back away on a timer.
 
 use std::cell::RefCell;

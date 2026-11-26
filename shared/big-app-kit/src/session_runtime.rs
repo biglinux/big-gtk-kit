@@ -50,8 +50,8 @@ impl SessionRuntime {
         })
     }
 
-    /// Same cooperative owner used by legacy default pane constructors in this
-    /// composition; Arc clones are not independent memory budgets.
+    /// The cooperative owner the default pane constructors use in this
+    /// process; Arc clones are not independent memory budgets.
     #[must_use]
     pub fn resources(&self) -> &Arc<SessionResources> {
         &self.resources

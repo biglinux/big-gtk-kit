@@ -26,9 +26,8 @@
 /// instead of one sized to fit many objects, so a page empties and goes back
 /// as soon as the few objects on it are freed.
 ///
-/// The thread cache stays on: turning it off costs CPU. Re-measure as
-/// `docs/handbook/resource-pitfalls.md` describes before changing any of this;
-/// `tests/contracts/tests/allocator_policy.rs` owns the rule.
+/// The thread cache stays on: turning it off costs CPU. Measure the programs'
+/// memory again before changing any of this.
 ///
 /// Call [`keep_jemalloc_linked`] once at the top of `main`: direct ELF linkage
 /// affects this executable only, and an exec'd child keeps its own allocator.
@@ -52,7 +51,7 @@ macro_rules! link_jemalloc {
         /// What jemalloc reads before `main`, in this process only.
         #[cfg(feature = "gtk-jemalloc")]
         #[unsafe(no_mangle)]
-        // scripts/census-smoke.sh measures with the same string.
+        // bigdesktop's census measures with the same string.
         pub static malloc_conf: &[u8; 47] = b"narenas:2,dirty_decay_ms:0,slab_sizes:1-4096:1\0";
 
         /// Reference the library so the linker keeps the dependency, and with

@@ -176,8 +176,8 @@ pub(crate) fn start_watch(
 /// Hand back what the allocator is holding but nothing is using.
 ///
 /// Whichever allocator the executable linked: this crate is a library and does
-/// not choose one, and `tests/contracts/tests/allocator_policy.rs` says why. So it
-/// asks the process what it has rather than linking either.
+/// not choose one. So it asks the process what it has rather than linking
+/// either.
 ///
 /// This frees only pages the allocator already holds free. It does not free live
 /// objects, and does not flush other threads' per-thread caches, so it is the

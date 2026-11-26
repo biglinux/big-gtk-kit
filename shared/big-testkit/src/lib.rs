@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! Test harness for the suite: widget finalization censuses in the private
-//! session (`scripts/census-smoke.sh`), RSS-slope leak verdicts, RAII
+//! Test harness for the BigLinux programs: widget finalization censuses in a
+//! private session, RSS-slope leak verdicts, RAII
 //! subscription guards for GTK lifecycle tests, frame-interval percentiles of a
 //! window ([`frame_probe`]), and the process as a screen
 //! reader reaches it over AT-SPI. [`leak::WidgetFinalizeCensus`] needs a

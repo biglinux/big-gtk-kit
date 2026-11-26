@@ -37,17 +37,10 @@ LibreOffice (`/usr/bin/soffice`) and keeps its profile template under
 `$XDG_CACHE_HOME/big-image`.
 
 The workspace feature gates and nearest product PKGBUILD define exact versions.
-See [getting started](https://github.com/biglinux/big/blob/main/docs/handbook/getting-started.md).
 
 ## Example
 
-Real adopter: `apps/bigimages`.
-
-The complete learning map is [framework examples](https://github.com/biglinux/big/blob/main/docs/reference/framework-examples.md).
-
-## Consumers
-
-bigdesktop's [package catalog](https://github.com/biglinux/big/blob/main/docs/reference/packages.md) lists its packages that use this one.
+Used by BigImages.
 
 ## Validate
 
@@ -59,4 +52,4 @@ cargo test -p big-image --doc --locked
 ```
 
 Run graphical tests through `tools/headless-gate.sh` when the changed behavior
-needs GTK. Follow [validation](https://github.com/biglinux/big/blob/main/docs/handbook/validation.md) for the full matrix.
+needs GTK.

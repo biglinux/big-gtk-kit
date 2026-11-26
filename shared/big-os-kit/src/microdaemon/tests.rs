@@ -429,7 +429,7 @@ fn durable_job_journal_quarantines_unsupported_version() {
 
 /// BigFiles starts its daemon by this name when it is not beside the client,
 /// the program `bigfiles-fileopsd` its manifest builds; the terminal finds its
-/// daemon at `ptyd.sock` (docs/contracts/PTYD.md).
+/// daemon at `ptyd.sock`.
 #[test]
 fn daemon_ids_name_program_and_socket() {
     assert_eq!(MicrodaemonId::Fileopsd.as_str(), "bigfiles-fileopsd");

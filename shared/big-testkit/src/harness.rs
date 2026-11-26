@@ -143,7 +143,7 @@ fn gtk_test_runner() -> Option<mpsc::Sender<GtkTestJob>> {
 /// # Panics
 ///
 /// Panics when it is not built: a module test that returned early instead would
-/// pass without loading anything. `scripts/test.sh` builds it first.
+/// pass without loading anything. Build it first.
 #[must_use]
 #[expect(
     clippy::expect_used,
@@ -577,7 +577,7 @@ pub fn fail_census(exit_code: i32) {
 /// Boot a minimal libadwaita census app, present one window, run `body`
 /// against it on the first idle, then quit, returning the census exit code
 /// (`0` clean, `3` when `body` called [`fail_census`]). Needs a display:
-/// `scripts/census-smoke.sh` gives it the private session.
+/// a private session gives it one.
 ///
 /// # Panics
 ///

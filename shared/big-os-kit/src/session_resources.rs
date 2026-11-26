@@ -365,7 +365,7 @@ impl Drop for WorkLease {
     }
 }
 
-/// Default for legacy constructors. One owner inside this linked composition;
+/// The default owner for constructors given none. One owner inside this process;
 /// not a cross-cdylib or cross-process singleton. Callers may instead explicitly
 /// pass an Arc created by [`SessionResources::new`] for isolated sessions/tests.
 #[must_use]

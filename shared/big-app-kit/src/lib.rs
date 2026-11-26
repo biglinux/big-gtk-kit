@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //! AppShell boot for BigLinux GTK/libadwaita apps.
 //!
-//! The boot layer from `docs/contracts/FRAMEWORK.md`: one `adw::Application`
+//! The boot layer: one `adw::Application`
 //! per application id, every activation's open paths delivered to the app,
 //! gettext and display CSS set up before the first window, and libadwaita
 //! dark-mode changes. Window trees, chrome and settings belong to the apps and
