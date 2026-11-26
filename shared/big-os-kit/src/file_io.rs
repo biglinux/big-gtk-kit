@@ -150,31 +150,45 @@ impl Drop for OwnedPrivateDirectory {
 /// Remove the folder `path` and everything in it, for a folder a confined
 /// program wrote: each folder is opened from its parent's descriptor without
 /// following a link and given mode `0700` first, so a folder it closed to
-/// everyone, or nested past the kernel's path length, still goes. Nothing
-/// else may change the tree meanwhile: the walk climbs back through `..`.
+/// everyone, or nested past the kernel's path length, still goes. The walk
+/// climbs back through `..` and stops where that is not the folder it left,
+/// or where a folder is on another filesystem: one moved during the walk
+/// stops the removal, never moves it outside `path`.
 ///
 /// # Errors
 ///
-/// The first folder that cannot be opened, made the owner's or removed, or
-/// an entry that cannot be unlinked.
+/// The first folder that cannot be opened, made the owner's or removed, an
+/// entry that cannot be unlinked, or a folder moved during the walk.
 pub fn remove_tree(path: &Path) -> std::io::Result<()> {
-    /// A folder being emptied: its name in its parent, and the folders in it
-    /// still to remove.
+    /// A folder being emptied: its name in its parent, its device and inode,
+    /// and the folders in it still to remove.
     struct Level {
         name: Option<CString>,
+        identity: (u64, u64),
         folders: Vec<CString>,
     }
+    let identity = |folder: &std::os::fd::OwnedFd| {
+        rustix::fs::fstat(folder).map(|stat| (stat.st_dev, stat.st_ino))
+    };
+    let moved = || std::io::Error::other("a folder moved while its tree was removed");
     let mut current = open_owned_folder(rustix::fs::CWD, path)?;
+    let root = identity(&current)?;
     let mut levels = vec![Level {
         name: None,
+        identity: root,
         folders: clear_files(&current)?,
     }];
     while let Some(level) = levels.last_mut() {
         if let Some(child) = level.folders.pop() {
             current = open_owned_folder(&current, child.as_c_str())?;
+            let child_identity = identity(&current)?;
+            if child_identity.0 != root.0 {
+                return Err(moved());
+            }
             let folders = clear_files(&current)?;
             levels.push(Level {
                 name: Some(child),
+                identity: child_identity,
                 folders,
             });
         } else if let Some(Level {
@@ -187,6 +201,9 @@ pub fn remove_tree(path: &Path) -> std::io::Result<()> {
                 OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )?;
+            if levels.last().map(|parent| parent.identity) != Some(identity(&current)?) {
+                return Err(moved());
+            }
             rustix::fs::unlinkat(&current, name.as_c_str(), AtFlags::REMOVEDIR)?;
         }
     }

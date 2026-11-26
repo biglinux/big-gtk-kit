@@ -656,3 +656,34 @@ fn remove_tree_takes_hostile_folders() {
     assert!(!left);
     assert_eq!((outside_mode, kept.as_slice()), (0o500, b"kept".as_slice()));
 }
+
+/// A folder moved out from under the walk while it empties it stops the
+/// removal there; it never climbs out of the tree into a sibling's files.
+#[test]
+fn remove_tree_stays_inside() {
+    let parent = file_io_test_dir("remove-tree-moved");
+    let root = parent.join("root");
+    // Listed in creation order on the usual filesystems, and the walk takes
+    // the last folder first: `o` waits while `a` is emptied.
+    fs::create_dir_all(root.join("o")).unwrap();
+    fs::create_dir_all(root.join("a/b")).unwrap();
+    fs::create_dir_all(parent.join("o")).unwrap();
+    fs::create_dir(parent.join("a")).unwrap();
+    fs::write(parent.join("o/victim"), b"kept").unwrap();
+    for index in 0..20_000 {
+        fs::write(root.join(format!("a/b/{index}")), b"").unwrap();
+    }
+    // Move `b` once the walk is inside it, emptying it.
+    let mover = {
+        let root = root.clone();
+        std::thread::spawn(move || {
+            while fs::read_dir(root.join("a/b")).is_ok_and(|entries| entries.count() > 19_000) {}
+            let _ = fs::rename(root.join("a/b"), root.join("b"));
+        })
+    };
+    let _ = remove_tree(&root);
+    mover.join().unwrap();
+    let kept = parent.join("o/victim").exists();
+    let _ = remove_tree(&parent);
+    assert!(kept, "the walk deleted a file outside its tree");
+}
