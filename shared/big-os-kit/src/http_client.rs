@@ -912,7 +912,7 @@ mod tests {
     /// add its delay. Timed against one attempt made after it, which a
     /// resolver's cache can only make faster.
     #[test]
-    fn unresolved_host_is_not_retried() {
+    fn unresolved_host_fails_at_once() {
         let url = "http://unresolved.invalid/";
         let started = std::time::Instant::now();
         assert_eq!(http_get_with_retry(url, &[]), None);

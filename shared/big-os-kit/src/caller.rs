@@ -96,13 +96,10 @@ pub fn runs_installed(pid: u32, path: &str) -> bool {
         && loads_no_foreign_code(pid)
 }
 
-/// Whether the file a process runs, of `owner` with `mode` and `links` names,
-/// is root's, writable by nobody else, and either the file at the installed
-/// path (`same`: a hardened unit's read-only `/usr` holds the same file) or
-/// one an upgrade unlinked. Another program mounted over the path in a
-/// namespace of the user's is refused, root's included, until an upgrade
-/// unlinks it: a route no stronger than a parent tracing the installed
-/// program it started.
+/// Whether the running file is root's, writable by nobody else, and the file
+/// at the installed path (`same`) or one an upgrade unlinked (no `links`).
+/// A program mounted over the path passes once an upgrade unlinks it, no
+/// stronger a route than a parent tracing the installed program it started.
 #[cfg(feature = "bus-caller")]
 fn installed_file(owner: u32, mode: u32, same: bool, links: u64) -> bool {
     owner == 0 && mode & 0o022 == 0 && (same || links == 0)
