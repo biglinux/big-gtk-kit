@@ -19,8 +19,8 @@
 //! new document ([`atomic_create_document`], [`atomic_create_private`]) and the
 //! callers of [`atomic_write_private_durable`] wait.
 //!
-//! `BigVersionedJsonStore` layers a `version` field on top and accepts only
-//! the configured current version, rejecting mismatches without rewriting.
+//! `BigVersionedJsonStore` layers a `version` field on top: it reads its own
+//! version and older ones, and refuses a newer one without rewriting it.
 //!
 //! # Examples
 //!
@@ -59,6 +59,12 @@ pub struct BigStorageFileLock {
     _file: fs::File,
 }
 
+/// The lock file beside `target`: `a.json.lock` for `a.json`, so `a.toml`
+/// beside it takes a lock of its own.
+fn lock_path(target: &Path) -> PathBuf {
+    target.with_added_extension("lock")
+}
+
 impl BigStorageFileLock {
     /// Acquire a blocking exclusive lock on a private sibling lock file.
     ///
@@ -69,7 +75,7 @@ impl BigStorageFileLock {
     pub fn acquire(target: &Path) -> std::io::Result<Self> {
         let parent = target.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
-        let file = crate::file_io::open_lock_file(&target.with_extension("json.lock"))?;
+        let file = crate::file_io::open_lock_file(&lock_path(target))?;
         loop {
             match file.lock() {
                 Ok(()) => return Ok(Self { _file: file }),
@@ -88,7 +94,7 @@ impl BigStorageFileLock {
     pub fn try_acquire(target: &Path) -> std::io::Result<Self> {
         let parent = target.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
-        let file = crate::file_io::open_lock_file(&target.with_extension("json.lock"))?;
+        let file = crate::file_io::open_lock_file(&lock_path(target))?;
         // A child forked by another thread shares the lock until it execs, a
         // window of microseconds; a few short tries outlast it, while a real
         // writer still holds the lock after them.
@@ -126,7 +132,7 @@ pub enum BigStorageError {
         /// Maximum accepted byte count.
         max_bytes: u64,
     },
-    /// Versioned payload whose version does not match the configured schema.
+    /// Versioned payload written by a newer version than the store's.
     UnknownVersion {
         /// Version stamp found in the payload.
         found: u32,
@@ -742,9 +748,8 @@ struct VersionedEnvelope {
 }
 
 impl<T: Serialize + DeserializeOwned> BigVersionedJsonStore<T> {
-    /// Construct a store that accepts only `current_version`.
-    ///
-    /// Other version labels are rejected without rewriting the source bytes.
+    /// Construct a store that writes `current_version` and reads it and older
+    /// versions; a newer one is refused without rewriting the source bytes.
     #[must_use]
     pub fn new(path: impl Into<PathBuf>, current_version: u32) -> Self {
         Self {
@@ -774,18 +779,9 @@ impl<T: Serialize + DeserializeOwned> BigVersionedJsonStore<T> {
     /// Read a payload written by this version or an older one.
     /// Returns `Ok(None)` when the file does not exist.
     ///
-    /// The version is a floor, not an equality. An equality check would make
-    /// every consumer of this store fragile in the same way: a document written
-    /// by an older build would come back as [`BigStorageError::UnknownVersion`],
-    /// which callers treat as corruption: the terminal would rename the
-    /// person's saved sessions to `.broken` and carry on with an empty list.
-    /// Running a newer build once and then the packaged one is an ordinary
-    /// thing to do, and it should not cost anybody their work.
-    ///
-    /// A newer document is still refused, because this build cannot promise to
-    /// preserve fields it does not know when it writes the file back. The caller
-    /// gets a typed error saying so, and the right answer for a caller is to
-    /// leave the file alone rather than to replace it.
+    /// An older document reads, since callers take a refusal for corruption. A
+    /// newer one is refused: this build cannot keep fields it does not know
+    /// when it writes the file back, so a caller leaves that file alone.
     ///
     /// # Errors
     ///
