@@ -38,7 +38,6 @@ pub struct AppShellSpec {
     gettext: Option<GettextInit>,
     base_css: Option<&'static str>,
     watch_dark_mode: bool,
-    resource_paths: &'static [&'static str],
     early_cli: Option<AppShellEarlyCli>,
 }
 
@@ -58,7 +57,6 @@ impl AppShellSpec {
             gettext: None,
             base_css: None,
             watch_dark_mode: false,
-            resource_paths: &[],
             early_cli: None,
         }
     }
@@ -102,22 +100,21 @@ impl AppShellSpec {
     ///
     /// The multicall-host path. [`AppShell::run`] owns the whole boot; a product
     /// loaded as a module is handed a live `GtkApplication` instead and would
-    /// otherwise silently lose its catalog, its icon resources and its CSS.
+    /// otherwise silently lose its catalog and its CSS.
     ///
     /// Two effects are left out. `adw::init` already ran, and the
     /// process-global color scheme belongs to whoever booted the process: a
     /// module that forced it would answer for every other product in the same
     /// process.
     ///
-    /// Safe to call once per hosted surface: catalogs and icon resource paths
-    /// are idempotent, and repeated CSS is applied only the first time.
+    /// Safe to call once per hosted surface: catalogs are idempotent, and
+    /// repeated CSS is applied only the first time.
     pub fn apply_to_running_process(&self) {
         if let Some(gettext) = &self.gettext
             && let Err(error) = gettext.bind_catalog()
         {
             log::warn!("app shell: hosted gettext bind failed: {error}");
         }
-        register_resource_paths(self.resource_paths);
         if let Some(css) = self.base_css {
             big_relm4_components::css::install(css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
@@ -128,8 +125,8 @@ impl AppShellSpec {
     ///
     /// # Errors
     ///
-    /// Returns [`AppShellSpecError`] when the application id, CSS, gettext
-    /// fields, or resource paths are empty.
+    /// Returns [`AppShellSpecError`] when the application id, CSS or gettext
+    /// fields are empty.
     pub fn validate(&self) -> Result<(), AppShellSpecError> {
         require(
             !self.application_id.trim().is_empty(),
@@ -144,12 +141,6 @@ impl AppShellSpec {
         }
         if let Some(gettext) = &self.gettext {
             gettext.validate()?;
-        }
-        for resource_path in self.resource_paths {
-            require(
-                !resource_path.trim().is_empty(),
-                AppShellSpecError::EmptyResourcePath,
-            )?;
         }
         Ok(())
     }
@@ -178,8 +169,6 @@ pub enum AppShellSpecError {
     EmptyGettextDomain,
     /// Gettext locale directory is empty or whitespace-only.
     EmptyGettextLocaleDir,
-    /// Icon-theme resource path is empty or whitespace-only.
-    EmptyResourcePath,
 }
 
 impl fmt::Display for AppShellSpecError {
@@ -194,7 +183,6 @@ impl fmt::Display for AppShellSpecError {
             Self::EmptyGettextLocaleDir => {
                 formatter.write_str("gettext locale directory must not be empty")
             }
-            Self::EmptyResourcePath => formatter.write_str("resource path must not be empty"),
         }
     }
 }
@@ -677,10 +665,9 @@ fn boot_application(spec: &AppShellSpec) -> Option<adw::Application> {
     // the application id runs. A launch that hands its arguments to a running
     // instance never opens the display, which saves it the toolkit's start
     // before it exits.
-    let (resource_paths, base_css) = (spec.resource_paths, spec.base_css);
+    let base_css = spec.base_css;
     app.connect_startup(move |_| {
         fill_input_method_gap();
-        register_resource_paths(resource_paths);
         if let Some(css) = base_css {
             big_relm4_components::css::install(css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
@@ -735,23 +722,6 @@ unsafe extern "C" fn start_adwaita(
     }
     // Once: the hook is removed.
     glib::ffi::GFALSE
-}
-
-fn register_resource_paths(paths: &[&str]) {
-    if paths.is_empty() {
-        return;
-    }
-    let Some(display) = gtk::gdk::Display::default() else {
-        log::warn!(
-            "app shell: no default display; skipping {} resource path(s)",
-            paths.len()
-        );
-        return;
-    };
-    let icon_theme = gtk::IconTheme::for_display(&display);
-    for path in paths {
-        icon_theme.add_resource_path(path);
-    }
 }
 
 /// Draw every focus ring in the whole accent, for the suite's apps.
