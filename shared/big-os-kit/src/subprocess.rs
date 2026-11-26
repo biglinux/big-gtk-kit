@@ -343,15 +343,9 @@ impl BigSubprocessSpec {
         if self.program.is_empty() {
             return Err(BigSubprocessError::EmptyProgram);
         }
-        // reject control bytes in program + argv (NUL/LF/CR/DEL)
-        if let Some(byte) = argv_token_forbidden_byte(&self.program.to_string_lossy()) {
-            return Err(BigSubprocessError::ForbiddenArgvByte { index: 0, byte });
-        }
-        for (i, tok) in self.argv.iter().enumerate() {
-            let s = tok.to_string_lossy();
-            if let Some(byte) = argv_token_forbidden_byte(&s) {
-                return Err(BigSubprocessError::ForbiddenArgvByte { index: i + 1, byte });
-            }
+        let mut tokens = std::iter::once(&self.program).chain(&self.argv);
+        if let Some(index) = tokens.position(|token| token.as_encoded_bytes().contains(&0)) {
+            return Err(BigSubprocessError::ForbiddenArgvByte { index, byte: 0 });
         }
         if let Some(list) = &self.allow
             && !self
@@ -633,7 +627,7 @@ pub enum BigSubprocessError {
     #[error("subprocess program is empty")]
     EmptyProgram,
     /// Program rejected by allow-list.
-    #[error("program not in allow-list: {0}")]
+    #[error("program not in allow-list: {0:?}")]
     ProgramNotAllowed(String),
     /// `std::process::Command::spawn` failed.
     #[error("failed to spawn: {0}")]
@@ -648,12 +642,9 @@ pub enum BigSubprocessError {
     /// was killed on the same path as [`Self::Timeout`].
     #[error("subprocess cancelled")]
     Cancelled,
-    /// argv token contains a forbidden control character.
-    ///
-    /// Rejects `\0` (kernel argv terminator), `\n` / `\r` (log-injection
-    /// vectors when stderr is parsed), and `\x7f` DEL (often present in
-    /// crafted argv that smuggles past loose string allow-lists). Index
-    /// is `0` for the program field, `1..` for the argv tail.
+    /// argv token contains NUL, which ends a C string, so the child would
+    /// see it cut short. Every other byte, newline included, is legal in a
+    /// Linux file name and passes; whoever logs argv escapes it.
     #[error("argv token at index {index} contains forbidden control byte 0x{byte:02x}")]
     ForbiddenArgvByte {
         /// `0` for program, `1..` for argv\[i-1\].
@@ -661,12 +652,6 @@ pub enum BigSubprocessError {
         /// Offending byte.
         byte: u8,
     },
-}
-
-// Reject NUL, LF, CR, DEL in any argv token. Keeps the spec compatible
-// with the kernel argv contract and with naive log parsers downstream.
-fn argv_token_forbidden_byte(s: &str) -> Option<u8> {
-    s.bytes().find(|b| matches!(b, 0x00 | 0x0a | 0x0d | 0x7f))
 }
 
 fn stdio_for(mode: BigSubprocessOutputMode) -> std::process::Stdio {

