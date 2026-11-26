@@ -11,8 +11,9 @@ different way of doing the same thing; its code never relies on a patched
 library. Each workaround checks for the faulty state first, so a fixed library
 leaves it idle. Fixes to send upstream are kept apart, in `upstream/`.
 
-Needs GTK 4.22 and libadwaita 1.9 or newer; BigLinux ships GTK 4.24 and
-libadwaita 1.10. Older libraries are not supported.
+The `big-gtk-kit` crate needs GTK 4.22 and libadwaita 1.9 or newer, the
+crates in `shared/` GTK 4.24; BigLinux ships GTK 4.24 and libadwaita 1.10.
+Older libraries are not supported.
 
 ## Use
 

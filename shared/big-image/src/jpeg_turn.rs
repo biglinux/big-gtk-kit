@@ -120,10 +120,11 @@ fn composed(current: u16, quarter_turns: u8, mirrored: bool) -> u16 {
         .copied()
         .unwrap_or((0, false));
     // A mirror after a turn is the turn the other way after the mirror.
+    let asked = quarter_turns % 4;
     let turns = if mirrored {
-        (quarter_turns + 4 - turns) % 4
+        (asked + 4 - turns) % 4
     } else {
-        (quarter_turns + turns) % 4
+        (asked + turns) % 4
     };
     let wanted = (turns, flipped != mirrored);
     let index = ORIENTATIONS
@@ -199,6 +200,9 @@ mod tests {
         assert_eq!(composed(1, 3, false), 8);
         assert_eq!(composed(6, 1, false), 3);
         assert_eq!(composed(1, 0, true), 2);
+        // Any count of quarter turns, the largest one a byte holds included.
+        assert_eq!(composed(1, 255, false), 8);
+        assert_eq!(composed(1, 255, true), composed(1, 3, true));
     }
 
     /// A JPEG without EXIF gets one after its JFIF block, and the pixels'
