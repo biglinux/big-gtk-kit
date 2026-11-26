@@ -16,9 +16,8 @@ use relm4::{Component, ComponentController, Controller};
 /// A workspace-scoped window state that knows its own workspace identity.
 ///
 /// The identity is the window's own type rather than a fixed one, so this kit
-/// does not depend on the workspace crate: one type used in one map dragged
-/// 27k lines of workspace UI into every consumer, including the ones that
-/// never open a workspace window.
+/// depends on no crate that defines workspaces, and a consumer that never
+/// opens a workspace window builds none of their interface.
 pub trait BigWorkspaceWindow {
     /// Process-local identity of the workspace this window presents.
     type Id: Copy + Ord;

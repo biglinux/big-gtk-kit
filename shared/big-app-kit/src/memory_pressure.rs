@@ -708,7 +708,7 @@ mod tests {
         use std::os::unix::{fs::DirBuilderExt, net::UnixListener};
         // In `/tmp`: a socket path must fit `sun_path` (108 bytes), and `TMPDIR` can be long.
         let dir = std::path::Path::new("/tmp").join(format!(
-            "big-r3-pressure-{}-{}",
+            "big-app-kit-pressure-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

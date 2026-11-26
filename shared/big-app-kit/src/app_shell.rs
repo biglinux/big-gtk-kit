@@ -580,10 +580,10 @@ fn leave_out_silent_portal(application_id: &str) {
         PORTAL_WAIT_MS / 1000
     );
     gtk::disable_portals();
-    // SAFETY: glibc 2.41 and later never free an environment array they
-    // published (big-host and bigshell depend on that version), so a C
-    // `getenv` on the bus thread reads the old array or the new one; Rust
-    // readers take std's environment lock.
+    // SAFETY: glibc 2.41 and later, which the systems this crate targets ship,
+    // never free an environment array they published, so a C `getenv` on the
+    // bus thread reads the old array or the new one; Rust readers take std's
+    // environment lock.
     unsafe { std::env::set_var("ADW_DISABLE_PORTAL", "1") };
 }
 

@@ -606,9 +606,7 @@ where
     // person's session it would open them on their screen: GTK falls back to
     // the session's X display when the Wayland socket it is given is missing.
     if std::env::var_os("BIGLINUX_UI_SESSION_MODE").as_deref() != Some("headless".as_ref()) {
-        eprintln!(
-            "{app_id}: opens windows only in an isolated session (the repository's headless-gate.sh or gui-run)"
-        );
+        eprintln!("{app_id}: opens windows only in an isolated session (tools/headless-gate.sh)");
         return 2;
     }
     CENSUS_EXIT_CODE.with(|code| code.set(0));
@@ -659,8 +657,7 @@ where
 /// Say once that UI tests did not run.
 ///
 /// A skipped body is reported by libtest as `ok`, so a run that executed none
-/// of them looks exactly like a run that passed all of them. That is how a
-/// green summary gets quoted as evidence for behavior nobody exercised.
+/// of them looks exactly like a run that passed all of them.
 fn announce_ui_skip() {
     use std::sync::atomic::{AtomicBool, Ordering};
 

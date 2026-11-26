@@ -492,7 +492,7 @@ pub(crate) mod tests {
         let spec = sandboxed_command(
             &entry.command(128),
             SandboxSource::Path(Path::new("/etc/os-release")),
-            Path::new("/run/user/1000/bigfiles-thumbnailers/abc"),
+            Path::new("/run/user/1000/big-image-thumbnailers/abc"),
         );
         let resolved = spec.resolved();
         assert_eq!(resolved.program, BWRAP);
@@ -506,13 +506,13 @@ pub(crate) mod tests {
             "{argv}"
         );
         assert!(
-            argv.contains("--bind /run/user/1000/bigfiles-thumbnailers/abc /tmp"),
+            argv.contains("--bind /run/user/1000/big-image-thumbnailers/abc /tmp"),
             "{argv}"
         );
         // /tmp mounted after the file would cover it, and every document would
         // fail to open.
         assert!(
-            argv.find("--bind /run/user/1000/bigfiles-thumbnailers/abc /tmp")
+            argv.find("--bind /run/user/1000/big-image-thumbnailers/abc /tmp")
                 < argv.find("--ro-bind /etc/os-release /tmp/source"),
             "{argv}"
         );
@@ -567,7 +567,8 @@ pub(crate) mod tests {
     /// decoding it would allocate for its declared size, not its real one.
     #[test]
     fn oversized_output_is_refused() {
-        let dir = std::env::temp_dir().join(format!("bigfiles-thumbnailer-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("big-image-thumbnailer-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("test directory");
         let file = dir.join("huge.png");
         let mut bytes = Vec::new();

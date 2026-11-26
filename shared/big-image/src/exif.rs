@@ -494,8 +494,7 @@ mod tests {
         }
     }
 
-    /// Deterministic xorshift: enough randomness for a mutation sweep, and no
-    /// dependency for a crate that has none.
+    /// Deterministic xorshift: enough randomness for a mutation sweep.
     fn next_random(state: &mut u64) -> u64 {
         *state ^= *state << 13;
         *state ^= *state >> 7;
@@ -505,10 +504,8 @@ mod tests {
 
     #[test]
     fn reader_survives_any_bytes() {
-        // A real fuzz harness would be better, but `cargo-fuzz` needs nightly
-        // and this workspace pins a stable toolchain. This is the same idea
-        // inside the suite that always runs: a valid blob, mutated every way
-        // this reader could be walked off the end of.
+        // A valid blob, mutated every way this reader could be walked off the
+        // end of.
         let valid = gps_blob();
         let mut state = 0x5eed_1234_9876_abcdu64;
         for round in 0..2_000 {

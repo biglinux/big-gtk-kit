@@ -16,8 +16,7 @@ Do not use it for image-viewer state, window actions, or workspace panes.
 
 `BigImageSpec`, bounded decode/load/rotate/thumbnail functions.
 
-The exact public API and safety requirements are in crate-level rustdoc. Do not
-infer current methods from roadmap documents.
+The exact public API and safety requirements are in crate-level rustdoc.
 
 ## Ownership and lifecycle
 
@@ -31,16 +30,17 @@ not an accounting limit for GPU memory, decoder scratch space, or the process.
 
 ## Native dependencies
 
-glycin/system codecs, resvg, image libraries depending on feature/use.
-`thumbnailer` and `office_page` run `bwrap`; `office_page` also needs
-LibreOffice (`/usr/bin/soffice`) and keeps its profile template under
-`$XDG_CACHE_HOME/big-image`.
-
-The workspace feature gates and nearest product PKGBUILD define exact versions.
+glycin and the loaders it runs in its sandbox, and gdk-pixbuf's writers for
+saving. `thumbnailer`, `video_thumbnail` and `office_page` run `bwrap`;
+`video_thumbnail` also needs FFmpeg (`/usr/bin/ffmpeg`, `/usr/bin/ffprobe`),
+`office_page` needs LibreOffice (`/usr/bin/soffice`) and keeps its profile
+template under `$XDG_CACHE_HOME/big-image`, and saving an animation needs
+ImageMagick (`/usr/bin/magick`).
 
 ## Example
 
-Used by BigImages.
+`cargo run -p big-image --example loader_frame -- - <input> <output.png>` decodes
+one picture through glycin and writes the frame it hands over as a PNG.
 
 ## Validate
 

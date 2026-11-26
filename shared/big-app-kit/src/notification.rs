@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! A product's notifications, signed with its own name when big-host sends
-//! them. The host's application sends for every product it runs, under its
-//! own application id, so a hosted product names itself in the notification
-//! id, `<desktop id>/<id>`. The shell reads that prefix from big-host alone
-//! (`big-shell-ui` `notifications/gnotification.rs`); actions still go to the
-//! application that sent the notification.
+//! A product's notifications, signed with its own name. An application that
+//! hosts several products sends for all of them under its own application id,
+//! so a hosted product names itself in the notification id, `<desktop id>/<id>`,
+//! which [`hosted_product`] reads back for the shell that shows it. Actions
+//! still go to the application that sent the notification.
 
 use gio::prelude::*;
 
