@@ -114,11 +114,6 @@ mod tests {
     #[ignore = "needs a display"]
     fn sheet_parses_cleanly() {
         init();
-        let provider = crate::css::provider();
-        let errors = std::rc::Rc::new(std::cell::Cell::new(0));
-        let counted = errors.clone();
-        provider.connect_parsing_error(move |_, _, _| counted.set(counted.get() + 1));
-        provider.load_from_string(include_str!("shadow.css"));
-        assert_eq!(errors.get(), 0);
+        big_testkit::harness::assert_css_parses(include_str!("shadow.css"));
     }
 }

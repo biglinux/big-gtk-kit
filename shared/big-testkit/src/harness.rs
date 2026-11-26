@@ -308,6 +308,28 @@ pub fn press_key(
         .any(|keys| keys.emit_by_name::<bool>("key-pressed", &[&key, &0_u32, &modifiers]))
 }
 
+/// Fail naming every part of `css` GTK refuses: a rule it cannot parse is
+/// dropped without a word when the program runs. Needs a running GTK, as in
+/// [`require_gtk_test`].
+///
+/// # Panics
+///
+/// When GTK reports a parsing error, with each one's place and message.
+pub fn assert_css_parses(css: &str) {
+    let refused = Rc::new(RefCell::new(Vec::<String>::new()));
+    let provider = big_relm4_components::css::provider();
+    let seen = Rc::clone(&refused);
+    provider.connect_parsing_error(move |_, section, error| {
+        seen.borrow_mut().push(format!("{section}: {error}"));
+    });
+    provider.load_from_string(css);
+    let refused = refused.borrow();
+    assert!(
+        refused.is_empty(),
+        "GTK refused part of the stylesheet: {refused:?}"
+    );
+}
+
 /// A fresh `MainContext` for one test, which is never finalized.
 ///
 /// A zbus or blocking-pool thread wakes the context's tasks through GLib, which
@@ -703,6 +725,16 @@ mod tests {
             return;
         }
         assert!(!run_gtk_test(|| panic!("unrequested GTK test ran")));
+    }
+
+    /// A sheet GTK takes passes; one with a property GTK does not know fails.
+    #[test]
+    fn refused_css_fails() {
+        require_gtk_test(|| {
+            assert_css_parses("label { color: red; }");
+            let refused = catch_unwind(|| assert_css_parses("label { colr: red; }"));
+            assert!(refused.is_err());
+        });
     }
 
     #[test]

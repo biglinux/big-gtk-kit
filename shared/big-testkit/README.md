@@ -1,6 +1,6 @@
 # big-testkit
 
-Dev-only test harness: weston-headless finalization census, RSS-slope leak verdicts and the AT-SPI reader of the process for the big/ suite.
+Dev-only test harness: finalization census in a headless KWin session, RSS-slope leak verdicts and the AT-SPI reader of the process for the big/ suite.
 
 ## Use when
 
@@ -12,7 +12,7 @@ Do not use it in production dependencies or as a substitute for product assertio
 
 ## Main entry points
 
-GTK test runners, finalization census, RSS slope verdicts and the frame-interval probe (`frame_probe`: p50, p95, p99 and frames over a budget).
+GTK test runners, finalization census, RSS slope verdicts, the frame-interval probe (`frame_probe`: p50, p95, p99 and frames over a budget), key presses as GTK delivers them (`harness::press_key`) and the stylesheet check (`harness::assert_css_parses`).
 
 The exact public API and safety requirements are in crate-level rustdoc. Do not
 infer current methods from roadmap documents.
