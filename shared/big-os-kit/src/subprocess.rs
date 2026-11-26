@@ -1112,17 +1112,13 @@ fn constrain_current_worker_process(max_bytes: u64) -> std::io::Result<()> {
         maximum: limit.maximum,
     };
     setrlimit(Resource::As, bounded)?;
-    // Both core limits to nothing: this helper is about to read secrets.
+    // Both core limits to nothing: this helper is about to read secrets. The
+    // limit crosses exec; `PR_SET_DUMPABLE` would not, as exec resets it.
     let no_core = Rlimit {
         current: Some(0),
         maximum: Some(0),
     };
     setrlimit(Resource::Core, no_core)?;
-    #[cfg(target_os = "linux")]
-    {
-        // No ptrace or core dump of this helper before secrets are read.
-        rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)?;
-    }
     Ok(())
 }
 
