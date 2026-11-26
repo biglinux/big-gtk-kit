@@ -19,12 +19,14 @@ fn pinned_numeric_keeps_language_mark() {
         }
         libc::freelocale(pt_br);
     }
-    // The session's language, then the bootstrap that pins numbers to `C`.
+    // The session's language over a message locale it overrides, then the
+    // bootstrap that pins numbers to `C`.
     // SAFETY: the only test in this binary, so no other thread reads the environment.
     unsafe {
         std::env::set_var("LC_ALL", "pt_BR.UTF-8");
-        std::env::remove_var("LC_MESSAGES");
+        std::env::set_var("LC_MESSAGES", "en_US.UTF-8");
+        big_os_kit::init_c_numeric_locale();
     }
-    big_os_kit::init_c_numeric_locale();
+    assert_eq!(std::env::var("LC_MESSAGES").as_deref(), Ok("pt_BR.UTF-8"));
     assert_eq!(big_os_kit::decimal_mark(), ',');
 }

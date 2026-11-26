@@ -8,28 +8,44 @@
 ///
 /// Native libraries that parse machine-readable decimal values through libc
 /// require a dot separator even when the user session uses another locale.
-/// Call this only during process bootstrap: `setlocale` and environment
-/// mutation are not thread-safe.
-pub fn init_c_numeric_locale() {
-    // SAFETY: the public contract restricts this call to single-threaded
-    // process bootstrap.
+///
+/// # Safety
+///
+/// No other thread may run: it changes the environment and calls `setlocale`,
+/// neither of which another thread may do or read at the same time.
+pub unsafe fn init_c_numeric_locale() {
+    // The categories `LC_ALL` sets, numbers aside.
+    const CATEGORIES: [&str; 12] = [
+        "LANG",
+        "LC_CTYPE",
+        "LC_COLLATE",
+        "LC_TIME",
+        "LC_MONETARY",
+        "LC_MESSAGES",
+        "LC_PAPER",
+        "LC_NAME",
+        "LC_ADDRESS",
+        "LC_TELEPHONE",
+        "LC_MEASUREMENT",
+        "LC_IDENTIFICATION",
+    ];
+    // SAFETY: the caller guarantees no other thread runs.
     unsafe {
         // A user-set LC_ALL overrides every LC_* variable when gettext later
         // calls `setlocale(LC_ALL, "")`, undoing the LC_NUMERIC pin below:
         // libmpv's `mpv_create` then returns NULL under, for example,
-        // LC_ALL=pt_BR.UTF-8. Decompose it: the language moves to LANG (so
-        // messages stay translated) and only the numeric category is pinned.
-        // An empty LC_ALL is unset to glibc, and leaves LANG as it is.
+        // LC_ALL=pt_BR.UTF-8. It becomes each other category instead, so an
+        // LC_MESSAGES it overrode stays overridden. An empty LC_ALL is unset
+        // to glibc, and leaves the categories as they are.
         if let Some(session_locale) = std::env::var_os("LC_ALL") {
             if !session_locale.is_empty() {
-                std::env::set_var("LANG", session_locale);
+                for category in CATEGORIES {
+                    std::env::set_var(category, &session_locale);
+                }
             }
             std::env::remove_var("LC_ALL");
         }
         std::env::set_var("LC_NUMERIC", "C");
-    }
-    // SAFETY: same bootstrap-only contract as the environment mutation above.
-    unsafe {
         libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
     }
 }
@@ -79,7 +95,9 @@ mod tests {
     #[test]
     fn empty_lc_all_keeps_lang() {
         if std::env::var_os("BIG_OS_KIT_CHILD_LOCALE").is_some() {
-            super::init_c_numeric_locale();
+            // SAFETY: the child runs this one test, on the only thread that
+            // touches the environment.
+            unsafe { super::init_c_numeric_locale() };
             assert_eq!(std::env::var("LANG").as_deref(), Ok("pt_BR.UTF-8"));
             assert_eq!(std::env::var_os("LC_ALL"), None);
             return;
