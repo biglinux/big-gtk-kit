@@ -682,7 +682,12 @@ fn remove_tree_stays_inside() {
     let mover = {
         let root = root.clone();
         std::thread::spawn(move || {
-            while fs::read_dir(root.join("a/b")).is_ok_and(|entries| entries.count() > 19_000) {}
+            // A walk that failed first never empties `b`.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while std::time::Instant::now() < deadline
+                && fs::read_dir(root.join("a/b")).is_ok_and(|entries| entries.count() > 19_000)
+            {
+            }
             let _ = fs::rename(root.join("a/b"), root.join("b"));
         })
     };
