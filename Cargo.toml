@@ -44,7 +44,7 @@ cairo-rs = "0.22"
 env_logger = "0.11.11"
 futures-util = { version = "0.3", default-features = false }
 gdk4-wayland = { version = "0.11", features = ["wayland_crate"] }
-gettext-rs = { version = "0.7", features = ["gettext-system"] }
+gettext-rs = { version = "0.8", features = ["gettext-system"] }
 gio = "0.22"
 glib = "0.22"
 glycin = "=3.1.0"

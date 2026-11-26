@@ -33,7 +33,15 @@ pub struct Announcements {
 impl Announcements {
     /// Listen on `bus` (from [`accessibility_bus`]) to `application`; the
     /// events arrive while this thread's main loop runs ([`settle`]).
+    ///
+    /// # Panics
+    ///
+    /// The bus does not answer within five seconds.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "a test harness: its panics are the failures it reports"
+    )]
     pub fn listen(bus: &gio::DBusConnection, application: &str) -> Self {
         let heard = Rc::<RefCell<Vec<String>>>::default();
         let sink = Rc::clone(&heard);
@@ -56,6 +64,21 @@ impl Announcements {
                 }
             },
         );
+        // The match rule goes to the bus unanswered, and an event sent before the
+        // bus applies it is lost. The bus handles one connection's messages in
+        // order, so the answer to a later call means the rule is in place.
+        glib::MainContext::default()
+            .block_on(bus.call_future(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "GetId",
+                None,
+                None,
+                gio::DBusCallFlags::NONE,
+                5000,
+            ))
+            .expect("the accessibility bus answers");
         Self {
             _subscription: subscription,
             heard,

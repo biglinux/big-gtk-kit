@@ -98,6 +98,12 @@ home_environment=(
 	SCCACHE_CONF="${SCCACHE_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/sccache/config}"
 	SCCACHE_DIR="${SCCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/sccache}"
 )
+# A new home has no GStreamer registry, so every process that loads GStreamer
+# scans the plugins itself; dozens of tests doing it at once ran past their time
+# limits. One scan here leaves the registry in the home for all of them.
+if command -v gst-inspect-1.0 >/dev/null; then
+	env "${home_environment[@]}" gst-inspect-1.0 >/dev/null 2>&1 || true
+fi
 
 # Activation-restricted private session bus: the empty servicedir means no
 # desktop service (portals, gvfs, at-spi, kwallet) can be D-Bus-activated:
