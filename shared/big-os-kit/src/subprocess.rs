@@ -1012,6 +1012,7 @@ fn build_command(spec: &BigSubprocessSpec) -> std::process::Command {
         use std::os::unix::process::CommandExt;
         let unix_process_group = spec.unix_process_group;
         let die_with_parent = spec.die_with_parent;
+        let parent = rustix::process::getpid();
         let default_interrupt = spec.default_interrupt;
         let max_address_space_bytes = spec.max_address_space_bytes;
         let max_file_size_bytes = spec.max_file_size_bytes;
@@ -1052,8 +1053,10 @@ fn build_command(spec: &BigSubprocessSpec) -> std::process::Command {
                     // Set before the check below, and checked after: the
                     // parent may already have died between fork and here, and
                     // then no signal is ever coming.
+                    // An orphan goes to init or to the session's subreaper
+                    // (`systemd --user`), so only the parent's own id tells.
                     rustix::process::set_parent_process_death_signal(Some(Signal::TERM))?;
-                    if rustix::process::getppid().is_some_and(Pid::is_init) {
+                    if rustix::process::getppid() != Some(parent) {
                         libc::_exit(0);
                     }
                 }
