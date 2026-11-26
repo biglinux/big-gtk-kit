@@ -290,6 +290,24 @@ pub fn pump() {
     }
 }
 
+/// Press `key` with `modifiers` on the key controllers of `widget` in
+/// `phase` (every phase with `None`), as GTK delivers it: each in turn until
+/// one takes it. Whether one did.
+pub fn press_key(
+    widget: &impl IsA<gtk::Widget>,
+    phase: Option<gtk::PropagationPhase>,
+    key: gtk::gdk::Key,
+    modifiers: gtk::gdk::ModifierType,
+) -> bool {
+    widget
+        .observe_controllers()
+        .iter::<glib::Object>()
+        .filter_map(Result::ok)
+        .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .filter(|keys| phase.is_none_or(|phase| keys.propagation_phase() == phase))
+        .any(|keys| keys.emit_by_name::<bool>("key-pressed", &[&key, &0_u32, &modifiers]))
+}
+
 /// A fresh `MainContext` for one test, which is never finalized.
 ///
 /// A zbus or blocking-pool thread wakes the context's tasks through GLib, which

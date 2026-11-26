@@ -387,19 +387,13 @@ mod tests {
         BigContextMenuContent::new(menu, BigMenuModelPopoverLabels::new("File Actions"))
     }
 
-    fn press(widget: &gtk::Widget, key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType) -> bool {
-        let keys = widget
-            .observe_controllers()
-            .into_iter()
-            .filter_map(Result::ok)
-            .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok());
-        keys.is_some_and(|keys| {
-            keys.emit_by_name::<bool>("key-pressed", &[&key, &0_u32, &modifiers])
-        })
-    }
-
     fn press_menu_key(widget: &gtk::Widget) -> bool {
-        press(widget, gtk::gdk::Key::Menu, gtk::gdk::ModifierType::empty())
+        big_testkit::harness::press_key(
+            widget,
+            None,
+            gtk::gdk::Key::Menu,
+            gtk::gdk::ModifierType::empty(),
+        )
     }
 
     #[test]
@@ -440,7 +434,7 @@ mod tests {
 
             let menu = BigContextMenu::new(&host);
             attach_context_menu(&host, &menu, |_, _, _| Some(content()));
-            let host = host.upcast_ref();
+            let host: &gtk::Widget = host.upcast_ref();
             for (key, modifiers) in [
                 (
                     Key::F10,
@@ -450,14 +444,27 @@ mod tests {
                 (Key::Menu, ModifierType::CONTROL_MASK),
                 (Key::Menu, ModifierType::ALT_MASK),
             ] {
-                assert!(!press(host, key, modifiers), "{key:?} with {modifiers:?}");
+                assert!(
+                    !big_testkit::harness::press_key(host, None, key, modifiers),
+                    "{key:?} with {modifiers:?}"
+                );
             }
             pump();
             assert!(!menu.popover().is_visible());
             // Caps Lock does not hide the keys that ask for the menu.
-            assert!(press(host, Key::Menu, ModifierType::LOCK_MASK));
+            assert!(big_testkit::harness::press_key(
+                host,
+                None,
+                Key::Menu,
+                ModifierType::LOCK_MASK
+            ));
             menu.popdown();
-            assert!(press(host, Key::F10, ModifierType::SHIFT_MASK));
+            assert!(big_testkit::harness::press_key(
+                host,
+                None,
+                Key::F10,
+                ModifierType::SHIFT_MASK
+            ));
             menu.popdown();
             window.destroy();
         });
@@ -588,23 +595,12 @@ mod tests {
                     });
                 }
             });
-            for keys in menu
-                .popover()
-                .observe_controllers()
-                .into_iter()
-                .filter_map(|controller| {
-                    controller.ok()?.downcast::<gtk::EventControllerKey>().ok()
-                })
-            {
-                keys.emit_by_name::<bool>(
-                    "key-pressed",
-                    &[
-                        &gtk::gdk::Key::Escape,
-                        &0_u32,
-                        &gtk::gdk::ModifierType::empty(),
-                    ],
-                );
-            }
+            big_testkit::harness::press_key(
+                menu.popover(),
+                None,
+                gtk::gdk::Key::Escape,
+                gtk::gdk::ModifierType::empty(),
+            );
             menu.popdown();
             assert!(pump_until(|| second.is_focus()), "the focus left the row");
             window.destroy();
@@ -719,7 +715,7 @@ mod tests {
     /// Escape that only leaves the menu's search closes nothing: an item
     /// chosen afterwards keeps the focus it moved on purpose.
     #[test]
-    fn search_escape_lets_an_item_move_the_focus() {
+    fn escaped_search_keeps_item_focus() {
         use gtk::gdk::{Key, ModifierType};
         require_gtk_test(|| {
             let window = gtk::Window::new();
@@ -759,20 +755,12 @@ mod tests {
             assert!(pump_until(|| menu.popover().is_mapped()));
             // What the menu sees first: its search field takes Escape after.
             let press_on_menu = |key: Key| {
-                for keys in menu
-                    .popover()
-                    .observe_controllers()
-                    .into_iter()
-                    .filter_map(|controller| {
-                        controller.ok()?.downcast::<gtk::EventControllerKey>().ok()
-                    })
-                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)
-                {
-                    keys.emit_by_name::<bool>(
-                        "key-pressed",
-                        &[&key, &0_u32, &ModifierType::empty()],
-                    );
-                }
+                big_testkit::harness::press_key(
+                    menu.popover(),
+                    Some(gtk::PropagationPhase::Capture),
+                    key,
+                    ModifierType::empty(),
+                )
             };
             press_on_menu(Key::o);
             let entry = GtkWindowExt::focus(&window)

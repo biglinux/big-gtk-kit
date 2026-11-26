@@ -247,11 +247,8 @@ pub fn present(
         move |_, position| pick(position, Pick::Plain)
     });
 
-    // On the whole content, so the keys hold in the list as in the entry: Down
-    // moves into the list and Up on its first row back out, Enter picks the
-    // selected row (Shift+Enter beside it), and Escape closes, which a
-    // GtkSearchEntry eats for its own "stop search". Typed text goes to the
-    // entry wherever the keyboard is.
+    // On the whole content, so the keys hold in the list as in the entry, and
+    // in capture: a GtkSearchEntry eats Escape for its own "stop search".
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed({
@@ -569,15 +566,13 @@ mod tests {
                 .find_map(|widget| widget.downcast::<gtk::ListView>().ok())
                 .expect("the list");
             let content = entry.parent().expect("the content");
-            let keys = content
-                .observe_controllers()
-                .iter::<glib::Object>()
-                .filter_map(Result::ok)
-                .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
-                .find(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)
-                .expect("the dialog's keys");
             let press = |key: Key, modifiers: ModifierType| {
-                keys.emit_by_name::<bool>("key-pressed", &[&key, &0_u32, &modifiers])
+                big_testkit::harness::press_key(
+                    &content,
+                    Some(gtk::PropagationPhase::Capture),
+                    key,
+                    modifiers,
+                )
             };
             let focused = |widget: &gtk::Widget| big_gtk_kit::focus::holds_focus(widget);
             assert!(press(Key::Down, ModifierType::empty()));

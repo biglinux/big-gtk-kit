@@ -406,21 +406,12 @@ mod tests {
                 == 2));
             let link = results.last_child().expect("Paste as Link");
             assert!(entry.grab_focus());
-            let moved = entry
-                .observe_controllers()
-                .iter::<glib::Object>()
-                .filter_map(Result::ok)
-                .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
-                .any(|keys| {
-                    keys.emit_by_name::<bool>(
-                        "key-pressed",
-                        &[
-                            &gtk::gdk::Key::Down,
-                            &0_u32,
-                            &gtk::gdk::ModifierType::empty(),
-                        ],
-                    )
-                });
+            let moved = big_testkit::harness::press_key(
+                &entry,
+                None,
+                gtk::gdk::Key::Down,
+                gtk::gdk::ModifierType::empty(),
+            );
             assert!(moved, "Down is taken");
             assert!(link.is_focus(), "Down goes to Paste as Link");
             entry.emit_activate();
