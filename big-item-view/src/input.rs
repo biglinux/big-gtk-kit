@@ -682,9 +682,16 @@ fn install_keys(view: &ItemView) {
         };
         // In a tree, the key towards the reading direction's end opens the
         // row and the other closes it, or goes to its parent.
-        let opens = matches!(key, gdk::Key::Right | gdk::Key::KP_Right) != rtl;
-        let closes = matches!(key, gdk::Key::Left | gdk::Key::KP_Left) != rtl;
-        if (opens || closes) && !ctrl && !shift && tree_key(&view, opens) {
+        let opens = match key {
+            gdk::Key::Right | gdk::Key::KP_Right => Some(!rtl),
+            gdk::Key::Left | gdk::Key::KP_Left => Some(rtl),
+            _ => None,
+        };
+        if let Some(opens) = opens
+            && !ctrl
+            && !shift
+            && tree_key(&view, opens)
+        {
             return glib::Propagation::Stop;
         }
         let step = match key {

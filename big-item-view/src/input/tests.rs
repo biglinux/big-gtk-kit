@@ -186,6 +186,33 @@ fn tree_toggles_and_star_rates() {
     window.destroy();
 }
 
+#[gtk::test]
+#[ignore = "needs a display"]
+fn rtl_down_passes_closed_row() {
+    let view = ItemView::new(Rc::new(Named::default()), Geometry::rows(16));
+    view.set_direction(gtk::TextDirection::Rtl);
+    view.set_model(Some(&gtk::SingleSelection::new(Some(tree()))));
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(300)
+        .child(&view)
+        .build();
+    window.present();
+    pump();
+    view.imp().set_cursor(Some(0));
+
+    let keys: gtk::EventControllerKey = controller(&view);
+    let taken = keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[&gdk::Key::Down, &0_u32, &gdk::ModifierType::empty()],
+    );
+    pump();
+    assert!(taken);
+    assert_eq!(view.cursor(), Some(1), "Down moves to b");
+    assert!(!row(&view, 0).is_expanded(), "a stays closed");
+    window.destroy();
+}
+
 /// Drags and drops over rows; every row can be picked up and dropped on.
 struct Draggable;
 
