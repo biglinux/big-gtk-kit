@@ -1233,11 +1233,6 @@ mod tests {
     /// The test process that started this one stands for any other process of
     /// the user: the calls that name a process work on this one alone.
     fn try_beyond_process() {
-        /// A raw system call's result, and the error it set when it failed.
-        fn outcome(result: libc::c_long) -> (libc::c_long, Option<i32>) {
-            let error = io::Error::last_os_error().raw_os_error();
-            (result, if result == -1 { error } else { None })
-        }
         let parent = libc::pid_t::try_from(std::os::unix::process::parent_id()).unwrap();
         let mut limit = libc::rlimit64 {
             rlim_cur: 0,
@@ -1245,8 +1240,8 @@ mod tests {
         };
         let mut cpus = [0_u8; 128];
         // SAFETY: each call reads into a buffer of the size it is given, or
-        // takes values only; signal 0 checks permission and sends nothing.
-        unsafe {
+        // takes values only.
+        let nice = unsafe {
             // The raw call returns 20 less the nice value, which the parent shares.
             let nice = 20 - libc::syscall(libc::SYS_getpriority, libc::PRIO_PROCESS, 0);
             for own in [
@@ -1267,52 +1262,76 @@ mod tests {
             ] {
                 assert!(own >= 0, "{}", io::Error::last_os_error());
             }
-            let refused = (-1, Some(libc::EPERM));
-            assert_eq!(
-                outcome(libc::syscall(
-                    libc::SYS_getpriority,
-                    libc::PRIO_PROCESS,
-                    parent
-                )),
-                refused
-            );
-            assert_eq!(
-                outcome(libc::syscall(libc::SYS_getpriority, libc::PRIO_PGRP, 0)),
-                refused
-            );
-            // The nice value both already have: a no-op were it let through.
-            assert_eq!(
-                outcome(libc::syscall(
-                    libc::SYS_setpriority,
-                    libc::PRIO_PROCESS,
-                    parent,
-                    nice
-                )),
-                refused
-            );
-            assert_eq!(
-                outcome(libc::syscall(
-                    libc::SYS_prlimit64,
-                    parent,
-                    libc::RLIMIT_NOFILE,
-                    std::ptr::null::<libc::rlimit64>(),
-                    &raw mut limit,
-                )),
-                refused
-            );
-            assert_eq!(
-                outcome(libc::syscall(
-                    libc::SYS_sched_getaffinity,
-                    parent,
-                    cpus.len(),
-                    cpus.as_mut_ptr(),
-                )),
-                refused
-            );
-            assert_eq!(
-                outcome(libc::syscall(libc::SYS_tgkill, parent, parent, 0)),
-                refused
-            );
+            nice
+        };
+        parent_calls_refused(parent, nice);
+    }
+
+    /// Each call that names `parent` instead of this process is refused.
+    fn parent_calls_refused(parent: libc::pid_t, nice: libc::c_long) {
+        /// A raw system call's result, and the error it set when it failed.
+        fn outcome(result: libc::c_long) -> (libc::c_long, Option<i32>) {
+            let error = io::Error::last_os_error().raw_os_error();
+            (result, if result == -1 { error } else { None })
+        }
+        let mut limit = libc::rlimit64 {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        let mut cpus = [0_u8; 128];
+        // SAFETY: each call reads into a buffer of the size it is given, or
+        // takes values only; signal 0 checks permission and sends nothing.
+        // The nice value both already have: a no-op were it let through.
+        let beyond = unsafe {
+            [
+                (
+                    "getpriority of the parent",
+                    outcome(libc::syscall(
+                        libc::SYS_getpriority,
+                        libc::PRIO_PROCESS,
+                        parent,
+                    )),
+                ),
+                (
+                    "getpriority of the group",
+                    outcome(libc::syscall(libc::SYS_getpriority, libc::PRIO_PGRP, 0)),
+                ),
+                (
+                    "setpriority of the parent",
+                    outcome(libc::syscall(
+                        libc::SYS_setpriority,
+                        libc::PRIO_PROCESS,
+                        parent,
+                        nice,
+                    )),
+                ),
+                (
+                    "prlimit64 of the parent",
+                    outcome(libc::syscall(
+                        libc::SYS_prlimit64,
+                        parent,
+                        libc::RLIMIT_NOFILE,
+                        std::ptr::null::<libc::rlimit64>(),
+                        &raw mut limit,
+                    )),
+                ),
+                (
+                    "sched_getaffinity of the parent",
+                    outcome(libc::syscall(
+                        libc::SYS_sched_getaffinity,
+                        parent,
+                        cpus.len(),
+                        cpus.as_mut_ptr(),
+                    )),
+                ),
+                (
+                    "tgkill of the parent",
+                    outcome(libc::syscall(libc::SYS_tgkill, parent, parent, 0)),
+                ),
+            ]
+        };
+        for (call, result) in beyond {
+            assert_eq!(result, (-1, Some(libc::EPERM)), "{call}");
         }
     }
 
