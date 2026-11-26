@@ -14,7 +14,8 @@ process (Rust, C, Python, Vala).
 Requirements: Python ≥ 3.11 (standard library only; the driver uses `gi` with
 Atspi), GLib/GObject and a C compiler. `make` builds both libraries;
 `make check` runs the census control test and the Python tool tests;
-`make check-gtk` runs the signal-triggered census on a real GTK program inside
+`make check-gtk` runs the signal-triggered census on a real GTK program and
+`make check-sweep` the sweep against a stub program, each inside
 `headless-gate.sh` (needs `kwin_wayland`).
 
 `headless-gate.sh [--accessible] COMMAND...` runs the command in a private
@@ -58,9 +59,15 @@ with a per-cycle ceiling and a reason covers it (in the file or in the
 surface). The process's threads (`Threads:` in `/proc/PID/status`) and open
 file descriptors are read with each census; they are exact, so any growth the
 second round repeats is a leak (`process threads`, `process file
-descriptors`). A surface that does not really close is reported as such. Exit 0
-clean, 1 leak, 2 did not run (incomplete file, missing program or `gdbus`);
-`LEAK_SWEEP_DIR` chooses where the censuses and the program log go.
+descriptors`). A surface whose open steps bring up no new window or dialog
+(within `open_timeout`, 5 s) is reported as not opened, and one whose count of
+windows and dialogs does not come back down (within `close_timeout`, 5 s) as not
+closed; their growth is listed, not judged. A surface that changes in place,
+opening no window or dialog, says `in_place = true`. A step that fails (a
+command's exit status, a D-Bus error, nothing to click) reports the surface as
+ERROR. Exit 0 clean; 1 leak, surface not opened or not closed, or ERROR; 2 did
+not run (incomplete file, missing program or `gdbus`); `LEAK_SWEEP_DIR` chooses
+where the censuses and the program log go.
 
 `command` must execute the GTK program itself: the driver asks the process it
 started for a census by signal, and an intermediate script would receive the
@@ -96,10 +103,12 @@ open = [{ do = "action", name = "preferences", settle = 1.0 }]
 close = [{ do = "dismiss" }]
 ```
 
-Steps: `action` (org.gtk.Actions.Activate), `dbus`, `command`, `toggle` and
-`click` (by accessible name), `dismiss` (Cancel/Close in dialogs and in windows
-beyond the first), `close-new` (the same, only in the windows the cycle opened:
-for a shell that hosts the apps), `wait`.
+Steps: `action` (org.gtk.Actions.Activate), `app-action` (the accessible
+action of that name, such as `win.open-disc` on a window's frame, for a program
+that exports no actions on D-Bus), `dbus`, `command`, `toggle` and `click` (by
+accessible name), `dismiss` (Cancel/Close in dialogs and in windows beyond the
+first), `close-new` (the same, only in the windows the cycle opened: for a shell
+that hosts the apps), `wait`.
 
 The census works on any GLib process, without the driver:
 
