@@ -1,0 +1,25 @@
+# osv-scanner reads no deny.toml: these are its advisory ignores, with the
+# reasons deny.toml gives. Drop each with its entry there.
+
+# paste: unmaintained, pulled in by glycin 3.1.
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+ignoreUntil = 2027-01-19
+reason = "glycin 3.1 needs paste"
+
+# zvariant, zbus_names and zvariant_derive moved into zbus 6; glycin 3.1
+# still builds on zbus 5.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0370"
+ignoreUntil = 2027-01-19
+reason = "glycin needs zbus 5"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0371"
+ignoreUntil = 2027-01-19
+reason = "glycin needs zbus 5"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0372"
+ignoreUntil = 2027-01-19
+reason = "glycin needs zbus 5"

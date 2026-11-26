@@ -7,7 +7,8 @@ all-features = true
 [advisories]
 version = 2
 yanked = "warn"
-# Each ignore names what clears it and a revisit date.
+# Each ignore names what clears it and a revisit date; osv-scanner.toml
+# repeats them for osv-scanner.
 ignore = [
     # paste is unmaintained with no successor release; glycin 3.1.0 pulls it
     # through glycin-common, glycin-utils and gufo. Drop with the glycin that
