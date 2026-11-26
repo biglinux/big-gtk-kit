@@ -24,8 +24,8 @@ warm = 1
 [program]
 command = [{json.dumps(sys.executable)}, {json.dumps(str(STUB))}]
 atspi_name = "stub_app.py"
-dbus_name = "org.biglinux.SweepStub"
-window_path = "/org/biglinux/SweepStub/window/1"
+dbus_name = "br.com.biglinux.SweepStub"
+window_path = "/br/com/biglinux/SweepStub/window/1"
 settle = 1
 
 [[surface]]
@@ -52,7 +52,7 @@ open = [{{ do = "command", argv = ["false"] }}]
 
 [[surface]]
 name = "wrong-dbus-method"
-open = [{{ do = "dbus", dest = "org.biglinux.SweepStub", path = "/org/biglinux/SweepStub", interface = "org.freedesktop.DBus.Peer", method = "Missing" }}]
+open = [{{ do = "dbus", dest = "br.com.biglinux.SweepStub", path = "/br/com/biglinux/SweepStub", interface = "org.freedesktop.DBus.Peer", method = "Missing" }}]
 
 [[surface]]
 name = "stays-open"

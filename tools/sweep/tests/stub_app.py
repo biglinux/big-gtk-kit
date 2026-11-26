@@ -36,6 +36,6 @@ def on_activate(app: Gtk.Application):
     window.present()
 
 
-app = Gtk.Application(application_id="org.biglinux.SweepStub")
+app = Gtk.Application(application_id="br.com.biglinux.SweepStub")
 app.connect("activate", on_activate)
 sys.exit(app.run(sys.argv[:1]))

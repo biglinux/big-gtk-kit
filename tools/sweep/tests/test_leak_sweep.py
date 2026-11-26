@@ -139,14 +139,14 @@ class Spec(unittest.TestCase):
         )
         self.assertEqual(spec["surface"][0]["name"], "about")
 
-    def test_a_program_without_a_command_is_refused(self):
+    def test_commandless_program_refused(self):
         with self.assertRaises(ValueError):
             leak_sweep.load_spec(self.write('[program]\natspi_name = "x"\n'))
 
     def test_string_command_is_refused(self):
         self.refused('[program]\ncommand = "prog --flag"\natspi_name = "x"\n')
 
-    def test_a_seed_outside_the_workdir_is_refused(self):
+    def test_seed_outside_workdir_refused(self):
         for name in ("/etc/passwd", "../outside"):
             self.refused(PROGRAM + f'[program.files]\n"{name}" = "x"\n')
 

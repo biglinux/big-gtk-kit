@@ -440,6 +440,28 @@ STEP_KEYS = {
 }
 
 
+def check_step(step, where: str, program: dict):
+    """Refuse a step of a surface `where` names that `program` cannot run."""
+    if not isinstance(step, dict) or not isinstance(step.get("settle", 0), int | float):
+        raise TypeError(f"{where}: a step is a table whose `settle` is a number")
+    kind = step.get("do")
+    if kind == "command":
+        if not step.get("argv") or not strings(step["argv"]):
+            raise ValueError(
+                f"{where}: a `command` step needs `argv`, a list of strings"
+            )
+        return
+    if kind not in STEP_KEYS:
+        raise ValueError(f"{where}: unknown step {kind!r}")
+    missing = [key for key in STEP_KEYS[kind] if key not in step]
+    if kind == "action":
+        missing += [] if "dbus_name" in program else ["[program] dbus_name"]
+        if "path" not in step and "window_path" not in program:
+            missing.append("`path` or [program] window_path")
+    if missing:
+        raise ValueError(f"{where}: a {kind!r} step needs {', '.join(missing)}")
+
+
 def load_spec(path: Path) -> dict:
     """The surfaces file, refused (ValueError, TypeError) before anything starts."""
     spec = tomllib.loads(path.read_text())
@@ -476,28 +498,7 @@ def load_spec(path: Path) -> dict:
             raise TypeError(f"{where}: `close` must be a list of steps")
         check_allow(surface.get("allow", []), where)
         for step in surface["open"] + surface.get("close", []):
-            if not isinstance(step, dict) or not isinstance(
-                step.get("settle", 0), int | float
-            ):
-                raise TypeError(
-                    f"{where}: a step is a table whose `settle` is a number"
-                )
-            kind = step.get("do")
-            if kind == "command":
-                if not step.get("argv") or not strings(step["argv"]):
-                    raise ValueError(
-                        f"{where}: a `command` step needs `argv`, a list of strings"
-                    )
-                continue
-            if kind not in STEP_KEYS:
-                raise ValueError(f"{where}: unknown step {kind!r}")
-            missing = [key for key in STEP_KEYS[kind] if key not in step]
-            if kind == "action":
-                missing += [] if "dbus_name" in program else ["[program] dbus_name"]
-                if "path" not in step and "window_path" not in program:
-                    missing.append("`path` or [program] window_path")
-            if missing:
-                raise ValueError(f"{where}: a {kind!r} step needs {', '.join(missing)}")
+            check_step(step, where, program)
     return spec
 
 
