@@ -392,7 +392,9 @@ fn portal_options(request: &FileRequest) -> glib::Variant {
     let start = request
         .start_in
         .as_deref()
-        .or_else(|| request.select.as_deref().and_then(std::path::Path::parent));
+        .or_else(|| request.select.as_deref().and_then(std::path::Path::parent))
+        // A bare file name's parent is empty, which names no folder.
+        .filter(|start| !start.as_os_str().is_empty());
     if let Some(start) = start {
         // Paths travel as NUL-terminated bytes, not as text: a file name is
         // bytes on Linux and need not be UTF-8.
@@ -726,6 +728,21 @@ mod tests {
         let (first, second) = (portal::Tokens::new(), portal::Tokens::new());
         assert_ne!(first.next(), second.next());
         assert_ne!(first.next(), first.next(), "and one copy never repeats");
+    }
+
+    /// The portal starts in the folder of the file to select, and is given
+    /// none for a bare file name.
+    #[test]
+    fn portal_starts_in_selected_folder() {
+        let start = |select: &str| {
+            let mut request = FileRequest::open_file();
+            request.select = Some(select.into());
+            glib::VariantDict::new(Some(&portal_options(&request)))
+                .lookup_value("current_folder", None)
+                .map(|folder| folder.fixed_array::<u8>().unwrap().to_vec())
+        };
+        assert_eq!(start("/home/ana/notes.txt"), Some(b"/home/ana\0".to_vec()));
+        assert_eq!(start("notes.txt"), None);
     }
 
     /// Responses as the portal's `org.freedesktop.portal.Request` documents
