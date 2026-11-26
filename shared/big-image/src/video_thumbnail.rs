@@ -3,7 +3,6 @@
 //! Frames, covers and tags of videos and songs, read by `ffmpeg` and
 //! `ffprobe` in the thumbnailer's confinement.
 
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -93,14 +92,7 @@ pub fn read_media_tags_cancellable(media: &Path, cancellation: &AtomicBool) -> O
     if cancellation.load(Ordering::Acquire) || !crate::thumbnailer::sandbox_works() {
         return None;
     }
-    let source = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(media)
-        .ok()?;
-    if !source.metadata().ok()?.is_file() {
-        return None;
-    }
+    let source = big_os_kit::file_io::open_regular_no_follow(media).ok()?;
     let parent = big_os_kit::microdaemon::user_runtime_directory().ok()?;
     with_owned_private_directory(
         &parent,
@@ -204,18 +196,17 @@ fn extract_frame(
     if bound <= 0 || i64::from(bound) * i64::from(bound) > MAX_VIDEO_FRAME_PIXELS {
         return Err(FrameFailure::NoPicture);
     }
-    // A link is never followed; anything else that stops the open may pass.
-    let source = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(video_path)
-        .map_err(|error| match error.raw_os_error() {
-            Some(libc::ELOOP) => FrameFailure::NoPicture,
-            _ => FrameFailure::Transient,
-        })?;
-    if !source.metadata()?.is_file() {
-        return Err(FrameFailure::NoPicture);
-    }
+    // A link or anything but a plain file has no picture; anything else that
+    // stops the open may pass.
+    let source = big_os_kit::file_io::open_regular_no_follow(video_path).map_err(|error| {
+        if error.raw_os_error() == Some(libc::ELOOP)
+            || error.kind() == std::io::ErrorKind::InvalidInput
+        {
+            FrameFailure::NoPicture
+        } else {
+            FrameFailure::Transient
+        }
+    })?;
     let parent = big_os_kit::microdaemon::user_runtime_directory()?;
     with_owned_private_directory(
         &parent,
@@ -296,6 +287,16 @@ mod tests {
 
     /// Set in the child that [`media_unread_without_sandbox`] starts.
     const WITHOUT_SANDBOX: &str = "BIG_IMAGE_TEST_WITHOUT_SANDBOX";
+
+    /// A FIFO named like a video in a browsed folder has no picture, at once.
+    #[test]
+    fn fifo_video_is_refused() {
+        assert!(crate::thumbnailer::tests::refuses_fifo(|path| {
+            let cancellation = AtomicBool::new(false);
+            extract_frame(path, 96, false, &cancellation).is_ok()
+                || read_media_tags_cancellable(path, &cancellation).is_some()
+        }));
+    }
 
     #[test]
     fn frame_argv_opens_only_local_files() {

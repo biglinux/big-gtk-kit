@@ -312,13 +312,7 @@ pub(crate) fn sandboxed_command_with<S: AsRef<std::ffi::OsStr>, M: AsRef<std::ff
 /// Open the plain file `path` names, through any links on the way, for
 /// [`SandboxSource::Descriptor`].
 pub(crate) fn open_source(path: &Path) -> Option<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let source = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(std::fs::canonicalize(path).ok()?)
-        .ok()?;
-    source.metadata().ok()?.is_file().then_some(source)
+    big_os_kit::file_io::open_regular(path).ok()
 }
 
 /// The file a confined command reads, mounted read-only at [`SANDBOX_SOURCE`].
@@ -611,5 +605,11 @@ pub(crate) mod tests {
     #[test]
     fn fifo_output_is_refused() {
         assert!(refuses_fifo(|path| read_bounded_png(path, 128).is_some()));
+    }
+
+    /// A FIFO named like a document in a browsed folder is no source.
+    #[test]
+    fn fifo_source_is_refused() {
+        assert!(refuses_fifo(|path| open_source(path).is_some()));
     }
 }
