@@ -37,15 +37,20 @@ decoding under big-image), with these changes:
 - A loader started where bubblewrap cannot make a namespace (user
   namespaces off, `SandboxMechanism::NotSandboxed`) runs confined
   (`src/sandbox.rs`, `src/landlock.rs`): it sets on itself, before it executes
-  the loader, the bubblewrap sandbox's memory limit and seccomp filter, with
-  `socket` and `connect` refused, since no network namespace keeps a socket
-  from the network and the session bus, and Landlock rules that let it open
-  what the bubblewrap sandbox holds: `/usr`, the library folders, the loader,
-  `/etc/ld.so.cache`, `/dev/null` and the other plain devices, the image's
-  folder for a loader that reads beside it, and fontconfig's files and cache. From Landlock ABI 6 it cannot signal another process. A
-  kernel without Landlock starts no loader: the load fails with
-  `Error::SandboxUnavailable`. Upstream runs that loader with nothing but a
-  cleared environment. `sandbox::tests` checks it.
+  the loader from `/`, the bubblewrap sandbox's memory limit and seccomp
+  filter, with `socket`, `connect` and `socketcall` refused, since no network
+  namespace keeps a socket from the network and the session bus, and with
+  `getpriority`, `setpriority`, `prlimit64` and `sched_getaffinity` on itself
+  only, since no PID namespace hides the user's other processes. Landlock
+  rules let it open what the bubblewrap sandbox holds: `/usr`, the library
+  folders, the loader, `/etc/ld.so.cache`, `/dev/null` and the other plain
+  devices, the image's folder for a loader that reads beside it, and
+  fontconfig's files and cache; and keep it from signaling another process.
+  Landlock does not govern `stat`: the loader can still see which paths exist
+  and their metadata. A kernel without Landlock ABI 6 (before Linux 6.12)
+  starts no loader: the load fails with `Error::SandboxUnavailable`. Upstream
+  runs that loader with nothing but a cleared environment. `sandbox::tests`
+  and `landlock::tests` check it.
 
 `Cargo.toml.orig`, `Cargo.lock` and the registry's bookkeeping files were left
 out.

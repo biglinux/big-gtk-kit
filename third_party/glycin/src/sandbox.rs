@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use gio::glib;
 use libseccomp::error::SeccompError;
-use libseccomp::{ScmpAction, ScmpFilterContext, ScmpSyscall};
+use libseccomp::{ScmpAction, ScmpArgCompare, ScmpCompareOp, ScmpFilterContext, ScmpSyscall};
 use memfd::{Memfd, MemfdOptions};
 use nix::libc::siginfo_t;
 use nix::sys::resource;
@@ -587,10 +587,13 @@ impl Sandbox {
 
     /// The loader where bubblewrap cannot make a namespace: the files it may
     /// open are those the bubblewrap sandbox holds, and its system calls those
-    /// the bubblewrap filter allows, less new sockets.
+    /// the bubblewrap filter allows, less new sockets and other processes.
     async fn confined_command(&self) -> Result<(Command, Confinement), Error> {
         let mut command = Command::new(self.exec());
 
+        // Landlock leaves stat and the inherited working directory open: start
+        // where bubblewrap's `--chdir` does.
+        command.current_dir("/");
         command.env_clear();
 
         // Inherit some environment variables
@@ -732,25 +735,58 @@ impl Sandbox {
             syscalls.push(ALLOWED_SYSCALLS_FONTCONFIG);
         }
 
+        let not_sandboxed = self.sandbox_mechanism == SandboxMechanism::NotSandboxed;
         // Outside a network namespace a socket reaches the network and the
-        // session bus.
-        let refused: &[&str] = if self.sandbox_mechanism == SandboxMechanism::NotSandboxed {
-            &["socket", "connect"]
+        // session bus. socketcall multiplexes every socket call on i386, s390x
+        // and ppc: refused whole, a loader whose C library sends through it fails.
+        let refused: &[&str] = if not_sandboxed {
+            &["socket", "connect", "socketcall"]
+        } else {
+            &[]
+        };
+        // Outside a PID namespace a call that names a process reaches every
+        // process of the user. With each listed argument 0 (pid 0, or
+        // PRIO_PROCESS and who 0) it names the caller; any other value is refused.
+        const _: () = assert!(libc::PRIO_PROCESS == 0);
+        let own_process: &[(&str, &[u32])] = if not_sandboxed {
+            &[
+                ("getpriority", &[0, 1]),
+                ("prlimit64", &[0]),
+                ("sched_getaffinity", &[0]),
+                ("setpriority", &[0, 1]),
+            ]
         } else {
             &[]
         };
 
         for syscall_name in syscalls.into_iter().flatten() {
-            let action = if refused.contains(syscall_name) {
-                ScmpAction::Errno(libc::EACCES)
-            } else {
-                ScmpAction::Allow
-            };
-            match ScmpSyscall::from_name(syscall_name) {
-                Ok(syscall) => {
-                    filter.add_rule(action, syscall)?;
+            let syscall = match ScmpSyscall::from_name(syscall_name) {
+                Ok(syscall) => syscall,
+                Err(err) => {
+                    tracing::warn!("Failed to allow syscall '{syscall_name}': {err}");
+                    continue;
                 }
-                Err(err) => tracing::warn!("Failed to allow syscall '{syscall_name}': {err}"),
+            };
+            if refused.contains(syscall_name) {
+                filter.add_rule(ScmpAction::Errno(libc::EACCES), syscall)?;
+            } else if let Some((_, arguments)) =
+                own_process.iter().find(|(name, _)| name == syscall_name)
+            {
+                let own: Vec<_> = arguments
+                    .iter()
+                    .map(|&argument| ScmpArgCompare::new(argument, ScmpCompareOp::Equal, 0))
+                    .collect();
+                filter.add_rule_conditional(ScmpAction::Allow, syscall, &own)?;
+                for &argument in *arguments {
+                    let other = ScmpArgCompare::new(argument, ScmpCompareOp::NotEqual, 0);
+                    filter.add_rule_conditional(
+                        ScmpAction::Errno(libc::EPERM),
+                        syscall,
+                        &[other],
+                    )?;
+                }
+            } else {
+                filter.add_rule(ScmpAction::Allow, syscall)?;
             }
         }
 
@@ -1112,8 +1148,8 @@ mod tests {
     const PROBE_PORT: &str = "GLYCIN_TEST_PROBE_PORT";
 
     /// A loader started without bubblewrap reads what the bubblewrap sandbox
-    /// holds and nothing beside it, writes nothing and opens no socket: this
-    /// test binary, confined as such a loader, tries.
+    /// holds and nothing beside it, writes nothing, opens no socket and reaches
+    /// no other process: this test binary, started as such a loader, tries.
     #[test]
     fn fallback_loader_is_confined() {
         if let Some(dir) = std::env::var_os(PROBE_DIR) {
@@ -1139,8 +1175,7 @@ mod tests {
             }),
             dbus_socket,
         );
-        let (_, confinement) = util::block_on(sandbox.confined_command()).unwrap();
-        let mut command = Command::new(exe);
+        let (mut command, confinement) = util::block_on(sandbox.confined_command()).unwrap();
         command
             .args(["--exact", "sandbox::tests::fallback_loader_is_confined"])
             .env(PROBE_DIR, &dir)
@@ -1191,6 +1226,94 @@ mod tests {
         );
         let tcp = std::net::TcpStream::connect(("127.0.0.1", port));
         assert_eq!(tcp.unwrap_err().kind(), denied);
+        assert_eq!(std::env::current_dir().unwrap(), Path::new("/"));
+        try_beyond_process();
+    }
+
+    /// The test process that started this one stands for any other process of
+    /// the user: the calls that name a process work on this one alone.
+    fn try_beyond_process() {
+        /// A raw system call's result, and the error it set when it failed.
+        fn outcome(result: libc::c_long) -> (libc::c_long, Option<i32>) {
+            let error = io::Error::last_os_error().raw_os_error();
+            (result, if result == -1 { error } else { None })
+        }
+        let parent = libc::pid_t::try_from(std::os::unix::process::parent_id()).unwrap();
+        let mut limit = libc::rlimit64 {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        let mut cpus = [0_u8; 128];
+        // SAFETY: each call reads into a buffer of the size it is given, or
+        // takes values only; signal 0 checks permission and sends nothing.
+        unsafe {
+            // The raw call returns 20 less the nice value, which the parent shares.
+            let nice = 20 - libc::syscall(libc::SYS_getpriority, libc::PRIO_PROCESS, 0);
+            for own in [
+                libc::syscall(libc::SYS_setpriority, libc::PRIO_PROCESS, 0, nice),
+                libc::syscall(
+                    libc::SYS_prlimit64,
+                    0,
+                    libc::RLIMIT_NOFILE,
+                    std::ptr::null::<libc::rlimit64>(),
+                    &raw mut limit,
+                ),
+                libc::syscall(
+                    libc::SYS_sched_getaffinity,
+                    0,
+                    cpus.len(),
+                    cpus.as_mut_ptr(),
+                ),
+            ] {
+                assert!(own >= 0, "{}", io::Error::last_os_error());
+            }
+            let refused = (-1, Some(libc::EPERM));
+            assert_eq!(
+                outcome(libc::syscall(
+                    libc::SYS_getpriority,
+                    libc::PRIO_PROCESS,
+                    parent
+                )),
+                refused
+            );
+            assert_eq!(
+                outcome(libc::syscall(libc::SYS_getpriority, libc::PRIO_PGRP, 0)),
+                refused
+            );
+            // The nice value both already have: a no-op were it let through.
+            assert_eq!(
+                outcome(libc::syscall(
+                    libc::SYS_setpriority,
+                    libc::PRIO_PROCESS,
+                    parent,
+                    nice
+                )),
+                refused
+            );
+            assert_eq!(
+                outcome(libc::syscall(
+                    libc::SYS_prlimit64,
+                    parent,
+                    libc::RLIMIT_NOFILE,
+                    std::ptr::null::<libc::rlimit64>(),
+                    &raw mut limit,
+                )),
+                refused
+            );
+            assert_eq!(
+                outcome(libc::syscall(
+                    libc::SYS_sched_getaffinity,
+                    parent,
+                    cpus.len(),
+                    cpus.as_mut_ptr(),
+                )),
+                refused
+            );
+            assert_eq!(
+                outcome(libc::syscall(libc::SYS_tgkill, parent, parent, 0)),
+                refused
+            );
+        }
     }
 
     /// The installed loaders work within that confinement.

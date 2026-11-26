@@ -25,7 +25,12 @@ const TRUNCATE: u64 = 1 << 14;
 const IOCTL_DEV: u64 = 1 << 15;
 /// The rights a rule on a file, not a directory, may grant.
 const FILE_RIGHTS: u64 = EXECUTE | WRITE_FILE | READ_FILE | TRUNCATE | IOCTL_DEV;
+/// The file rights ABI 6 knows; one a later ABI adds stays unhandled.
+const HANDLED: u64 = ABI_1 | REFER | TRUNCATE | IOCTL_DEV;
 const SCOPE_SIGNAL: u64 = 1 << 1;
+/// The first ABI that scopes signals: below it, with no PID namespace, a loader
+/// signals any process of the user.
+const SIGNAL_SCOPE_ABI: libc::c_long = 6;
 
 pub const READ: u64 = READ_FILE | READ_DIR;
 /// What fontconfig does in its cache: write new files and replace old ones.
@@ -48,10 +53,11 @@ pub struct LandlockRuleset(OwnedFd);
 
 impl LandlockRuleset {
     /// A ruleset that denies every file access the kernel knows except `rules`,
-    /// and, from ABI 6, signals to processes outside it. A path that cannot be
-    /// opened grants nothing.
+    /// and signals to processes outside it. A path that cannot be opened grants
+    /// nothing.
     ///
-    /// [`Error::SandboxUnavailable`] when the kernel has no Landlock.
+    /// [`Error::SandboxUnavailable`] when the kernel has no Landlock, or one
+    /// before ABI 6.
     pub fn new(rules: &[(PathBuf, u64)]) -> Result<Self, Error> {
         // SAFETY: the version query takes no attributes and returns a number.
         let abi = unsafe {
@@ -62,26 +68,21 @@ impl LandlockRuleset {
                 CREATE_RULESET_VERSION,
             )
         };
-        if abi < 1 {
+        Self::for_abi(abi, rules)
+    }
+
+    /// [`Self::new`] on a kernel whose Landlock ABI is `abi`.
+    fn for_abi(abi: libc::c_long, rules: &[(PathBuf, u64)]) -> Result<Self, Error> {
+        if abi < SIGNAL_SCOPE_ABI {
             return Err(Error::SandboxUnavailable);
         }
-        let mut handled = ABI_1;
-        if abi >= 2 {
-            handled |= REFER;
-        }
-        if abi >= 3 {
-            handled |= TRUNCATE;
-        }
-        if abi >= 5 {
-            handled |= IOCTL_DEV;
-        }
         let attr = RulesetAttr {
-            handled_access_fs: handled,
+            handled_access_fs: HANDLED,
             handled_access_net: 0,
-            scoped: if abi >= 6 { SCOPE_SIGNAL } else { 0 },
+            scoped: SCOPE_SIGNAL,
         };
-        // SAFETY: `attr` is a ruleset attribute of the size given; a kernel that
-        // knows fewer fields accepts the ones after them as zero.
+        // SAFETY: `attr` is a ruleset attribute of the size given, whose
+        // fields ABI 6 all knows.
         let fd = unsafe {
             libc::syscall(
                 libc::SYS_landlock_create_ruleset,
@@ -97,7 +98,7 @@ impl LandlockRuleset {
         // SAFETY: a descriptor the call just returned, owned by nobody else.
         let ruleset = unsafe { OwnedFd::from_raw_fd(fd) };
         for (path, access) in rules {
-            add_path_rule(&ruleset, path, access & handled)?;
+            add_path_rule(&ruleset, path, access & HANDLED)?;
         }
         Ok(Self(ruleset))
     }
@@ -154,4 +155,20 @@ fn add_path_rule(ruleset: &OwnedFd, path: &PathBuf, access: u64) -> Result<(), E
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Landlock before ABI 6 lets a loader signal any process of the user.
+    #[test]
+    fn kernel_before_signal_scope_is_unavailable() {
+        for abi in [-1, 0, 1, 5] {
+            assert!(matches!(
+                LandlockRuleset::for_abi(abi, &[]),
+                Err(Error::SandboxUnavailable)
+            ));
+        }
+    }
 }
