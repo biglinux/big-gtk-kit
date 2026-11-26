@@ -28,6 +28,7 @@ pub fn confirm_destructive(
         verb,
         cancel,
         adw::ResponseAppearance::Destructive,
+        None,
         answered,
     )
 }
@@ -49,11 +50,13 @@ pub fn confirm_suggested(
         verb,
         cancel,
         adw::ResponseAppearance::Suggested,
+        None,
         answered,
     )
 }
 
 /// The verb drawn as `appearance`; only a suggested verb is the default answer.
+/// `extra` goes under the body.
 pub(super) fn ask(
     parent: Option<&impl IsA<gtk::Widget>>,
     heading: &str,
@@ -61,9 +64,11 @@ pub(super) fn ask(
     verb: &str,
     cancel: &str,
     appearance: adw::ResponseAppearance,
+    extra: Option<&gtk::Widget>,
     answered: impl FnOnce(bool) + 'static,
 ) -> Alert {
     let alert = Alert::new(parent, Some(heading), Some(body));
+    alert.set_extra_child(extra);
     alert.add_responses(&[("cancel", cancel), ("go", verb)]);
     #[expect(clippy::disallowed_methods, reason = "the owner")]
     alert.set_response_appearance("go", appearance);
