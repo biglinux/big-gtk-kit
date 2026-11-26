@@ -128,6 +128,7 @@ mod tests {
             desktop_file("vendor-inside-probe.desktop"),
             Some(inside.clone()),
         );
+        assert_eq!(desktop_file("../outside-probe.desktop"), None);
         assert_eq!(desktop_file("..-outside-probe.desktop"), None);
         assert_eq!(desktop_file("vendor-..-..-outside-probe.desktop"), None);
         std::fs::remove_file(outside).unwrap();
