@@ -706,7 +706,7 @@ fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
 /// Give `widget` one name: the tooltip a person reads and the label a screen
 /// reader announces.
 ///
-/// A button built with a label is labelled by that label, which outranks a
+/// A button built with a label is labeled by that label, which outranks a
 /// label property, so the relation goes; a label set on the button after this
 /// call relates it again.
 pub fn name_control(widget: &impl IsA<gtk::Widget>, label: &str) {
