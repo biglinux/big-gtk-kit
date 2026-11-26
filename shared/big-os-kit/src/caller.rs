@@ -401,7 +401,7 @@ mod tests {
     /// of the user's, is named as the installed one and still refused.
     #[cfg(feature = "bus-caller")]
     #[test]
-    fn program_mounted_over_installed_path_is_refused() {
+    fn mounted_over_program_is_refused() {
         let spec = crate::subprocess::BigSubprocessSpec::builder()
             .program("/usr/bin/unshare")
             .args([
@@ -430,7 +430,7 @@ mod tests {
     /// at the installed path.
     #[cfg(feature = "bus-caller")]
     #[test]
-    fn installed_file_is_roots_and_the_same() {
+    fn installed_file_is_roots_alone() {
         let metadata = |path: &Path| std::fs::metadata(path).expect("a file");
         let sleep = metadata(Path::new("/usr/bin/sleep"));
         let shared = metadata(Path::new("/tmp"));

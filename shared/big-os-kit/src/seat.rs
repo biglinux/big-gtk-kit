@@ -103,10 +103,10 @@ mod tests {
 
     /// A stand-in logind, which answers for every process, pid 0 included,
     /// as logind answers for the caller: with a session on a seat.
-    struct Manager;
+    struct Logind;
 
     #[zbus::interface(name = "org.freedesktop.login1.Manager")]
-    impl Manager {
+    impl Logind {
         #[zbus(name = "GetSessionByPID")]
         fn get_session_by_pid(&self, _pid: u32) -> OwnedObjectPath {
             ObjectPath::from_static_str_unchecked(SESSION).into()
@@ -137,7 +137,7 @@ mod tests {
             .expect("an address")
             .name("org.freedesktop.login1")
             .expect("a name")
-            .serve_at("/org/freedesktop/login1", Manager)
+            .serve_at("/org/freedesktop/login1", Logind)
             .expect("the manager")
             .serve_at(SESSION, Session)
             .expect("the session")
