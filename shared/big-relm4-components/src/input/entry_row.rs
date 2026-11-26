@@ -34,7 +34,7 @@ pub fn password(builder: adw::builders::PasswordEntryRowBuilder) -> adw::Passwor
     named(row)
 }
 
-/// `row`, labelled by one of its title labels.
+/// `row`, labeled by one of its title labels.
 fn named<R: IsA<adw::EntryRow>>(row: R) -> R {
     let entry = row.upcast_ref::<adw::EntryRow>();
     if let Some(title) = entry.list_mnemonic_labels().first() {
@@ -51,8 +51,8 @@ fn named<R: IsA<adw::EntryRow>>(row: R) -> R {
 mod tests {
     use super::*;
 
-    /// Whether `row` is labelled by `labels` and nothing else.
-    fn labelled_by(row: &adw::EntryRow, labels: &[gtk::Widget]) -> bool {
+    /// Whether `row` is labeled by `labels` and nothing else.
+    fn labeled_by(row: &adw::EntryRow, labels: &[gtk::Widget]) -> bool {
         use gtk::glib::translate::ToGlibPtr;
         let accessible = row.upcast_ref::<gtk::Accessible>().to_glib_none().0;
         let relation = gtk::ffi::GTK_ACCESSIBLE_RELATION_LABELLED_BY;
@@ -91,12 +91,12 @@ mod tests {
         big_testkit::harness::require_gtk_test(|| {
             #[expect(clippy::disallowed_methods, reason = "the row as libadwaita builds it")]
             let plain = adw::EntryRow::builder().title("Username").build();
-            assert!(labelled_by(&plain, &plain.list_mnemonic_labels()));
+            assert!(labeled_by(&plain, &plain.list_mnemonic_labels()));
             let row = build(adw::EntryRow::builder().title("Username"));
-            assert!(labelled_by(&row, &row.list_mnemonic_labels()[..1]));
+            assert!(labeled_by(&row, &row.list_mnemonic_labels()[..1]));
             let row = password(adw::PasswordEntryRow::builder().title("Password"));
             let row = row.upcast_ref::<adw::EntryRow>();
-            assert!(labelled_by(row, &row.list_mnemonic_labels()[..1]));
+            assert!(labeled_by(row, &row.list_mnemonic_labels()[..1]));
         });
     }
 }

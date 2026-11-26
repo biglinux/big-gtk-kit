@@ -54,7 +54,7 @@ pub struct BigRgbaImage {
     pub width: i32,
     /// Height in pixels.
     pub height: i32,
-    /// The colour space these pixels are in, as CICP code points, when the
+    /// The color space these pixels are in, as CICP code points, when the
     /// decoder said it was not plain sRGB.
     ///
     /// Without it the pixels go to GDK as if they were sRGB, so a Display-P3
@@ -86,17 +86,17 @@ pub struct BigSourceSize {
     pub natural: (i32, i32),
     /// Whether it is a vector, which renders sharp at any size.
     pub scalable: bool,
-    /// Whether its colours are described in a space other than sRGB, by an
+    /// Whether its colors are described in a space other than sRGB, by an
     /// ICC profile the decoder converts the frame from or by CICP code points:
     /// a copy is written in sRGB and leaves that description out.
-    pub colour_profile: bool,
+    pub color_profile: bool,
 }
 
-/// Colour space as the four CICP code points, which is what both Glycin
+/// Color space as the four CICP code points, which is what both Glycin
 /// reports and GDK accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BigCicp {
-    /// Colour primaries code point.
+    /// Color primaries code point.
     pub color_primaries: u32,
     /// Transfer characteristics code point.
     pub transfer_characteristics: u32,
@@ -183,7 +183,7 @@ pub enum BigImageError {
 
 /// How a bounded texture should meet its destination.
 ///
-/// This mirrors the four useful GTK `ContentFit` behaviours without making
+/// This mirrors the four useful GTK `ContentFit` behaviors without making
 /// this foundation crate depend on a widget. The decoder uses it only to pick
 /// a memory-efficient pixel size; the final widget still owns presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,7 +208,7 @@ pub struct BigImageSpec {
     /// crisp HiDPI output.
     pub bound: Option<(i32, i32)>,
     /// Source sub-rectangle to decode, in natural pixels `(x, y, w, h)`. `None`
-    /// decodes the whole image. Only the reduce-decoding JPEG loader honours it
+    /// decodes the whole image. Only the reduce-decoding JPEG loader honors it
     /// (deep zoom into a gigapixel), so it is set solely on that path; other
     /// loaders would return the whole image scaled and mislabel it as the region.
     pub clip: Option<(u32, u32, u32, u32)>,
@@ -359,7 +359,7 @@ pub fn decode_rgba_for_save(
 ///
 /// For a worker thread with no main context of its own (the viewer decodes on
 /// GIO's blocking pool). It spins a private context, bridges the `Send` flag to
-/// a [`gio::Cancellable`] the sandboxed decode honours, and returns
+/// a [`gio::Cancellable`] the sandboxed decode honors, and returns
 /// [`BigImageError::Cancelled`] when the caller sets the flag, so paging past
 /// an image aborts its decode instead of running it to completion. The flag is
 /// polled because an `AtomicBool` has no async wake; the poll ends with the
@@ -490,7 +490,7 @@ pub(crate) fn large_jpeg_source_enabled() -> bool {
     jpeg_loader::large_jpeg_source()
 }
 
-/// The frame's colour space, or `None` when it is plain sRGB.
+/// The frame's color space, or `None` when it is plain sRGB.
 ///
 /// `None` is not "unknown": it is the one case where handing the pixels to GDK
 /// untagged is exactly right, and it keeps the common path allocation-free.
@@ -507,7 +507,7 @@ pub(crate) fn frame_cicp(frame: &glycin::Frame) -> Option<BigCicp> {
 }
 
 /// Whether an ICC profile names itself sRGB in its description: glycin
-/// converts such a frame to sRGB without changing a colour.
+/// converts such a frame to sRGB without changing a color.
 pub(crate) fn names_srgb(icc: &[u8]) -> bool {
     // The tag table follows the 128-byte header: a count, then a signature,
     // offset and size for each tag.
@@ -809,7 +809,7 @@ fn texture_from_bytes(bytes: &glib::Bytes, image: &BigRgbaImage, stride: usize) 
         gdk::MemoryFormat::R8g8b8a8
     };
     // Untagged pixels are treated as sRGB by GDK, which is right for sRGB and
-    // wrong for everything else. When the decoder named a colour space, the
+    // wrong for everything else. When the decoder named a color space, the
     // texture carries it and the compositor converts for the real display.
     if let Some(color_state) = image.cicp.and_then(color_state_for) {
         return gdk::MemoryTextureBuilder::new()
@@ -834,7 +834,7 @@ impl<T: AsRef<BigRgbaImage>> AsRef<[u8]> for SharedRgba<T> {
     }
 }
 
-/// Turn CICP code points into the colour state GDK understands.
+/// Turn CICP code points into the color state GDK understands.
 ///
 /// A combination GDK rejects yields `None`, and the texture is then built
 /// untagged: showing the image as sRGB is wrong, but showing nothing is worse,

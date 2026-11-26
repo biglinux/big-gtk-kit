@@ -5,7 +5,7 @@
 
 use gtk::prelude::*;
 
-/// A switch showing `active`, centred on its row and named `label` for a
+/// A switch showing `active`, centered on its row and named `label` for a
 /// screen reader, which reads the switch apart from the row's title.
 ///
 /// `label` is already translated.

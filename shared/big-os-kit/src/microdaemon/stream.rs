@@ -28,7 +28,7 @@ pub struct MicrodaemonStreamFrame {
 
 /// Carry payload bytes as base64 instead of a JSON array of numbers.
 ///
-/// Serialised as numbers, an 8 KiB chunk becomes 37 KiB of JSON that costs an
+/// Serialized as numbers, an 8 KiB chunk becomes 37 KiB of JSON that costs an
 /// order of magnitude more to parse; as base64 it is 11 KiB. Use it as
 /// `#[serde(with = ...)]` on a byte payload.
 pub mod payload_bytes {

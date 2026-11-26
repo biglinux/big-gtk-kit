@@ -5,7 +5,7 @@
 //!
 //! One texture per distinct icon: a folder of a thousand files has a few dozen
 //! types, and GSK uploads a texture to the GPU once however many items draw it.
-//! Coloured icons come from the view's [`crate::IconLoader`] when it has one;
+//! Colored icons come from the view's [`crate::IconLoader`] when it has one;
 //! symbolic icons, and every icon without a loader, stay GTK's own
 //! `IconPaintable`, recoloured as they are drawn.
 

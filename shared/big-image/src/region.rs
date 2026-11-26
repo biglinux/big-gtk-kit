@@ -36,7 +36,7 @@ impl BigRegionDecoder {
 }
 
 /// Whether `path` can be decoded by region: a JPEG with the reduce-decoding
-/// loader active, since only it honours a clip.
+/// loader active, since only it honors a clip.
 ///
 /// The viewer uses this to choose native-detail tiles over a heavy full-image
 /// re-decode when zooming a large JPEG, without first reading the file.

@@ -3,7 +3,7 @@
 
 //! Env-gated benchmark timestamps that can live in the hot path permanently.
 //!
-//! [`mark`] costs a single already-initialised atomic load when the
+//! [`mark`] costs a single already-initialized atomic load when the
 //! `BIG_BENCH_TIMING` environment variable is unset (the normal case), so
 //! marks left in startup paths never need to be added and removed for a
 //! measurement. Set `BIG_BENCH_TIMING=/path/to/log` before launching (or in the

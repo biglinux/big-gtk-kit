@@ -60,7 +60,7 @@ pub fn png(text: &str) -> Option<Vec<u8>> {
 
 /// Dark modules on a light square, with the quiet zone the readers need.
 ///
-/// White and black rather than the theme's colours, in both light and dark:
+/// White and black rather than the theme's colors, in both light and dark:
 /// many phone cameras do not read a code on a dark background.
 fn draw(code: &qrcodegen::QrCode, context: &cairo::Context, width: i32, height: i32) {
     let modules = code.size();

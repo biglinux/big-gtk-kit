@@ -437,7 +437,7 @@ impl BigSubprocessSpec {
         self.run_cancellable(&AtomicBool::new(false))
     }
 
-    /// Spawn the subprocess synchronously and wait, honouring an external
+    /// Spawn the subprocess synchronously and wait, honoring an external
     /// cancellation flag in addition to the spec timeout.
     ///
     /// Behaves exactly like [`Self::run`] (same concurrent stdout/stderr
@@ -467,7 +467,7 @@ impl BigSubprocessSpec {
     }
 
     /// Spawn the subprocess synchronously and observe external progress while
-    /// honouring cancellation and the configured timeout.
+    /// honoring cancellation and the configured timeout.
     ///
     /// `observe` runs on the calling worker thread at the same cadence as
     /// cancellation polling. It is intended for progress that is safer to
@@ -974,7 +974,7 @@ pub fn restore_limits(pid: u32) {
 /// Build the `std::process::Command` for a spec: argv form, cwd, env
 /// policy, and the configured stdin/stdout/stderr modes. Shared by the
 /// blocking [`BigSubprocessSpec::run`] and the streaming
-/// [`BigSubprocessSpec::spawn`] paths so both honour the same contract.
+/// [`BigSubprocessSpec::spawn`] paths so both honor the same contract.
 fn build_command(spec: &BigSubprocessSpec) -> std::process::Command {
     use std::process::{Command, Stdio};
 

@@ -3,7 +3,7 @@
 
 //! Cooperative admission for one Rust composition, with no pool or polling timer.
 //!
-//! The owner is explicit and clonable; leases keep it alive until the last real
+//! The owner is explicit and cloneable; leases keep it alive until the last real
 //! allocation or job is released. CPU payload and GPU *estimates* are separate
 //! series and must not be added to PSS, especially on unified-memory GPUs.
 //! This is not a hard RSS limit: decoder scratch, drivers and unadopted callers
@@ -36,7 +36,7 @@ pub enum MemoryClass {
     Interactive = 0,
     /// Optional data which can be rebuilt; competes with prefetch for one quota.
     Reconstructible = 1,
-    /// Speculative neighbours; refused during the pressure quiet period.
+    /// Speculative neighbors; refused during the pressure quiet period.
     Prefetch = 2,
     /// Temporary payload for an explicit export, never evicted behind the user.
     Export = 3,

@@ -40,7 +40,7 @@ button.big-menu-row { min-height: 24px; padding: 4px 12px; }
 button.big-menu-row switch { margin-top: 0; margin-bottom: 0; }
 popover.menu.big-structured-menu > contents > scrolledwindow > viewport > stack > box,
 popover.menu.big-structured-menu > contents > stack > box { padding: 0; }
-/* White on the disc, small and bold, whatever colour the row's text is. */
+/* White on the disc, small and bold, whatever color the row's text is. */
 .big-menu-mark image, .big-menu-mark label { color: white; }
 .big-menu-mark label { font-size: 8px; font-weight: bold; }
 ";
@@ -629,8 +629,8 @@ fn build_action_row_content(action_item: &BigMenuActionItem) -> ActionRowContent
         indicator.set_opacity(if is_selected { 1.0 } else { 0.0 });
         indicator.set_accessible_role(gtk::AccessibleRole::Presentation);
         root.append(&indicator);
-    } else if let Some(colour) = &action_item.color {
-        root.append(&mark(colour, action_item));
+    } else if let Some(color) = &action_item.color {
+        root.append(&mark(color, action_item));
     } else if let Some(icon_name) = &action_item.leading_icon_name {
         root.append(&leading_icon(icon_name, action_item.destructive));
     }
@@ -655,12 +655,12 @@ fn build_action_row_content(action_item: &BigMenuActionItem) -> ActionRowContent
     ActionRowContent { root, label }
 }
 
-/// A row's own mark in place of its icon: a disc of `colour` carrying the
+/// A row's own mark in place of its icon: a disc of `color` carrying the
 /// item's symbol, or the first letter of its name when it has none. How a tag
 /// is drawn in a file manager's sidebar and on its files, so the menu names a
 /// tag by the same picture.
-fn mark(colour: &str, item: &BigMenuActionItem) -> gtk::Overlay {
-    let fill = gtk::gdk::RGBA::parse(colour).unwrap_or(gtk::gdk::RGBA::BLACK);
+fn mark(color: &str, item: &BigMenuActionItem) -> gtk::Overlay {
+    let fill = gtk::gdk::RGBA::parse(color).unwrap_or(gtk::gdk::RGBA::BLACK);
     let disc = gtk::DrawingArea::builder()
         .content_width(16)
         .content_height(16)

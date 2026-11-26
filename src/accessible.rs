@@ -7,7 +7,7 @@ use gtk::glib;
 use gtk::glib::translate::{IntoGlib, ToGlibContainerFromSlice, ToGlibPtr, ToGlibPtrMut};
 use gtk::prelude::*;
 
-/// Say that `accessible` is `relation` (labelled by, described by, …) `targets`.
+/// Say that `accessible` is `relation` (labeled by, described by, …) `targets`.
 ///
 /// gtk-rs 0.11's `AccessibleExt::update_relation` hands GTK a `GList` of the
 /// targets inside a `GValue` and never frees it, while GTK takes a copy of the

@@ -32,21 +32,21 @@ pub const BIG_OFF_REASON_ATTRIBUTE: &str = "big-off-reason";
 pub const BIG_ICON_ATTRIBUTE: &str = "big-icon";
 /// `(ddd)` minimum, maximum and step of a `scale` item.
 pub const BIG_RANGE_ATTRIBUTE: &str = "big-range";
-/// Boolean: the row destroys something and is coloured as such.
+/// Boolean: the row destroys something and is colored as such.
 pub const BIG_DESTRUCTIVE_ATTRIBUTE: &str = "big-destructive";
 /// `big-kind` of a section drawn as one row: its first item fills the row and
 /// its second is a smaller button at the row's end, a variant of the same
 /// verb ("Move to Trash" | "Delete Permanently…").
 pub const BIG_KIND_SPLIT: &str = "split";
 /// `big-kind` of a section drawn as one row named by the section's label, its
-/// items small buttons along it (application icons, colour swatches) and a
+/// items small buttons along it (application icons, color swatches) and a
 /// submenu among them, if any, a door at its end.
 pub const BIG_KIND_INLINE: &str = "inline";
 /// Boolean: in an inline row, this item is the row itself (its label and
 /// icon fill the row and run it), and the others are the choices beside it
 /// ("Open", then the applications it can open with).
 pub const BIG_PRIMARY_ATTRIBUTE: &str = "big-primary";
-/// `#rrggbb`: the item is drawn as a round swatch of this colour.
+/// `#rrggbb`: the item is drawn as a round swatch of this color.
 pub const BIG_COLOR_ATTRIBUTE: &str = "big-color";
 /// Other words a person might type for this item, space separated: what the
 /// menu's search matches besides the label ("zip rar" for Compress).
@@ -70,7 +70,7 @@ pub fn described_item(
     item
 }
 
-/// Colour `item` as destructive. Put it last in its menu.
+/// Color `item` as destructive. Put it last in its menu.
 pub fn mark_destructive(item: &gio::MenuItem) {
     item.set_attribute_value(BIG_DESTRUCTIVE_ATTRIBUTE, Some(&true.to_variant()));
 }

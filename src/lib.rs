@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! GTK4 building blocks shared by the BigLinux programs. Each one stands in for
-//! a toolkit behaviour that was measured to leak, stall or look different from
+//! a toolkit behavior that was measured to leak, stall or look different from
 //! program to program, without patching GTK or libadwaita: a fixed library
 //! version leaves every workaround here idle.
 
@@ -39,7 +39,7 @@ use gtk::prelude::*;
 /// the Cairo window shadows and switches that turn while their window is
 /// not drawn.
 ///
-/// Call once, after GTK and libadwaita are initialised (an application's
+/// Call once, after GTK and libadwaita are initialized (an application's
 /// `startup`). Idempotent.
 pub fn install() {
     tooltip::install();
@@ -53,7 +53,7 @@ pub fn install() {
 /// subclasses, for the rest of the process.
 fn on_every_emission<T: IsA<glib::Object>>(signal: &str, callback: fn(T)) {
     let object_type = T::static_type();
-    // A class's signals exist once the class is initialised.
+    // A class's signals exist once the class is initialized.
     let _class = glib::Class::<glib::Object>::from_type(object_type);
     let Some(signal) = glib::subclass::SignalId::lookup(signal, object_type) else {
         return;

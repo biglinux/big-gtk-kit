@@ -23,14 +23,14 @@ big-gtk-kit = { git = "https://github.com/biglinux/big-gtk-kit" }
 ```
 
 `deny.toml` in each consumer allows git sources from the `biglinux` GitHub
-organisation only.
+organization only.
 
 `big-item-view/` is a second crate in this workspace: one drawn, virtualized
 widget for an icon grid, a column flow or rows with columns. Five thousand rows
 with three columns and their headings, in a 1100×760 window, are 46 widgets for
 the whole window, as are none; a `GtkColumnView` with the same columns makes
 1 460, a row, three cells and three labels for each row it builds (GTK
-4.22.5, counted by the `tools/` census). Coloured icons come from the caller's
+4.22.5, counted by the `tools/` census). Colored icons come from the caller's
 `IconLoader`, else GTK's icon theme draws them.
 
 ```toml
@@ -80,7 +80,7 @@ This turns on what needs no change at the call sites:
   other release leaks; a test fails on a GTK that belongs on the other side of
   that list);
 - under the Cairo renderer (`GSK_RENDERER=cairo`), libadwaita's window shadows
-  restated so their fade to backdrop changes colours only: GTK keeps every
+  restated so their fade to backdrop changes colors only: GTK keeps every
   blurred shadow corner it draws, keyed by blur and size, and each frame of
   libadwaita's fade has new ones, 2.2 MB a minute for a window losing the
   focus 70 times a minute without this; every state draws the same pixels
@@ -146,7 +146,7 @@ files, in light, dark and high contrast, with no change at the call sites. GTK k
 deriving the accessible name and description from the tooltip.
 
 - One card per window or popover, made on first hover; widgets carry nothing.
-- 150 ms before the first card; moving on to a neighbour shows the next at once.
+- 150 ms before the first card; moving on to a neighbor shows the next at once.
 - A click, key, scroll or touch closes it; it stays closed on that widget.
 - `tooltip::set_icon(&widget, Some("icon-name"))` adds an icon tile.
 - `tooltip::set_show_when_inactive(true)` for panels, which are never active.

@@ -65,7 +65,7 @@ main (int argc, char **argv)
   const char *dir = argc > 1 ? argv[1] : ".";
   enum { N = 500 };
   GObject *kept[N];
-  // Class initialised, nothing alive.
+  // Class initialized, nothing alive.
   g_object_unref (g_object_new (CENSUS_TYPE_PROBE, NULL));
   guint64 empty = census (dir, 1);
   for (int i = 0; i < N; i++)

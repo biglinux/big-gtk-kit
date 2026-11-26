@@ -1,26 +1,26 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! The theme's colours and fonts, read from CSS.
+//! The theme's colors and fonts, read from CSS.
 //!
 //! GTK has no public call that answers "what is the selected background in this
 //! theme"; the answer only exists as the computed style of a CSS node. So the
-//! view keeps one tiny invisible child per colour it draws with, a *probe*, and
-//! reads the probe's `color`. Every themable colour is written in CSS as a
+//! view keeps one tiny invisible child per color it draws with, a *probe*, and
+//! reads the probe's `color`. Every themable color is written in CSS as a
 //! `color:` value, which GTK resolves with `var()`, `alpha()` and `color-mix()`
 //! like any other; a consumer restyles its view with ordinary selectors such as
 //! `.bigfiles-icon-grid > probe.selected-fill { color: … }`.
 //!
 //! The probes are mapped and allocated 0×0, never drawn. Mapped matters: a theme,
 //! accent or contrast change restyles them, their redraw marks the view as
-//! needing one, and the next frame reads the new colours, with no style-manager
+//! needing one, and the next frame reads the new colors, with no style-manager
 //! signal to connect and to disconnect again in a process that runs for months.
 
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib};
 
-/// Every colour the view draws with, in probe order.
+/// Every color the view draws with, in probe order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Role {
     Text,
@@ -102,7 +102,7 @@ impl Role {
 }
 
 /// The two fonts, read from probes of their own: the name, and the smaller line
-/// under it. A personalised font reaches the view through them.
+/// under it. A personalized font reaches the view through them.
 pub(crate) const TITLE_FONT: &str = "title";
 pub(crate) const CAPTION_FONT: &str = "caption";
 
@@ -145,7 +145,7 @@ pub(crate) fn install_defaults() {
     big_gtk_kit::css::install(DEFAULT_CSS, DEFAULT_PRIORITY);
 }
 
-/// The colours read on one frame.
+/// The colors read on one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Palette {
     colors: Vec<gdk::RGBA>,
@@ -214,7 +214,7 @@ impl Probes {
     /// `draw_needed` on them. `gtk_widget_queue_draw` stops climbing at the first
     /// widget that already needs a draw, so a probe never snapshotted keeps that
     /// flag forever and its restyle (a theme, accent or contrast change) never
-    /// reaches the view: the colours change and nothing is redrawn.
+    /// reaches the view: the colors change and nothing is redrawn.
     pub(crate) fn snapshot(&self, parent: &impl IsA<gtk::Widget>, snapshot: &gtk::Snapshot) {
         for probe in self.colors.iter().chain([&self.title, &self.caption]) {
             parent.snapshot_child(probe, snapshot);

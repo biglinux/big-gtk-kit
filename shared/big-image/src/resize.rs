@@ -62,7 +62,7 @@ pub fn resize_rgba(
         .scale_simple(width, height, gtk::gdk_pixbuf::InterpType::Bilinear)
         .ok_or(BigImageError::InvalidBytePixels)?;
     let mut resized = super::pixbuf_to_rgba(&scaled).ok_or(BigImageError::InvalidBytePixels)?;
-    // The pixels are the same colour space they arrived in; only their count
+    // The pixels are the same color space they arrived in; only their count
     // changed. Dropping this is how a Display-P3 photograph gets written back
     // as if it were sRGB.
     resized.cicp = image.cicp;

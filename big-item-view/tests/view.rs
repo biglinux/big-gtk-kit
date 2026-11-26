@@ -287,7 +287,7 @@ fn hits_only_drawn_parts() {
     let rect = view.item_rect(0).unwrap();
     let (x, y) = (f64::from(rect.x()), f64::from(rect.y()));
     let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
-    // The picture, centred at the top, and beside a short name ("entry
+    // The picture, centered at the top, and beside a short name ("entry
     // 0"): the card is as wide as the cell.
     assert_eq!(view.position_at(x + w / 2.0, y + 30.0), Some(0));
     assert_eq!(view.position_at(x + w / 2.0 - 40.0, y + h - 10.0), Some(0));

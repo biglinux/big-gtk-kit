@@ -201,7 +201,7 @@ impl ObjectImpl for ItemView {
         obj.connect_has_focus_notify(|view| view.imp().sync_focus());
         obj.set_overflow(gtk::Overflow::Hidden);
         // Before the probes are ever styled: installed later, at realize, the
-        // first styling happened without them and the colours never changed.
+        // first styling happened without them and the colors never changed.
         crate::palette::install_defaults();
         // The probes wait for the view to be shown: a view kept in a stack
         // for another mode (bigfiles keeps three per tab) never pays for them.

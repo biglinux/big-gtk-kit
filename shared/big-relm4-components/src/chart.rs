@@ -32,10 +32,10 @@ pub enum Scale {
 pub enum Ink {
     /// The person's accent, line over a fading fill: the series that matters.
     Accent,
-    /// The text colour, a thinner dashed line: the series beside it.
+    /// The text color, a thinner dashed line: the series beside it.
     Quiet,
     /// A share of time, 0–100, hatched up from the baseline in the text
-    /// colour whatever the graph's scale: the time spent waiting under what
+    /// color whatever the graph's scale: the time spent waiting under what
     /// was done.
     Waiting,
 }
@@ -45,10 +45,10 @@ struct State {
     capacity: usize,
     scale: Scale,
     ceiling: f64,
-    /// The accent series in the text colour: a graph beside the one the
+    /// The accent series in the text color: a graph beside the one the
     /// person chose.
     neutral: bool,
-    /// The legend's keys, drawn in the graph's colours.
+    /// The legend's keys, drawn in the graph's colors.
     keys: Vec<glib::WeakRef<gtk::DrawingArea>>,
 }
 
@@ -87,7 +87,7 @@ impl HistoryChart {
             let state = Rc::downgrade(&state);
             area.set_draw_func(move |area, context, width, height| {
                 if let Some(state) = state.upgrade() {
-                    // The accent the person chose, never a colour written here.
+                    // The accent the person chose, never a color written here.
                     let accent = adw::StyleManager::default().accent_color_rgba();
                     let size = (f64::from(width), f64::from(height));
                     draw(context, size, &state.borrow(), area.color(), accent);
@@ -174,7 +174,7 @@ impl HistoryChart {
         self.state.borrow().ceiling
     }
 
-    /// Draw the accent series in the text colour, for a graph beside the one
+    /// Draw the accent series in the text color, for a graph beside the one
     /// that matters, or in the accent again.
     pub fn set_neutral(&self, neutral: bool) {
         let changed = std::mem::replace(&mut self.state.borrow_mut().neutral, neutral) != neutral;
@@ -193,7 +193,7 @@ impl HistoryChart {
     }
 
     /// A key for a legend beside the words of the series drawn in `ink`,
-    /// which turns to the text colour with the graph.
+    /// which turns to the text color with the graph.
     #[must_use]
     pub fn key(&self, ink: Ink) -> gtk::DrawingArea {
         let state = Rc::downgrade(&self.state);
@@ -236,7 +236,7 @@ fn rescale(state: &mut State) {
 
 /// The smallest 1, 2 or 5 times a power of ten of a binary unit (B, KiB, MiB
 /// ...) above `value` (at least 1): the rate labels print binary units, so
-/// the ceiling reads as a whole number of the unit it is labelled in.
+/// the ceiling reads as a whole number of the unit it is labeled in.
 #[must_use]
 pub fn round_ceiling(value: f64) -> f64 {
     if !value.is_finite() || value <= 1.0 {
@@ -250,7 +250,7 @@ pub fn round_ceiling(value: f64) -> f64 {
         .unwrap_or(1024.0 * unit)
 }
 
-/// Draw `state` at `size` in the text colour `ink` and the person's `accent`.
+/// Draw `state` at `size` in the text color `ink` and the person's `accent`.
 fn draw(
     context: &cairo::Context,
     (width, height): (f64, f64),
@@ -378,7 +378,7 @@ fn trace(context: &cairo::Context, points: &[(f64, f64)]) {
 
 /// Hatch the area between the traced line through `points` and the
 /// baseline, then stroke the line thin: the hatching's slant tells it from
-/// the fills of the other series without colour.
+/// the fills of the other series without color.
 fn hatch_under(
     context: &cairo::Context,
     points: &[(f64, f64)],
@@ -403,7 +403,7 @@ fn hatch_under(
     let _ = context.stroke();
 }
 
-/// The strength of the waiting's hatching and edge, of the text colour's.
+/// The strength of the waiting's hatching and edge, of the text color's.
 const WAITING_INK: f64 = 0.8;
 
 /// Lines slanting up to the right, 4 pixels apart, over the whole area.
@@ -423,7 +423,7 @@ fn hatch(context: &cairo::Context, (width, height): (f64, f64), ink: gdk::RGBA) 
     let _ = context.stroke();
 }
 
-/// The line `series` is drawn with, in `ink` (the text colour) or `accent`.
+/// The line `series` is drawn with, in `ink` (the text color) or `accent`.
 fn pen(context: &cairo::Context, series: Ink, ink: gdk::RGBA, accent: gdk::RGBA) {
     match series {
         Ink::Waiting => {
@@ -451,7 +451,7 @@ pub fn key(ink: Ink) -> gtk::DrawingArea {
     key_area(ink, || false)
 }
 
-/// [`key`], in the text colour while `neutral` says so.
+/// [`key`], in the text color while `neutral` says so.
 fn key_area(ink: Ink, neutral: impl Fn() -> bool + 'static) -> gtk::DrawingArea {
     let area = gtk::DrawingArea::builder()
         .content_width(16)
@@ -479,7 +479,7 @@ fn key_area(ink: Ink, neutral: impl Fn() -> bool + 'static) -> gtk::DrawingArea 
     area
 }
 
-/// The accent series' colour in a neutral graph: over half the text's
+/// The accent series' color in a neutral graph: over half the text's
 /// strength, so the line keeps 3:1 on the window.
 fn neutral_ink(ink: gdk::RGBA) -> gdk::RGBA {
     gdk::RGBA::new(ink.red(), ink.green(), ink.blue(), ink.alpha() * 0.55)

@@ -165,7 +165,7 @@ fn main() -> glib::ExitCode {
             .child(&page)
             .build();
         // F9 restyles the view at run time, the way a theme or accent change does:
-        // the next frame has to draw with the new colours.
+        // the next frame has to draw with the new colors.
         let keys = gtk::EventControllerKey::new();
         keys.connect_key_pressed(|_, key, _, _| {
             if key == gdk::Key::F9 {

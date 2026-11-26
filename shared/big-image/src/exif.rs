@@ -28,7 +28,7 @@ pub struct BigExif {
     pub camera_model: Option<String>,
     /// When the photograph was taken (tag 0x9003), as written in the file.
     pub taken: Option<String>,
-    /// Lens focal length in millimetres (tag 0x920A).
+    /// Lens focal length in millimeters (tag 0x920A).
     pub focal_length_mm: Option<f64>,
     /// Exposure time in seconds (tag 0x829A).
     pub exposure_seconds: Option<f64>,

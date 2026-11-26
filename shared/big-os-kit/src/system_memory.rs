@@ -40,7 +40,7 @@ pub(crate) struct MemoryCapacity {
 
 impl MemoryCapacity {
     /// Minimum known physical/high/max bound. It is not exclusive to this process
-    /// and high is used for sizing, not labelled a hard RAM limit.
+    /// and high is used for sizing, not labeled a hard RAM limit.
     #[must_use]
     pub(crate) fn observed_bytes(&self) -> Option<u64> {
         [

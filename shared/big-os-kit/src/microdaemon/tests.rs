@@ -279,7 +279,7 @@ fn decode_refuses_oversized_length() {
 }
 
 #[test]
-fn stream_codec_honours_limit_boundaries() {
+fn stream_codec_honors_limit_boundaries() {
     let mut writer = Cursor::new(Vec::new());
     write_microdaemon_json_frame(&mut writer, &"ok").unwrap();
     assert!(

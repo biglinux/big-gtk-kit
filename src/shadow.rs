@@ -36,7 +36,7 @@ const ADWAITA_RULES: [&str; 9] = [
 /// 1.10 fades a window's shadow to a wider, softer one as the window loses the
 /// focus, and every frame of that fade has a new blur and spread, so each
 /// focus change adds about a dozen masks. `shadow.css` reaches the same
-/// shadows by fading colours only, high contrast included. It is loaded once
+/// shadows by fading colors only, high contrast included. It is loaded once
 /// the first window maps with a Cairo renderer, and only while libadwaita's
 /// stylesheet is the one in use and still has the rules it restates.
 pub(crate) fn install() {

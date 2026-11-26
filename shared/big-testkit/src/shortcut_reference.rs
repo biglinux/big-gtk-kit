@@ -110,7 +110,7 @@ fn parsed(accelerator: &str) -> (gtk::gdk::Key, gtk::gdk::ModifierType) {
     (key.to_lower(), modifiers)
 }
 
-/// Fail when one key of `bindings` triggers two differently labelled actions.
+/// Fail when one key of `bindings` triggers two differently labeled actions.
 ///
 /// # Panics
 ///

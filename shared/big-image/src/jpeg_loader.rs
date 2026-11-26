@@ -24,7 +24,7 @@ const INSTALLED_LOADERS: &[&str] = &[
 ///
 /// # Safety
 ///
-/// Sets and then restores `XDG_DATA_DIRS`. On Unix both are undefined behaviour
+/// Sets and then restores `XDG_DATA_DIRS`. On Unix both are undefined behavior
 /// with a concurrent environment reader, so the caller must run this before any
 /// other thread and before anything asks GLib for its data directories, i.e. at
 /// the very top of `main`.

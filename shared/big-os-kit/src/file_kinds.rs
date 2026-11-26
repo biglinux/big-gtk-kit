@@ -25,7 +25,7 @@ pub(crate) const AUDIO_EXTENSIONS: &[&str] = &[
 /// Everything the desktop presents as a picture.
 ///
 /// Wider than what every decoder reads: the file manager and the search index
-/// only have to recognise a picture, and the platform draws `svg` and `heic`
+/// only have to recognize a picture, and the platform draws `svg` and `heic`
 /// for them. Code that must actually decode the bytes asks `big-image`, and
 /// takes its answer.
 pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
@@ -33,7 +33,7 @@ pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
     "pgm", "png", "pnm", "ppm", "qoi", "svg", "tga", "tif", "tiff", "webp",
 ];
 
-/// True when `path` ends in one of `extensions`, whatever its capitalisation.
+/// True when `path` ends in one of `extensions`, whatever its capitalization.
 #[must_use]
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
@@ -66,7 +66,7 @@ pub fn is_image(path: &Path) -> bool {
 /// so typing over it keeps the kind of file.
 ///
 /// A compressed tarball's extension is both parts: renaming `site.tar.gz` to
-/// `backup.gz` makes a file no program recognises as a tarball. A name whose
+/// `backup.gz` makes a file no program recognizes as a tarball. A name whose
 /// only dot starts it (`.profile`) is all name.
 #[must_use]
 pub fn stem_len(name: &str) -> usize {
@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn extensions_are_matched_whatever_the_capitalisation() {
+    fn extensions_are_matched_whatever_the_capitalization() {
         assert!(is_video(Path::new("/tmp/Holiday.WMV")));
         assert!(is_audio(Path::new("/tmp/take.FLAC")));
         assert!(is_image(Path::new("/tmp/scan.JPEG")));

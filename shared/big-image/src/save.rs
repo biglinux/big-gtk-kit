@@ -4,7 +4,7 @@
 //! Writing a decoded frame to a file, in the format its extension names, out of
 //! what gdk-pixbuf on this system can write. JPEG and PNG carry the source's
 //! EXIF over; the pixels are written in sRGB, as glycin converted them from any
-//! colour profile and as pixels in another colour space are converted here.
+//! color profile and as pixels in another color space are converted here.
 //! Nothing here writes over a file the user did not name.
 
 use big_os_kit::crc32;
@@ -274,7 +274,7 @@ pub fn encode_rgba(
 }
 
 impl BigRgbaImage {
-    /// These pixels in sRGB, which is how a file that names no colour space
+    /// These pixels in sRGB, which is how a file that names no color space
     /// is read. Pixels already in sRGB come back as they are. Blocking.
     ///
     /// # Errors
@@ -332,7 +332,7 @@ fn encode(
     // A JPEG has no alpha channel, and the encoder says so by refusing the
     // buffer rather than by flattening it: every save as .jpg failed with
     // "does not support the color type Rgba8" until the flattening happened
-    // here, where the colour to show through is a decision and not a default.
+    // here, where the color to show through is a decision and not a default.
     // An opaque picture is written without the alpha channel too: every byte
     // of it would be 255, and a PNG carrying them is a third larger.
     let pixbuf = if format.keeps_alpha() && !image.opaque {
@@ -436,7 +436,7 @@ pub(crate) fn rgba_to_pixbuf(image: &BigRgbaImage) -> Option<gtk::gdk_pixbuf::Pi
 /// The same pixels with the transparency laid over white, three bytes each.
 ///
 /// White because that is what a transparent picture looks like on every page,
-/// window and sheet of paper it will end up on; leaving the raw colour behind
+/// window and sheet of paper it will end up on; leaving the raw color behind
 /// turns an invisible logo into a solid black rectangle.
 fn rgb_over_white_pixbuf(image: &BigRgbaImage) -> Option<gtk::gdk_pixbuf::Pixbuf> {
     let width = usize::try_from(image.width).ok()?;

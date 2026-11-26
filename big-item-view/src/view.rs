@@ -47,7 +47,7 @@ impl ItemView {
         view
     }
 
-    /// Draw coloured icons through `loader`; without one, GTK's icon theme
+    /// Draw colored icons through `loader`; without one, GTK's icon theme
     /// draws every icon.
     pub fn set_icon_loader(&self, loader: crate::IconLoader) {
         self.imp().icon_loader.set(Some(loader));
@@ -420,7 +420,7 @@ impl ItemView {
         let y = if inline {
             rect.y() + (rect.height() - natural as f32) / 2.0
         } else {
-            // Centred on the first line, and growing downwards from there: an
+            // Centered on the first line, and growing downwards from there: an
             // editor that wraps a long name must not climb over the icon.
             rect.y() + ((line - natural as f32) / 2.0).max(-4.0)
         };

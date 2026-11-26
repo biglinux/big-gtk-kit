@@ -13,7 +13,7 @@ pub(crate) const DEFAULT_DIDACTIC_CARD_SPACING: i32 = 18;
 pub(crate) const DEFAULT_DIDACTIC_TEXT_SPACING: i32 = 4;
 pub(crate) const DEFAULT_DIDACTIC_DESCRIPTION_MAX_CHARS: i32 = 76;
 
-/// Visual layout flavour selected when realising a
+/// Visual layout flavor selected when realizing a
 /// [`BigDidacticCardSpec`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BigDidacticCardLayout {
@@ -27,7 +27,7 @@ pub enum BigDidacticCardLayout {
     Plain,
 }
 
-/// Display-free specification describing big didactic card behaviour.
+/// Display-free specification describing big didactic card behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BigDidacticCardSpec {
     /// Resource prefix.
@@ -119,7 +119,7 @@ impl BigDidacticCardSpec {
     }
 }
 
-/// Realised widget wrapper around a [`BigDidacticCardSpec`].
+/// Realized widget wrapper around a [`BigDidacticCardSpec`].
 #[derive(Debug, Clone)]
 pub struct BigDidacticCard {
     root: gtk::Box,

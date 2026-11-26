@@ -83,7 +83,7 @@ pub struct BigMenuActionItem {
     pub subtitle: Option<String>,
     /// Why the row is off, said while its action is disabled (`big-off-reason`).
     pub off_reason: Option<String>,
-    /// Whether the row destroys something; drawn in the error colour.
+    /// Whether the row destroys something; drawn in the error color.
     pub destructive: bool,
     /// Stateful action presentation exposed to sighted and assistive users.
     pub selection: BigMenuActionSelection,
@@ -224,7 +224,7 @@ impl BigMenuActionItem {
         self
     }
 
-    /// Draw the row in the error colour because it destroys something.
+    /// Draw the row in the error color because it destroys something.
     #[must_use]
     pub fn destructive(mut self) -> Self {
         self.destructive = true;

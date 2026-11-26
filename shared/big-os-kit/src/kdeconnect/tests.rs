@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 BigLinux contributors
+// SPDX-License-Identifier: MIT
+
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
@@ -518,7 +521,7 @@ fn followed_list_updates_on_each_change() {
             first_read.store(true, std::sync::atomic::Ordering::SeqCst);
             seen < 2
         });
-        // The change is signalled once the follower has subscribed and read.
+        // The change is signaled once the follower has subscribed and read.
         let change = async {
             while !first_read.load(std::sync::atomic::Ordering::SeqCst) {
                 yield_once().await;

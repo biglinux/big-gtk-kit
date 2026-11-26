@@ -2,7 +2,7 @@ id: named-switch
 language: Rust
 severity: error
 message: Build a row's switch with big_relm4_components::input::switch::named_switch
-note: A row switch is centred and carries its own name for a screen reader, set in one place.
+note: A row switch is centered and carries its own name for a screen reader, set in one place.
 # The owners live in the shared crates; the kit's own crates sit below them.
 files:
   - shared/**

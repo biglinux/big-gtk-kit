@@ -3,7 +3,7 @@
 
 //! One tooltip look for every BigLinux program.
 //!
-//! Call [`install`] once, after GTK is initialised and before the first window
+//! Call [`install`] once, after GTK is initialized and before the first window
 //! is realized. From then on a widget's own `tooltip-text` or `tooltip-markup`
 //! (set in code, by a builder, in a relm4 `view!` or in a `.ui` file) shows as
 //! the BigLinux card instead of GTK's tooltip window. Call sites do not change,
@@ -610,7 +610,7 @@ fn silence(widget: &gtk::Widget) {
 /// when it has none any more.
 fn fill(card: &Card, owner: &gtk::Widget, area: Option<&(String, gdk::Rectangle)>) -> bool {
     // Cards with structure (an icon, bold or small lines) read from the left
-    // and keep their lines; a plain sentence is centred and wraps. Plain lines
+    // and keep their lines; a plain sentence is centered and wraps. Plain lines
     // of their own (a list of choices) wrap too, but read from the left.
     let (left, wrap, icon) = match area {
         Some((text, _)) => {

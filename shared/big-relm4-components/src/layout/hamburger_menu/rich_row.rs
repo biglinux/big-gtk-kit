@@ -248,10 +248,10 @@ pub(super) fn build_split(build: &StructuredMenuBuild<'_>, section: &gio::MenuMo
 }
 
 /// One row named by the section's label with its choices along it: an icon
-/// button per application, a swatch per colour, and the section's submenu, if
+/// button per application, a swatch per color, and the section's submenu, if
 /// it has one, as a door at the end.
 ///
-/// A choice among three applications, or eight colours, is one glance and one
+/// A choice among three applications, or eight colors, is one glance and one
 /// click instead of a submenu; the door keeps the rest one step away.
 pub(super) fn build_inline(
     build: &StructuredMenuBuild<'_>,
@@ -379,8 +379,8 @@ fn swatch(color: &str) -> gtk::DrawingArea {
     area
 }
 
-/// An action's icon beside its name, in the row's own text colour: a verb
-/// sharing a line with its neighbours reads like the rows above and below it.
+/// An action's icon beside its name, in the row's own text color: a verb
+/// sharing a line with its neighbors reads like the rows above and below it.
 fn verb_content(item: &BigMenuActionItem) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     content.set_halign(gtk::Align::Center);

@@ -88,9 +88,9 @@ pub struct Metrics {
     n: u32,
     /// Cells across the scroll direction: columns in a grid, rows in a column flow.
     lanes: u32,
-    /// Distance between the starts of two neighbouring cells, horizontally.
+    /// Distance between the starts of two neighboring cells, horizontally.
     pitch_x: f32,
-    /// Distance between the starts of two neighbouring cells, vertically.
+    /// Distance between the starts of two neighboring cells, vertically.
     pitch_y: f32,
     viewport: (f32, f32),
     rtl: bool,
@@ -455,7 +455,7 @@ impl Metrics {
     ///
     /// In a grid Previous/Next walk the row and Up/Down jump a row; in a column
     /// flow the same keys follow the column instead, so Up and Down stay "the
-    /// neighbour above and below" on screen. Right-to-left mirrors the horizontal
+    /// neighbor above and below" on screen. Right-to-left mirrors the horizontal
     /// keys, which the caller does by swapping Previous and Next.
     #[must_use]
     pub fn step(&self, from: u32, step: Step) -> Option<u32> {
@@ -470,9 +470,9 @@ impl Metrics {
             Flow::ColumnMajor => (self.viewport.0 / self.pitch_x).floor().max(1.0) as u32,
         };
         let (along_line, across_line) = match self.flow {
-            // Along the line = the horizontal neighbours in a grid.
+            // Along the line = the horizontal neighbors in a grid.
             Flow::RowMajor { .. } => (1, lanes),
-            // In a column flow the vertical neighbours are one position apart.
+            // In a column flow the vertical neighbors are one position apart.
             Flow::ColumnMajor => (lanes, 1),
         };
         // A list of one item per line has nothing beside an item: Left and

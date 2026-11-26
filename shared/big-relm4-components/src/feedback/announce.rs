@@ -21,7 +21,7 @@ const NO_BRIDGE_CONTEXT: &str = "GtkTestATContext";
 /// segmentation fault.
 ///
 /// The bad context name is matched, so any context this function does not
-/// recognise still gets the announcement, and a GTK rename cannot silence it.
+/// recognize still gets the announcement, and a GTK rename cannot silence it.
 ///
 /// # Examples
 ///

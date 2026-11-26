@@ -25,9 +25,9 @@ const MAX_FRAMES: usize = 2_000;
 /// A format that can hold more than one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BigAnimationFormat {
-    /// Universally readable, at most 256 colours per frame.
+    /// Universally readable, at most 256 colors per frame.
     Gif,
-    /// Full colour and much smaller, readable by every current browser.
+    /// Full color and much smaller, readable by every current browser.
     WebP,
 }
 
@@ -306,12 +306,12 @@ mod tests {
     }
 
     #[test]
-    fn a_neighbouring_file_is_left_alone() {
+    fn a_neighboring_file_is_left_alone() {
         let directory =
             std::env::temp_dir().join(format!("big-image-staging-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("test directory");
-        let neighbour = directory.join("a.big-part");
-        std::fs::write(&neighbour, b"the person's file").expect("neighbour");
+        let neighbor = directory.join("a.big-part");
+        std::fs::write(&neighbor, b"the person's file").expect("neighbor");
         let mut writer = BigAnimationWriter::new().expect("private directory");
         let pixel = BigRgbaImage {
             rgba: vec![255; 4],
@@ -327,7 +327,7 @@ mod tests {
         // destination is not the staging file.
         let _ = writer.finish(&directory.join("a.gif"));
         assert_eq!(
-            std::fs::read(&neighbour).expect("still there"),
+            std::fs::read(&neighbor).expect("still there"),
             b"the person's file"
         );
         let _ = std::fs::remove_dir_all(&directory);

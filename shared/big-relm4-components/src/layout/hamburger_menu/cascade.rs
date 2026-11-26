@@ -82,7 +82,7 @@ pub(super) fn attach(
     child.set_autohide(false);
     child.set_position(gtk::PositionType::Right);
     // Its first row level with the door, as KDE and GTK place a submenu,
-    // rather than centred on it.
+    // rather than centered on it.
     child.set_valign(gtk::Align::Start);
     child.set_accessible_role(gtk::AccessibleRole::Menu);
     child.update_property(&[gtk::accessible::Property::Label(&door.label)]);

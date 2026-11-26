@@ -23,7 +23,7 @@ const SUSPICIOUS_DELAY: Duration = Duration::from_millis(10);
 /// What such a frame is shown for instead.
 const DEFAULT_DELAY: Duration = Duration::from_millis(100);
 
-/// The delay to actually honour for a frame.
+/// The delay to actually honor for a frame.
 ///
 /// Firefox and Chromium both replace any delay of 10 ms or less with 100 ms:
 /// files write 0 either because an encoder meant "default" or because someone
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(
             displayed_delay(Some(Duration::from_millis(20))),
             Some(Duration::from_millis(20)),
-            "the fastest delay a well-made GIF can ask for is honoured"
+            "the fastest delay a well-made GIF can ask for is honored"
         );
         assert_eq!(
             displayed_delay(Some(Duration::from_secs(5))),

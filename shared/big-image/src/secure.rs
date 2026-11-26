@@ -232,7 +232,7 @@ pub(super) async fn load_texture_sandbox_required_async(
         // Old glycin ignored the scale hint and delivered a full-resolution
         // frame; the direct texture would then keep every source pixel (an 8000px
         // photo behind a 1080p wallpaper). Downscale to the fit-aware target,
-        // preserving the frame's colour state, instead of the fast zero-copy wrap.
+        // preserving the frame's color state, instead of the fast zero-copy wrap.
         // On a worker: this is awaited on the caller's main context.
         let image =
             gio::spawn_blocking(move || frame_to_rgba_scaled(&frame, target_width, target_height))
@@ -245,7 +245,7 @@ pub(super) async fn load_texture_sandbox_required_async(
 
 /// Stage `spec`, decode one frame of it in the sandbox at `fit`, and remove
 /// the staged copy. `hdr`: an opaque PQ or HLG picture keeps its 16 bits, for
-/// a surface that draws it in its own colour state.
+/// a surface that draws it in its own color state.
 async fn sandboxed_frame(
     spec: BigImageSpec,
     fit: BigImageFit,
@@ -767,7 +767,7 @@ pub(super) struct SandboxedRegionDecoder {
 
 impl SandboxedRegionDecoder {
     /// Open a persistent region decoder, or `None` when region decode does not
-    /// apply (only the reduce-decoding JPEG loader honours a clip; any other
+    /// apply (only the reduce-decoding JPEG loader honors a clip; any other
     /// loader would return the whole image scaled and mislabel it as the region).
     pub(super) async fn open(
         spec: StagedRequest,
@@ -909,8 +909,8 @@ async fn decode_sandboxed(
     Ok((image, source))
 }
 
-/// Pack a delivered glycin frame into a [`BigRgbaImage`], honouring the target
-/// bound, the frame's alpha, and its colour space.
+/// Pack a delivered glycin frame into a [`BigRgbaImage`], honoring the target
+/// bound, the frame's alpha, and its color space.
 fn frame_to_rgba(
     frame: &glycin::Frame,
     target_width: i32,
@@ -937,7 +937,7 @@ fn frame_to_rgba(
     }
     .ok_or(BigImageError::InvalidBytePixels)?;
     // The sandboxed path is the one every viewer image takes, so this is where
-    // the colour space has to be carried out of the sandbox with the pixels.
+    // the color space has to be carried out of the sandbox with the pixels.
     image.cicp = super::frame_cicp(frame);
     Ok(image)
 }
@@ -947,7 +947,7 @@ fn frame_to_rgba(
 /// The frame bytes become the backing store of a `Pixbuf` at their real stride
 /// (one copy, no repack), which is scaled to the target; only the small result
 /// is then packed. Packing the full frame and then resizing the packed copy
-/// would hold the full-resolution buffer twice. The frame's colour state
+/// would hold the full-resolution buffer twice. The frame's color state
 /// is carried onto the result so wide-gamut sources are not silently shown sRGB.
 fn frame_to_rgba_scaled(
     frame: &glycin::Frame,
@@ -1047,7 +1047,7 @@ async fn load_frame_sandboxed(
             max_pixels: MAX_SOURCE_PIXELS,
         })?,
     );
-    // A clip is only honoured by our reduce-decoding JPEG loader; any other
+    // A clip is only honored by our reduce-decoding JPEG loader; any other
     // loader would return the whole image scaled and pass it off as the region.
     // Refuse rather than mislead, so the caller keeps the frame it already shows.
     let clip = match clip {
@@ -1101,7 +1101,7 @@ async fn load_frame_sandboxed(
     // whole), and every caller scales a larger frame down to the target held
     // to `max_pixels` above, off the main context. A source within
     // MAX_SOURCE_PIXELS may come back whole; the lifted JPEG cap relies on the
-    // reduce-decoding loader honouring the size asked.
+    // reduce-decoding loader honoring the size asked.
     let frame_cap = if source_cap == MAX_SOURCE_PIXELS {
         max_pixels.max(u64::from(details.width()) * u64::from(details.height()))
     } else {
@@ -1115,8 +1115,8 @@ async fn load_frame_sandboxed(
     let source = super::BigSourceSize {
         natural,
         scalable: is_scalable,
-        // Glycin converts from an ICC profile unless CICP describes the colours.
-        colour_profile: match super::frame_cicp(&frame) {
+        // Glycin converts from an ICC profile unless CICP describes the colors.
+        color_profile: match super::frame_cicp(&frame) {
             Some(cicp) => (cicp.color_primaries, cicp.transfer_characteristics) != (1, 13),
             None => frame
                 .details()

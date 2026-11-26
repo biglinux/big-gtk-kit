@@ -151,7 +151,7 @@ impl BigContextMenu {
         let popover = super::popover_menu(None);
         popover.set_has_arrow(false);
         // A corner at the point asked about, as menus open everywhere else; a
-        // popover is centred on it otherwise. Flipped above it where there is
+        // popover is centered on it otherwise. Flipped above it where there is
         // no room below.
         popover.set_halign(gtk::Align::Start);
         popover.set_parent(host);
@@ -261,7 +261,7 @@ pub fn is_context_menu_key(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType
 ///
 /// `build` runs as the menu opens, with the widget and the point it was asked
 /// at, and returns what to show, or `None` to show nothing, which leaves the
-/// event to the widget. For the keyboard the point is the centre of the
+/// event to the widget. For the keyboard the point is the center of the
 /// focused item inside the widget, a list's row, or of the widget itself.
 pub fn attach_context_menu<F>(widget: &impl IsA<gtk::Widget>, menu: &BigContextMenu, build: F)
 where
@@ -269,7 +269,7 @@ where
 {
     let menu = menu.clone();
     connect_context_menu_request(widget, move |widget, at| {
-        let (x, y) = at.unwrap_or_else(|| focus_centre(widget));
+        let (x, y) = at.unwrap_or_else(|| focus_center(widget));
         let Some(content) = build(widget, x, y) else {
             return false;
         };
@@ -278,8 +278,8 @@ where
     });
 }
 
-/// The centre of the deepest focused descendant of `widget`, in its coordinates.
-fn focus_centre(widget: &gtk::Widget) -> (f64, f64) {
+/// The center of the deepest focused descendant of `widget`, in its coordinates.
+fn focus_center(widget: &gtk::Widget) -> (f64, f64) {
     let mut focus = widget.clone();
     while let Some(child) = focus.focus_child() {
         focus = child;
@@ -288,8 +288,8 @@ fn focus_centre(widget: &gtk::Widget) -> (f64, f64) {
         clippy::cast_precision_loss,
         reason = "widget sizes are small integers"
     )]
-    let centre = gtk::graphene::Point::new(focus.width() as f32 / 2.0, focus.height() as f32 / 2.0);
-    let point = focus.compute_point(widget, &centre).unwrap_or(centre);
+    let center = gtk::graphene::Point::new(focus.width() as f32 / 2.0, focus.height() as f32 / 2.0);
+    let point = focus.compute_point(widget, &center).unwrap_or(center);
     (f64::from(point.x()), f64::from(point.y()))
 }
 

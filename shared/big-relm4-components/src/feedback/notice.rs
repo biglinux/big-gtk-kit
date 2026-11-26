@@ -247,7 +247,7 @@ impl BigNotice {
         self.show(message, None, Tone::Lasting);
     }
 
-    /// Say what was refused or went wrong. It stays, in the warning colour and
+    /// Say what was refused or went wrong. It stays, in the warning color and
     /// with Close, until it is closed or something newer is said.
     pub fn warn(&self, message: &str) {
         self.show(message, None, Tone::Warning);
@@ -396,11 +396,11 @@ enum Tone {
     Passing,
     /// Stays until answered or replaced.
     Lasting,
-    /// Stays, in the warning colour.
+    /// Stays, in the warning color.
     Warning,
 }
 
-/// The warning colour through libadwaita's own `--banner-color`, so the strip
+/// The warning color through libadwaita's own `--banner-color`, so the strip
 /// keeps its shape and its backdrop shade. Once per process and for the whole
 /// display: a dialog or an embedded pane can hold a strip too.
 fn install_notice_css() {

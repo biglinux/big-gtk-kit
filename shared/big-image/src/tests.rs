@@ -100,7 +100,7 @@ fn sandbox_sniffs_svg_without_extension() {
 }
 
 #[test]
-fn named_colour_space_reaches_texture() {
+fn named_color_space_reaches_texture() {
     big_testkit::harness::require_gtk_test(|| {
         let display_p3 = BigCicp {
             color_primaries: 12,
@@ -110,7 +110,7 @@ fn named_colour_space_reaches_texture() {
         };
         assert!(
             color_state_for(display_p3).is_some(),
-            "Display-P3 is a colour space GDK knows"
+            "Display-P3 is a color space GDK knows"
         );
 
         let nonsense = BigCicp {
@@ -121,7 +121,7 @@ fn named_colour_space_reaches_texture() {
         };
         assert!(
             color_state_for(nonsense).is_none(),
-            "an unusable combination must not become a colour state"
+            "an unusable combination must not become a color state"
         );
 
         // Whatever the metadata says, the pixels still reach the screen.
@@ -134,18 +134,18 @@ fn named_colour_space_reaches_texture() {
         };
         assert!(
             rgba_to_texture(&image).is_some(),
-            "a refused colour space must not take the image off the screen"
+            "a refused color space must not take the image off the screen"
         );
         let tagged = BigRgbaImage {
             cicp: Some(display_p3),
             ..image
         };
         let texture = rgba_to_texture(&tagged).expect("a tagged image still builds a texture");
-        let expected = color_state_for(display_p3).expect("Display-P3 builds a colour state");
+        let expected = color_state_for(display_p3).expect("Display-P3 builds a color state");
         assert_eq!(
             texture.color_state(),
             expected,
-            "the texture must carry the colour space the decoder reported"
+            "the texture must carry the color space the decoder reported"
         );
         assert_ne!(
             texture.color_state(),
@@ -277,8 +277,8 @@ fn huge_png_decodes_reduced() {
 }
 
 /// Whether a 2×2 PNG written with `describe` applied to its header decodes
-/// to a frame whose copy leaves a colour description out.
-fn loses_colour_description(name: &str, describe: impl FnOnce(&mut png::Info)) -> bool {
+/// to a frame whose copy leaves a color description out.
+fn loses_color_description(name: &str, describe: impl FnOnce(&mut png::Info)) -> bool {
     let path = std::env::temp_dir().join(format!("big-image-{}-{name}.png", std::process::id()));
     let mut info = png::Info::with_size(2, 2);
     info.color_type = png::ColorType::Rgb;
@@ -298,22 +298,22 @@ fn loses_colour_description(name: &str, describe: impl FnOnce(&mut png::Info)) -
         0,
     );
     let _ = std::fs::remove_file(&path);
-    decoded.expect("decodes").1.colour_profile
+    decoded.expect("decodes").1.color_profile
 }
 
 /// A frame converted from an ICC profile says so: a copy written from it
 /// leaves the profile out.
 #[test]
 fn icc_source_reports_its_profile() {
-    assert!(!loses_colour_description("plain", |_| {}));
-    assert!(loses_colour_description("icc", |info| {
+    assert!(!loses_color_description("plain", |_| {}));
+    assert!(loses_color_description("icc", |info| {
         info.icc_profile = Some(std::borrow::Cow::Borrowed(
             b"not parsed by the test, only carried",
         ));
     }));
 }
 
-/// An sRGB profile changes no colour, so its copy asks nothing.
+/// An sRGB profile changes no color, so its copy asks nothing.
 #[test]
 fn srgb_profile_loses_nothing() {
     // A version 2 profile holding only its description tag.
@@ -326,7 +326,7 @@ fn srgb_profile_loses_nothing() {
     icc.extend_from_slice(b"desc\0\0\0\0");
     icc.extend_from_slice(&(description.len() as u32).to_be_bytes());
     icc.extend_from_slice(description);
-    assert!(!loses_colour_description("srgb-icc", |info| {
+    assert!(!loses_color_description("srgb-icc", |info| {
         info.icc_profile = Some(std::borrow::Cow::Owned(icc));
     }));
 }
@@ -346,7 +346,7 @@ fn cicp_source_reports_its_profile() {
             0,
         );
         let _ = std::fs::remove_file(&path);
-        decoded.expect("decodes").1.colour_profile
+        decoded.expect("decodes").1.color_profile
     };
     assert!(loses(
         "p3.avif",
@@ -358,7 +358,7 @@ fn cicp_source_reports_its_profile() {
     ));
 }
 
-/// A PQ picture keeps its 16 bits and its colour state, at its own size and
+/// A PQ picture keeps its 16 bits and its color state, at its own size and
 /// shrunk. The fixture is a 288×162 lossless 10-bit AVIF, BT.2020 and PQ:
 /// nine 32-pixel bars of the codes `big-compositor/tests/hdr/oracle.py`
 /// sends, encoded by avifenc from a 16-bit PNG with those codes.
@@ -389,7 +389,7 @@ fn pq_texture_keeps_16_bits() {
         let cicp = texture
             .color_state()
             .create_cicp_params()
-            .expect("CICP colour state");
+            .expect("CICP color state");
         assert_eq!((cicp.color_primaries(), cicp.transfer_function()), (9, 16));
         let mut downloader = gdk::TextureDownloader::new(&texture);
         downloader.set_format(gdk::MemoryFormat::R16g16b16);

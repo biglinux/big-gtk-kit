@@ -29,7 +29,7 @@ fn gtk_ready() -> bool {
         announce_ui_skip();
         return false;
     }
-    // GTK records the thread that initialised it and panics on a second one, so
+    // GTK records the thread that initialized it and panics on a second one, so
     // this must be the only `gtk::init` in a test binary. A test that calls it
     // directly wins or loses a race against this thread, and when it wins every
     // UI test in the binary fails with "the GTK harness did not run this test".
@@ -415,7 +415,7 @@ pub fn pump_frame(widget: &impl IsA<gtk::Widget>) -> bool {
     ready
 }
 
-/// The straight RGBA pixel `widget` paints at its centre.
+/// The straight RGBA pixel `widget` paints at its center.
 ///
 /// The widget is rendered alone, through its window's renderer, so what is
 /// behind it does not count. Needs a widget its window has laid out.
@@ -455,7 +455,7 @@ pub fn painted_pixel_at(widget: &impl IsA<gtk::Widget>, x: i32, y: i32) -> [u8; 
         .and_then(|native| native.renderer())
         .expect("a widget in a realized window");
     // The widget's box as the viewport: without it the texture covers only
-    // what was painted, and its centre is not the widget's.
+    // what was painted, and its center is not the widget's.
     let viewport = gtk::graphene::Rect::new(0.0, 0.0, width as f32, height as f32);
     let texture = renderer.render_texture(&node, Some(&viewport));
     let mut downloader = gtk::gdk::TextureDownloader::new(&texture);
@@ -473,7 +473,7 @@ pub fn painted_pixel_at(widget: &impl IsA<gtk::Widget>, x: i32, y: i32) -> [u8; 
 /// `label`.
 ///
 /// The name is the `label` property assistive technology reads: a menu row
-/// GTK names by a `labelled-by` relation to its text has none.
+/// GTK names by a `labeled-by` relation to its text has none.
 #[must_use]
 pub fn has_named_descendant(
     widget: &impl IsA<gtk::Widget>,
@@ -532,9 +532,9 @@ pub fn described_as(widget: &impl IsA<gtk::Widget>, text: &str) -> bool {
     !related && mismatch.is_none()
 }
 
-/// Whether `widget` is labelled by `label` and by no other widget.
+/// Whether `widget` is labeled by `label` and by no other widget.
 #[must_use]
-pub fn labelled_only_by(widget: &impl IsA<gtk::Widget>, label: &impl IsA<gtk::Widget>) -> bool {
+pub fn labeled_only_by(widget: &impl IsA<gtk::Widget>, label: &impl IsA<gtk::Widget>) -> bool {
     let accessible = |widget: &gtk::Widget| -> *mut gtk::ffi::GtkAccessible {
         glib::translate::ToGlibPtr::to_glib_none(widget.upcast_ref::<gtk::Accessible>()).0
     };
@@ -551,7 +551,7 @@ pub fn labelled_only_by(widget: &impl IsA<gtk::Widget>, label: &impl IsA<gtk::Wi
     mismatch.is_none()
 }
 
-/// Whether `row` is labelled by one of its two title labels, as
+/// Whether `row` is labeled by one of its two title labels, as
 /// `big_relm4_components::input::entry_row` builds it, and a screen
 /// reader says its title once.
 #[must_use]
@@ -559,7 +559,7 @@ pub fn named_once(row: &impl IsA<adw::EntryRow>) -> bool {
     let row = row.upcast_ref::<adw::EntryRow>();
     row.list_mnemonic_labels()
         .first()
-        .is_some_and(|title| labelled_only_by(row, title))
+        .is_some_and(|title| labeled_only_by(row, title))
 }
 
 thread_local! {
@@ -645,7 +645,7 @@ where
 ///
 /// A skipped body is reported by libtest as `ok`, so a run that executed none
 /// of them looks exactly like a run that passed all of them. That is how a
-/// green summary gets quoted as evidence for behaviour nobody exercised.
+/// green summary gets quoted as evidence for behavior nobody exercised.
 fn announce_ui_skip() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -737,9 +737,9 @@ mod tests {
         });
     }
 
-    /// A widget that paints only a corner reads as unpainted at its centre.
+    /// A widget that paints only a corner reads as unpainted at its center.
     #[test]
-    fn painted_pixel_samples_widget_centre() {
+    fn painted_pixel_samples_widget_center() {
         require_gtk_test(|| {
             let display = gtk::gdk::Display::default().expect("a display");
             let provider = big_relm4_components::css::provider();

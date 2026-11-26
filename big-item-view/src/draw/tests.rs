@@ -79,8 +79,8 @@ fn a_press_finds_the_star_under_it() {
     );
 }
 
-/// The disc is round, centred on the picture and inside the item's
-/// background, so a round tile's tint never spills into its neighbour.
+/// The disc is round, centered on the picture and inside the item's
+/// background, so a round tile's tint never spills into its neighbor.
 #[test]
 fn picture_disc_circles_the_picture() {
     let geometry = Geometry {
