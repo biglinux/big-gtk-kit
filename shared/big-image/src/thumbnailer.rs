@@ -393,6 +393,21 @@ impl Staging {
 
 impl Drop for Staging {
     fn drop(&mut self) {
+        // A confined command may leave a folder it closed to everyone, which
+        // `remove_dir_all` cannot enter. It has exited by now, so nothing
+        // swaps a folder for a link between the listing and the `chmod`.
+        let mut folders = vec![self.path.clone()];
+        while let Some(folder) = folders.pop() {
+            let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700));
+            let Ok(entries) = std::fs::read_dir(&folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    folders.push(entry.path());
+                }
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }
@@ -438,7 +453,7 @@ fn program_exists(program: &str) -> bool {
     big_os_kit::subprocess::program_on_path(program)
 }
 
-use std::os::unix::fs::DirBuilderExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -599,6 +614,21 @@ pub(crate) mod tests {
         let refused = receiver.recv_timeout(Duration::from_secs(5)) == Ok(false);
         let _ = std::fs::remove_dir_all(&dir);
         refused
+    }
+
+    #[test]
+    fn staging_with_a_closed_folder_is_removed() {
+        let staging = private_staging().expect("staging");
+        let path = staging.path().to_owned();
+        let closed = path.join("closed");
+        std::fs::create_dir_all(closed.join("inner")).expect("folders");
+        std::fs::write(closed.join("inner/page.png"), b"answer").expect("file");
+        std::os::unix::fs::symlink(&closed, path.join("link")).expect("link");
+        std::fs::set_permissions(closed.join("inner"), std::fs::Permissions::from_mode(0o000))
+            .expect("closed");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).expect("closed");
+        drop(staging);
+        assert!(!path.exists());
     }
 
     #[test]
