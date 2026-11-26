@@ -1267,13 +1267,14 @@ mod tests {
         parent_calls_refused(parent, nice);
     }
 
+    /// A raw system call's result, and the error it set when it failed.
+    fn outcome(result: libc::c_long) -> (libc::c_long, Option<i32>) {
+        let error = io::Error::last_os_error().raw_os_error();
+        (result, if result == -1 { error } else { None })
+    }
+
     /// Each call that names `parent` instead of this process is refused.
     fn parent_calls_refused(parent: libc::pid_t, nice: libc::c_long) {
-        /// A raw system call's result, and the error it set when it failed.
-        fn outcome(result: libc::c_long) -> (libc::c_long, Option<i32>) {
-            let error = io::Error::last_os_error().raw_os_error();
-            (result, if result == -1 { error } else { None })
-        }
         let mut limit = libc::rlimit64 {
             rlim_cur: 0,
             rlim_max: 0,
