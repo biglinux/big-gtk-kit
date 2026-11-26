@@ -12,6 +12,7 @@
 //!
 //! Every call runs a process: keep them off a GUI main loop.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::subprocess::{BigSubprocessOutputMode, BigSubprocessSpec};
@@ -95,7 +96,7 @@ fn command() -> Option<&'static str> {
     NET.into_iter().find(|path| Path::new(path).is_file())
 }
 
-fn net(arguments: &[&str]) -> Result<String, Error> {
+fn net(arguments: &[&OsStr]) -> Result<String, Error> {
     let program = command().ok_or(Error::NotInstalled)?;
     let output = BigSubprocessSpec::builder()
         .program(program)
@@ -122,7 +123,7 @@ fn net(arguments: &[&str]) -> Result<String, Error> {
 ///
 /// [`Error::NotInstalled`] without Samba, otherwise why `net` failed.
 pub fn shares() -> Result<Vec<Share>, Error> {
-    net(&["usershare", "info"]).map(|text| parse(&text))
+    net(&["usershare".as_ref(), "info".as_ref()]).map(|text| parse(&text))
 }
 
 /// Share `share.path` as `share.name`; an existing name is replaced, which is
@@ -132,24 +133,27 @@ pub fn shares() -> Result<Vec<Share>, Error> {
 ///
 /// As [`shares`].
 pub fn add(share: &Share) -> Result<(), Error> {
-    let path = share.path.to_string_lossy();
+    // Full control or read: the only two grants written here.
+    let grant = if share.writable {
+        "Everyone:F"
+    } else {
+        "Everyone:R"
+    };
+    let guests = if share.anyone {
+        "guest_ok=y"
+    } else {
+        "guest_ok=n"
+    };
+    // `--` ends `net`'s options: a name or comment may start with `-`.
     net(&[
-        "usershare",
-        "add",
-        &share.name,
-        &path,
-        &share.comment,
-        // Full control or read: the only two grants written here.
-        if share.writable {
-            "Everyone:F"
-        } else {
-            "Everyone:R"
-        },
-        if share.anyone {
-            "guest_ok=y"
-        } else {
-            "guest_ok=n"
-        },
+        "usershare".as_ref(),
+        "add".as_ref(),
+        "--".as_ref(),
+        share.name.as_ref(),
+        share.path.as_os_str(),
+        share.comment.as_ref(),
+        grant.as_ref(),
+        guests.as_ref(),
     ])
     .map(drop)
 }
@@ -160,7 +164,13 @@ pub fn add(share: &Share) -> Result<(), Error> {
 ///
 /// As [`shares`].
 pub fn remove(name: &str) -> Result<(), Error> {
-    net(&["usershare", "delete", name]).map(drop)
+    net(&[
+        "usershare".as_ref(),
+        "delete".as_ref(),
+        "--".as_ref(),
+        name.as_ref(),
+    ])
+    .map(drop)
 }
 
 /// `net usershare info`: one block per share.
@@ -194,9 +204,14 @@ fn parse(text: &str) -> Vec<Share> {
         match key {
             "path" => here.path = PathBuf::from(value),
             "comment" => here.comment = value.to_owned(),
-            // Anything short of full control, a hand-built list included,
-            // reads as read-only: that is all `add` can write back.
-            "usershare_acl" => here.writable = value.contains(":F"),
+            // Only full control for everyone reads as writable: a list that
+            // grants it to one person would come back from `add` granting it
+            // to all.
+            "usershare_acl" => {
+                here.writable = value
+                    .split(',')
+                    .any(|grant| grant.eq_ignore_ascii_case("Everyone:F"));
+            }
             "guest_ok" => here.anyone = value == "y",
             _ => {}
         }
@@ -288,6 +303,19 @@ mod tests {
                 anyone: false,
             }]
         );
+    }
+
+    /// `add` writes one grant for everyone, so full control for one person
+    /// must not read as full control for all.
+    #[test]
+    fn one_persons_full_control_reads_back_read_only() {
+        let acl = |grants: &str| {
+            parse(&format!("[Docs]\npath=/srv/docs\nusershare_acl={grants}\n"))[0].writable
+        };
+        assert!(!acl("alice:F,Everyone:R,"));
+        assert!(!acl("BUILTIN\\Users:F,"));
+        assert!(acl("Everyone:F,"));
+        assert!(acl("alice:R,everyone:f,"));
     }
 
     /// A parser that only pushes on the next header drops the last share.
