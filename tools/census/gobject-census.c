@@ -20,11 +20,11 @@
 // class, and the class of every initialized type is known, so the process's own
 // writable anonymous memory is scanned for those pointers.
 //
-// A freed block keeps the class pointer it had, so a GObject is only counted when
-// the reference count after the pointer is plausible (1..1e6; a finalized object
-// leaves 0 there) and, when the allocator is glibc's, when the pointer starts an
-// instance at the right place in a malloc block that is in use. The last test
-// exists because copies of a class pointer outlive their instances: a dialog
+// GLib clears a finalized instance's class pointer, but copies of a class
+// pointer outlive their instances, so a GObject is only counted when the
+// reference count after the pointer is plausible (1..1e6) and, when the allocator
+// is glibc's, when the pointer starts an instance at the right place in a malloc
+// block that is in use. The last test exists for those copies: a dialog
 // opened and freed six times left six records holding its class pointer and
 // stack addresses, and they were counted as six live dialogs. With another
 // allocator that test is off and the census says so in its first line. Counts are
