@@ -758,6 +758,48 @@ mod tests {
         assert_eq!(uris(portal::response(&().to_variant())), None, "malformed");
     }
 
+    /// A connection of its own on the session bus serving a `FileChooser`
+    /// that takes `OpenFile`, sets `asked`, and never sends its response.
+    fn portal_that_never_answers(asked: &Rc<Cell<bool>>) -> gio::DBusConnection {
+        let address =
+            gio::dbus_address_get_for_bus_sync(gio::BusType::Session, gio::Cancellable::NONE)
+                .expect("a session bus");
+        let portal = gio::DBusConnection::for_address_sync(
+            &address,
+            gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+            None,
+            gio::Cancellable::NONE,
+        )
+        .expect("a connection of the portal's own");
+        let node = gio::DBusNodeInfo::for_xml(
+            r#"<node><interface name="org.freedesktop.portal.FileChooser">
+              <method name="OpenFile">
+                <arg type="s" direction="in"/><arg type="s" direction="in"/>
+                <arg type="a{sv}" direction="in"/><arg type="o" direction="out"/>
+              </method>
+            </interface></node>"#,
+        )
+        .expect("valid introspection");
+        let interface = node
+            .lookup_interface("org.freedesktop.portal.FileChooser")
+            .expect("declared");
+        let taken = Rc::clone(asked);
+        portal
+            .register_object("/org/freedesktop/portal/desktop", &interface)
+            .method_call(move |_, _, _, _, _, _, invocation| {
+                taken.set(true);
+                let handle = glib::variant::ObjectPath::try_from(
+                    "/org/freedesktop/portal/desktop/request/unanswered",
+                )
+                .expect("an object path");
+                invocation.return_value(Some(&(handle,).to_variant()));
+            })
+            .build()
+            .expect("registered");
+        portal
+    }
+
     /// A portal that takes the request and leaves the bus without answering
     /// hands it to the toolkit's dialog rather than leaving it waiting.
     #[test]
@@ -775,45 +817,8 @@ mod tests {
         };
         context
             .with_thread_default(|| {
-                let address = gio::dbus_address_get_for_bus_sync(
-                    gio::BusType::Session,
-                    gio::Cancellable::NONE,
-                )
-                .expect("a session bus");
-                let portal = gio::DBusConnection::for_address_sync(
-                    &address,
-                    gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
-                        | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
-                    None,
-                    gio::Cancellable::NONE,
-                )
-                .expect("a connection of the portal's own");
-                let node = gio::DBusNodeInfo::for_xml(
-                    r#"<node><interface name="org.freedesktop.portal.FileChooser">
-                      <method name="OpenFile">
-                        <arg type="s" direction="in"/><arg type="s" direction="in"/>
-                        <arg type="a{sv}" direction="in"/><arg type="o" direction="out"/>
-                      </method>
-                    </interface></node>"#,
-                )
-                .expect("valid introspection");
-                let interface = node
-                    .lookup_interface("org.freedesktop.portal.FileChooser")
-                    .expect("declared");
                 let asked = Rc::new(Cell::new(false));
-                let taken = Rc::clone(&asked);
-                portal
-                    .register_object("/org/freedesktop/portal/desktop", &interface)
-                    .method_call(move |_, _, _, _, _, _, invocation| {
-                        taken.set(true);
-                        let handle = glib::variant::ObjectPath::try_from(
-                            "/org/freedesktop/portal/desktop/request/unanswered",
-                        )
-                        .expect("an object path");
-                        invocation.return_value(Some(&(handle,).to_variant()));
-                    })
-                    .build()
-                    .expect("registered");
+                let portal = portal_that_never_answers(&asked);
                 let owned = Rc::new(Cell::new(None));
                 let (acquired, lost) = (Rc::clone(&owned), Rc::clone(&owned));
                 let owner = gio::bus_own_name_on_connection(

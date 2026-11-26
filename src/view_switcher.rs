@@ -64,7 +64,7 @@ mod tests {
     use crate::testing::{init, pump, watch};
 
     #[test]
-    fn icon_toggle_is_named_by_a_title_with_markup_characters() {
+    fn markup_title_names_icon_toggle() {
         big_testkit::harness::require_gtk_test(|| {
             adw::init().expect("libadwaita");
             let stack = gtk::Stack::new();

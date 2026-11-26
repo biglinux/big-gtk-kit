@@ -154,7 +154,7 @@ mod tests {
 
     #[gtk::test]
     #[ignore = "needs a display"]
-    fn a_kept_breakpoint_has_no_handler_left_on_its_bin() {
+    fn kept_breakpoint_leaves_no_handler() {
         init();
         let window = adw::Window::new();
         let condition = adw::BreakpointCondition::parse("max-width: 500sp").expect("valid");

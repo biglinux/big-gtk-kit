@@ -478,11 +478,9 @@ pub(crate) fn install_css() {
     crate::css::install(CSS, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION - 1);
 }
 
-/// Show `card` beside `row` on `layer`, joined to it by `bridge`: on the
-/// row's end side, or its other side when only that one has room, else below
-/// the row without the bridge, narrowed to the overlay; held inside the
-/// overlay either way. `false`, and nothing shown, when the row is not on the
-/// overlay.
+/// Show `card` beside `row` on `layer`, joined by `bridge`, on whichever side
+/// has room, else below the row without the bridge, always inside the
+/// overlay; `false`, and nothing shown, when the row is not on the overlay.
 pub(crate) fn place_beside(
     layer: &gtk::Overlay,
     row: &gtk::Widget,
@@ -719,7 +717,7 @@ mod tests {
     /// A row as wide as a narrow overlay has no room on either side: the
     /// card opens below it, inside the overlay.
     #[test]
-    fn card_below_a_row_with_no_room_beside() {
+    fn cramped_card_goes_below() {
         big_testkit::harness::require_gtk_test(|| {
             let mut fixture = Fixture::new();
             let layer = fixture
