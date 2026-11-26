@@ -41,6 +41,12 @@ pub unsafe fn activate() {
 ///
 /// As [`activate`].
 pub unsafe fn activate_with(loader: &Path) {
+    // glycin then reads that directory alone and ignores the ones routed here,
+    // so no type is claimed: the size cap is lifted only for our loader.
+    // test-seam: allow read to match glycin, which takes this directory alone
+    if std::env::var_os("GLYCIN_DATA_DIR").is_some() {
+        return;
+    }
     // A person's own loader for a type comes before any system directory and
     // wins; the size cap is lifted only for ours, so leave theirs alone.
     let own = gtk::glib::user_data_dir().join(CONF_D);
@@ -196,4 +202,44 @@ fn find_loader() -> Option<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .find(|path| path.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    /// With `GLYCIN_DATA_DIR` set glycin reads that directory alone, so no type
+    /// counts as ours and the pixel cap stays; without it JPEG is routed. Each
+    /// case runs in a child, the only thread that touches its environment.
+    #[test]
+    fn glycin_data_dir_routes_nothing() {
+        const CHILD: &str = "BIG_IMAGE_CHILD_ROUTING";
+        if let Some(expected) = std::env::var_os(CHILD) {
+            let loader = std::env::current_exe().expect("test binary");
+            // SAFETY: the child runs this one test before GLib reads its data
+            // directories, on the only thread that touches the environment.
+            unsafe { super::activate_with(&loader) };
+            assert_eq!(super::large_jpeg_source(), expected == "routed");
+            return;
+        }
+        let nowhere =
+            std::env::temp_dir().join(format!("big-image-routing-{}", std::process::id()));
+        for (glycin_data_dir, expected) in [(None, "routed"), (Some(&nowhere), "unrouted")] {
+            let mut child = big_os_kit::subprocess::BigSubprocessSpec::builder()
+                .program(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "jpeg_loader::tests::glycin_data_dir_routes_nothing",
+                    "--quiet",
+                ])
+                .env(CHILD, expected);
+            if let Some(directory) = glycin_data_dir {
+                child = child.env("GLYCIN_DATA_DIR", directory);
+            }
+            let out = child.build().run().expect("child runs");
+            assert!(
+                out.status.success() && out.stdout_lossy().contains("1 passed"),
+                "{expected}: {}",
+                out.stdout_lossy()
+            );
+        }
+    }
 }
