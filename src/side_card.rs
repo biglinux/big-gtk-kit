@@ -479,8 +479,9 @@ pub(crate) fn install_css() {
 }
 
 /// Show `card` beside `row` on `layer`, joined to it by `bridge`: on the
-/// row's end side, or its other side when only that one has room, and held
-/// inside the overlay. `false`, and nothing shown, when the row is not on the
+/// row's end side, or its other side when only that one has room, else below
+/// the row without the bridge, narrowed to the overlay; held inside the
+/// overlay either way. `false`, and nothing shown, when the row is not on the
 /// overlay.
 pub(crate) fn place_beside(
     layer: &gtk::Overlay,
@@ -495,9 +496,6 @@ pub(crate) fn place_beside(
     let (width, height) = (bounds.width() as i32, bounds.height() as i32);
     // Hidden, a card would measure 0.
     card.set_visible(true);
-    let (_, card_width, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
-    let (_, card_height, _, _) = card.measure(gtk::Orientation::Vertical, card_width);
-    let top = y.min(layer.height() - card_height - GAP).max(0);
     // Margins count from the start edge, which is the right one in a
     // right-to-left layout.
     let rtl = layer.direction() == gtk::TextDirection::Rtl;
@@ -508,18 +506,40 @@ pub(crate) fn place_beside(
             left
         }
     };
+    let (_, natural_width, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
     let right = x + width + GAP;
-    let left = x - GAP - card_width;
-    let fits = |card_left: i32| card_left >= GAP && card_left + card_width <= layer.width() - GAP;
+    let left = x - GAP - natural_width;
+    let fits =
+        |card_left: i32| card_left >= GAP && card_left + natural_width <= layer.width() - GAP;
+    card.remove_css_class("joined-left");
+    card.remove_css_class("joined-right");
+    if !fits(right) && !fits(left) {
+        // The end margin keeps the overlay from giving the card more than
+        // the room left of it.
+        let card_width = natural_width.min(layer.width() - 2 * GAP);
+        let (_, card_height, _, _) = card.measure(gtk::Orientation::Vertical, card_width);
+        let card_left = x.min(layer.width() - GAP - card_width).max(GAP);
+        card.set_margin_start(from_start(card_left, card_width));
+        card.set_margin_end(GAP);
+        card.set_margin_top(
+            (y + height + GAP)
+                .min(layer.height() - card_height - GAP)
+                .max(0),
+        );
+        bridge.set_visible(false);
+        return true;
+    }
+    let card_width = natural_width;
+    let (_, card_height, _, _) = card.measure(gtk::Orientation::Vertical, card_width);
+    let top = y.min(layer.height() - card_height - GAP).max(0);
     let on_right = if rtl {
         !fits(left) && fits(right)
     } else {
         fits(right) || !fits(left)
     };
     card.set_margin_start(from_start(if on_right { right } else { left }, card_width));
+    card.set_margin_end(0);
     card.set_margin_top(top);
-    card.remove_css_class("joined-left");
-    card.remove_css_class("joined-right");
     if top == y {
         card.add_css_class(if on_right {
             "joined-left"
@@ -692,6 +712,46 @@ mod tests {
                 .expect("the row's bounds");
             assert!(card.x() >= 0.0, "{card:?}");
             assert!(card.x() + card.width() <= row.x(), "{card:?} over {row:?}");
+            fixture.window.destroy();
+        });
+    }
+
+    /// A row as wide as a narrow overlay has no room on either side: the
+    /// card opens below it, inside the overlay.
+    #[test]
+    fn card_below_a_row_with_no_room_beside() {
+        big_testkit::harness::require_gtk_test(|| {
+            let mut fixture = Fixture::new();
+            let layer = fixture
+                .row
+                .row
+                .ancestor(gtk::Overlay::static_type())
+                .expect("the layer");
+            layer.set_halign(gtk::Align::Start);
+            layer.set_size_request(360, -1);
+            assert!(big_testkit::harness::pump_frame(&fixture.window));
+            fixture.cards.handle(CardEvent::Activated(0));
+            assert!(big_testkit::harness::pump_frame(&fixture.window));
+            let card = fixture.cards.cards[0]
+                .compute_bounds(&layer)
+                .expect("the card's bounds");
+            let row = fixture
+                .row
+                .row
+                .compute_bounds(&layer)
+                .expect("the row's bounds");
+            assert!(card.x() >= 0.0, "{card:?}");
+            assert!(
+                card.x() + card.width() <= layer.width() as f32,
+                "{card:?} past {} px",
+                layer.width()
+            );
+            assert!(card.y() >= row.y() + row.height(), "{card:?} over {row:?}");
+            assert!(
+                fixture.tiles[1].is_drawable()
+                    && fixture.focus() == fixture.tiles[1].clone().upcast::<gtk::Widget>(),
+                "the focus on a choice in sight"
+            );
             fixture.window.destroy();
         });
     }
