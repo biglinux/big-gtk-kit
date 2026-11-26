@@ -614,3 +614,45 @@ fn lock_file_private_and_singly_linked() {
     );
     fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A tree a confined program left: folders closed to everyone, a chain nested
+/// past the kernel's 4096-byte path, and a link to a folder outside, which
+/// keeps its own mode and content.
+#[test]
+fn remove_tree_takes_hostile_folders() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = file_io_test_dir("remove-tree");
+    let outside = file_io_test_dir("remove-tree-outside");
+    fs::write(outside.join("kept"), b"kept").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o500)).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+    let long = "d".repeat(200);
+    let mut deep = std::fs::File::open(&root).unwrap();
+    for _ in 0..25 {
+        rustix::fs::mkdirat(&deep, long.as_str(), Mode::RWXU).unwrap();
+        deep = rustix::fs::openat(
+            &deep,
+            long.as_str(),
+            OFlags::RDONLY | OFlags::DIRECTORY,
+            Mode::empty(),
+        )
+        .unwrap()
+        .into();
+    }
+    rustix::fs::mkdirat(&deep, "closed", Mode::RWXU).unwrap();
+    rustix::fs::chmodat(&deep, "closed", Mode::empty(), AtFlags::empty()).unwrap();
+    drop(deep);
+    fs::create_dir(root.join("shut")).unwrap();
+    fs::write(root.join("shut/page.png"), b"page").unwrap();
+    fs::set_permissions(root.join("shut"), fs::Permissions::from_mode(0o000)).unwrap();
+
+    let removed = remove_tree(&root);
+    let left = root.exists();
+    let outside_mode = fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+    let kept = fs::read(outside.join("kept")).unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::remove_dir_all(&outside).unwrap();
+    removed.unwrap();
+    assert!(!left);
+    assert_eq!((outside_mode, kept.as_slice()), (0o500, b"kept".as_slice()));
+}

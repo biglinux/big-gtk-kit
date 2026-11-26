@@ -393,22 +393,9 @@ impl Staging {
 
 impl Drop for Staging {
     fn drop(&mut self) {
-        // A confined command may leave a folder it closed to everyone, which
-        // `remove_dir_all` cannot enter. It has exited by now, so nothing
-        // swaps a folder for a link between the listing and the `chmod`.
-        let mut folders = vec![self.path.clone()];
-        while let Some(folder) = folders.pop() {
-            let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700));
-            let Ok(entries) = std::fs::read_dir(&folder) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                    folders.push(entry.path());
-                }
-            }
-        }
-        let _ = std::fs::remove_dir_all(&self.path);
+        // The confined command may leave folders closed to everyone or nested
+        // past the kernel's path length.
+        let _ = big_os_kit::file_io::remove_tree(&self.path);
     }
 }
 
@@ -453,11 +440,12 @@ fn program_exists(program: &str) -> bool {
     big_os_kit::subprocess::program_on_path(program)
 }
 
-use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+use std::os::unix::fs::DirBuilderExt as _;
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
 
     const PAPERS: &str = "[Thumbnailer Entry]\n\
         TryExec=/usr/bin/true\n\

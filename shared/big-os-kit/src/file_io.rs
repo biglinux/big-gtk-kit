@@ -18,7 +18,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rustix::fs::{Advice, fadvise, listxattr_query};
+use rustix::fs::{Advice, AtFlags, Mode, OFlags, fadvise, listxattr_query};
 
 /// Open a regular file for verification without following a final symlink.
 ///
@@ -143,8 +143,103 @@ impl OwnedPrivateDirectory {
 
 impl Drop for OwnedPrivateDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        let _ = remove_tree(&self.path);
     }
+}
+
+/// Remove the folder `path` and everything in it, for a folder a confined
+/// program wrote: each folder is opened from its parent's descriptor without
+/// following a link and given mode `0700` first, so a folder it closed to
+/// everyone, or nested past the kernel's path length, still goes. Nothing
+/// else may change the tree meanwhile: the walk climbs back through `..`.
+///
+/// # Errors
+///
+/// The first folder that cannot be opened, made the owner's or removed, or
+/// an entry that cannot be unlinked.
+pub fn remove_tree(path: &Path) -> std::io::Result<()> {
+    /// A folder being emptied: its name in its parent, and the folders in it
+    /// still to remove.
+    struct Level {
+        name: Option<CString>,
+        folders: Vec<CString>,
+    }
+    let mut current = open_owned_folder(rustix::fs::CWD, path)?;
+    let mut levels = vec![Level {
+        name: None,
+        folders: clear_files(&current)?,
+    }];
+    while let Some(level) = levels.last_mut() {
+        if let Some(child) = level.folders.pop() {
+            current = open_owned_folder(&current, child.as_c_str())?;
+            let folders = clear_files(&current)?;
+            levels.push(Level {
+                name: Some(child),
+                folders,
+            });
+        } else if let Some(Level {
+            name: Some(name), ..
+        }) = levels.pop()
+        {
+            current = rustix::fs::openat(
+                &current,
+                c"..",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            rustix::fs::unlinkat(&current, name.as_c_str(), AtFlags::REMOVEDIR)?;
+        }
+    }
+    drop(current);
+    fs::remove_dir(path)
+}
+
+/// Open the folder `name` under `parent` for listing, as its owner's with
+/// mode `0700`; a link is refused.
+fn open_owned_folder<Fd: std::os::fd::AsFd, P: rustix::path::Arg + Copy>(
+    parent: Fd,
+    name: P,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    let parent = parent.as_fd();
+    let place = rustix::fs::openat(
+        parent,
+        name,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let named = format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&place));
+    rustix::fs::chmod(named.as_str(), Mode::RWXU)?;
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?)
+}
+
+/// Unlink every entry of `folder` that is not a folder, links included, and
+/// return the names of the folders in it.
+fn clear_files(folder: &std::os::fd::OwnedFd) -> std::io::Result<Vec<CString>> {
+    let mut folders = Vec::new();
+    for entry in rustix::fs::Dir::read_from(folder)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if matches!(name.to_bytes(), b"." | b"..") {
+            continue;
+        }
+        let kind = match entry.file_type() {
+            rustix::fs::FileType::Unknown => rustix::fs::FileType::from_raw_mode(
+                rustix::fs::statat(folder, name, AtFlags::SYMLINK_NOFOLLOW)?.st_mode,
+            ),
+            known => known,
+        };
+        if kind == rustix::fs::FileType::Directory {
+            folders.push(name.to_owned());
+        } else {
+            rustix::fs::unlinkat(folder, name, AtFlags::empty())?;
+        }
+    }
+    Ok(folders)
 }
 
 /// Remove the directories `{prefix}-{pid}-{sequence}` in `parent` whose process
