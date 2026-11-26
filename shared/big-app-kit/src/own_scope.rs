@@ -75,9 +75,17 @@ pub fn launch(
     files: &[gio::File],
     token: Option<&str>,
     started: Option<Started>,
+    failed: Option<Failed>,
 ) -> Result<(), glib::Error> {
     if prefers_non_default_gpu(application) {
-        return launch_on(application, files, Renderer::NonDefaultGpu, token, started);
+        return launch_on(
+            application,
+            files,
+            Renderer::NonDefaultGpu,
+            token,
+            started,
+            failed,
+        );
     }
     let accessible = with_page_accessibility(application);
     let application = accessible.as_ref().unwrap_or(application);
@@ -214,7 +222,8 @@ const SOFTWARE_RENDERING: [(&str, &str); 8] = [
 /// integrated one; the non-default GPU is turned on first where
 /// `big-dgpu-power` has it off. That asks the system bus first; a failure of
 /// that lookup shows in the log only, and the program starts as [`launch`]
-/// would start an entry without a preference.
+/// would start an entry without a preference. Such a launch answers before
+/// the program starts: `failed` hears why it could not.
 ///
 /// # Errors
 ///
@@ -225,6 +234,7 @@ pub fn launch_on(
     renderer: Renderer,
     token: Option<&str>,
     started: Option<Started>,
+    failed: Option<Failed>,
 ) -> Result<(), glib::Error> {
     let application = &with_page_accessibility(application).unwrap_or_else(|| application.clone());
     let context = launch_context(renderer, token, started);
@@ -239,6 +249,9 @@ pub fn launch_on(
             }
             if let Err(error) = start(&application, &files, context.as_ref()) {
                 log::warn!("cannot start {}: {error}", application.display_name());
+                if let Some(failed) = failed {
+                    failed(error);
+                }
             }
         });
         return Ok(());
@@ -479,6 +492,10 @@ fn set_variables(
 
 /// What is told the process of each program a launch starts.
 pub type Started = Box<dyn Fn(u32)>;
+
+/// What is told why a launch that answered before starting, as one on the
+/// dedicated GPU does, could not start its program.
+pub type Failed = Box<dyn FnOnce(glib::Error)>;
 
 /// Move whatever `context` spawns into a scope of its own, and tell `started`
 /// its process.

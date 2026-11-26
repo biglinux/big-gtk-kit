@@ -29,7 +29,7 @@ fn given_token_reaches_program() {
         gio::AppInfoCreateFlags::NONE,
     )
     .expect("an entry");
-    launch(&program, &[], Some("press-token"), None).expect("started");
+    launch(&program, &[], Some("press-token"), None, None).expect("started");
     let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !seen.exists() && std::time::Instant::now() < until {
         glib::MainContext::default().iteration(false);
@@ -344,7 +344,54 @@ fn entry_without_exec_is_refused() {
     .unwrap();
     let application = big_relm4_components::desktop_entry::app_info_from_keyfile(&keys)
         .expect("GIO keeps an entry without Exec");
-    assert!(launch(&application, &[], None, None).is_err());
+    assert!(launch(&application, &[], None, None, None).is_err());
+}
+
+/// A launch on a GPU answers before its program starts, so a program that
+/// cannot start is told afterwards, not only logged.
+#[test]
+fn gpu_launch_reports_a_failed_start() {
+    use std::os::unix::fs::PermissionsExt as _;
+    // GIO takes an entry only while its program exists: it goes before the
+    // launch, which then cannot start it.
+    let dir = glib::mkdtemp(std::env::temp_dir().join("big-app-kit-failed-XXXXXX"))
+        .expect("temporary directory");
+    let program = dir.join("gone");
+    std::fs::write(&program, "#!/bin/sh\n").expect("program written");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
+        .expect("program made runnable");
+    let keys = glib::KeyFile::new();
+    keys.load_from_data(
+        &format!(
+            "[Desktop Entry]\nType=Application\nName=Gone\nExec={}\n",
+            program.display()
+        ),
+        glib::KeyFileFlags::NONE,
+    )
+    .unwrap();
+    let application =
+        big_relm4_components::desktop_entry::app_info_from_keyfile(&keys).expect("an entry");
+    std::fs::remove_dir_all(&dir).expect("temporary directory removed");
+    let failure = std::rc::Rc::new(std::cell::Cell::new(false));
+    let told = std::rc::Rc::clone(&failure);
+    let answered = big_testkit::harness::on_test_context(|context| {
+        let answered = launch_on(
+            &application,
+            &[],
+            Renderer::DefaultGpu,
+            None,
+            None,
+            Some(Box::new(move |_| told.set(true))),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !failure.get() && std::time::Instant::now() < deadline {
+            context.iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        answered
+    });
+    assert!(answered.is_ok());
+    assert!(failure.get(), "the failed start was not reported");
 }
 
 #[test]
