@@ -516,14 +516,21 @@ pub(crate) fn place_beside(
         // the room left of it.
         let card_width = natural_width.min(layer.width() - 2 * GAP);
         let (_, card_height, _, _) = card.measure(gtk::Orientation::Vertical, card_width);
-        let card_left = x.min(layer.width() - GAP - card_width).max(GAP);
+        // Lined up with the row's start edge, below the row, else above it.
+        let aligned = if rtl { x + width - card_width } else { x };
+        let card_left = aligned.min(layer.width() - GAP - card_width).max(GAP);
         card.set_margin_start(from_start(card_left, card_width));
         card.set_margin_end(GAP);
-        card.set_margin_top(
-            (y + height + GAP)
-                .min(layer.height() - card_height - GAP)
-                .max(0),
-        );
+        let below = y + height + GAP;
+        let above = y - GAP - card_height;
+        let card_top = if below + card_height <= layer.height() - GAP {
+            below
+        } else if above >= GAP {
+            above
+        } else {
+            below.min(layer.height() - card_height - GAP).max(0)
+        };
+        card.set_margin_top(card_top);
         bridge.set_visible(false);
         return true;
     }
@@ -750,6 +757,40 @@ mod tests {
                     && fixture.focus() == fixture.tiles[1].clone().upcast::<gtk::Widget>(),
                 "the focus on a choice in sight"
             );
+            fixture.window.destroy();
+        });
+    }
+
+    /// A cramped row at the foot of the overlay opens its card above it.
+    #[test]
+    fn cramped_low_card_goes_above() {
+        big_testkit::harness::require_gtk_test(|| {
+            let mut fixture = Fixture::new();
+            let layer = fixture
+                .row
+                .row
+                .ancestor(gtk::Overlay::static_type())
+                .expect("the layer");
+            layer.set_halign(gtk::Align::Start);
+            layer.set_size_request(360, -1);
+            fixture
+                .row
+                .row
+                .parent()
+                .expect("the list")
+                .set_valign(gtk::Align::End);
+            assert!(big_testkit::harness::pump_frame(&fixture.window));
+            fixture.cards.handle(CardEvent::Activated(0));
+            assert!(big_testkit::harness::pump_frame(&fixture.window));
+            let card = fixture.cards.cards[0]
+                .compute_bounds(&layer)
+                .expect("the card's bounds");
+            let row = fixture
+                .row
+                .row
+                .compute_bounds(&layer)
+                .expect("the row's bounds");
+            assert!(card.y() + card.height() <= row.y(), "{card:?} over {row:?}");
             fixture.window.destroy();
         });
     }
