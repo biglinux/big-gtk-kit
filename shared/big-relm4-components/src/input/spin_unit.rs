@@ -97,11 +97,7 @@ pub fn install_spin_unit(spin: &gtk::SpinButton, unit: BigSpinUnit) {
         spin.set_text(&unit.display(spin.value()));
         gtk::glib::Propagation::Stop
     });
-    // Text that is not a number keeps the value it had: reporting a failed
-    // conversion makes the control jump to its maximum instead.
-    spin.connect_input(move |spin| {
-        Some(Ok(unit.parse(&spin.text()).unwrap_or_else(|| spin.value())))
-    });
+    spin.connect_input(move |spin| Some(Ok(read_back(unit, &spin.text(), spin.value()))));
     // Writing the text directly, rather than asking for an update, keeps the
     // field from reading its own raw number back as if it were in this unit.
     spin.set_text(&unit.display(spin.value()));
@@ -121,8 +117,20 @@ pub fn install_spin_row_unit(row: &adw::SpinRow, unit: BigSpinUnit) {
         row.set_text(&unit.display(row.value()));
         true
     });
-    row.connect_input(move |row| Some(Ok(unit.parse(&row.text()).unwrap_or_else(|| row.value()))));
+    row.connect_input(move |row| Some(Ok(read_back(unit, &row.text(), row.value()))));
     row.set_text(&unit.display(row.value()));
+}
+
+/// The value a unit field's `text` stands for. The text the field wrote for
+/// `value` keeps it, rounding and all, so `1.5 MB` shown as `2 MB` survives
+/// leaving the field and a half step still moves. Text that is not a number
+/// keeps it too: reporting a failed conversion makes the control jump to its
+/// maximum instead.
+fn read_back(unit: BigSpinUnit, text: &str, value: f64) -> f64 {
+    if text == unit.display(value) {
+        return value;
+    }
+    unit.parse(text).unwrap_or(value)
 }
 
 #[cfg(test)]
@@ -149,5 +157,49 @@ mod tests {
         assert_eq!(BigSpinUnit::Megabytes.parse("20"), Some(TWENTY_MEGABYTES));
         assert_eq!(BigSpinUnit::Percent.parse("1,5"), Some(1.5));
         assert_eq!(BigSpinUnit::Percent.parse("nada"), None);
+    }
+
+    /// A value the field shows rounded is kept when the field is read back,
+    /// and a step smaller than the unit still moves it.
+    #[test]
+    fn rounded_value_survives_read_back() {
+        big_testkit::harness::require_gtk_test(|| {
+            const MEGABYTE: f64 = 1024.0 * 1024.0;
+            let spin = gtk::SpinButton::new(
+                Some(&gtk::Adjustment::new(
+                    1.5 * MEGABYTE,
+                    1024.0,
+                    100.0 * MEGABYTE,
+                    MEGABYTE,
+                    MEGABYTE,
+                    0.0,
+                )),
+                1.0,
+                0,
+            );
+            install_spin_unit(&spin, BigSpinUnit::Megabytes);
+            assert_eq!(spin.text(), "2 MB");
+            spin.update();
+            assert_eq!(spin.value(), 1.5 * MEGABYTE);
+            spin.set_value(1024.0);
+            spin.update();
+            assert_eq!(spin.value(), 1024.0);
+            spin.set_text("3");
+            spin.update();
+            assert_eq!(spin.value(), 3.0 * MEGABYTE, "typed text is read");
+
+            let row = adw::SpinRow::new(
+                Some(&gtk::Adjustment::new(150.0, 0.0, 200.0, 0.5, 10.0, 0.0)),
+                1.0,
+                0,
+            );
+            install_spin_row_unit(&row, BigSpinUnit::Percent);
+            for _ in 0..3 {
+                row.update();
+                row.set_value(row.value() + 0.5);
+            }
+            row.update();
+            assert_eq!(row.value(), 151.5);
+        });
     }
 }
