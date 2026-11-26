@@ -22,7 +22,7 @@ use header_config::CurlRequestConfig;
 pub use header_config::validate_header_name;
 
 const CURL: &str = "curl";
-const USER_AGENT: &str = "BigLinuxRustApp/0.1 (https://github.com/biglinux/big)";
+const USER_AGENT: &str = "BigLinuxRustApp/0.1";
 /// Browser-like user agent for sites that reject generic clients.
 pub(crate) const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0";
