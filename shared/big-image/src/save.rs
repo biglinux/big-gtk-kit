@@ -669,8 +669,12 @@ mod tests {
 
     #[test]
     fn malformed_buffer_touches_no_file() {
-        let target = std::env::temp_dir().join("big-image-save-refused.png");
-        let _ = std::fs::remove_file(&target);
+        let folder = std::env::temp_dir().join(format!(
+            "big-image-save-refused-{}",
+            gtk::glib::uuid_string_random()
+        ));
+        std::fs::create_dir_all(&folder).expect("test directory");
+        let target = folder.join("refused.png");
         let broken = BigRgbaImage {
             rgba: vec![0; 3],
             width: 2,
@@ -678,8 +682,11 @@ mod tests {
             cicp: None,
             opaque: false,
         };
-        assert!(save_rgba(&broken, &target).is_err());
-        assert!(!target.exists(), "a refused save leaves no partial file");
+        let refused = save_rgba(&broken, &target).is_err();
+        let left = std::fs::read_dir(&folder).expect("listed").count();
+        std::fs::remove_dir_all(&folder).expect("test directory removed");
+        assert!(refused);
+        assert_eq!(left, 0, "a refused save leaves no partial file");
     }
 
     /// Saving over a picture keeps what describes it, its tags here, and a

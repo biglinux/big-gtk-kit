@@ -381,10 +381,15 @@ mod tests {
             opaque: false,
         };
         assert!(writer.push(&broken, Duration::from_millis(50)).is_err());
-        let destination = std::env::temp_dir().join("big-image-empty-animation.gif");
-        let _ = std::fs::remove_file(&destination);
-        assert!(writer.finish(&destination).is_err(), "no frame, no file");
-        assert!(!destination.exists());
+        let directory =
+            std::env::temp_dir().join(format!("big-image-empty-animation-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("test directory");
+        let destination = directory.join("empty.gif");
+        let result = writer.finish(&destination);
+        let written = destination.exists();
+        std::fs::remove_dir_all(&directory).expect("test directory removed");
+        assert!(result.is_err(), "no frame, no file");
+        assert!(!written);
     }
 
     /// The encoder reads the frames it was handed and nothing else of the
