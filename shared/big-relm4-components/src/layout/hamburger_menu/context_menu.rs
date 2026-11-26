@@ -80,8 +80,14 @@ impl BigMenuFocusReturn {
             let dismissed = Rc::clone(&dismissed);
             let escape = gtk::EventControllerKey::new();
             escape.set_propagation_phase(gtk::PropagationPhase::Capture);
-            escape.connect_key_pressed(move |_, key, _, _| {
-                if key == gtk::gdk::Key::Escape {
+            escape.connect_key_pressed(move |controller, key, _, _| {
+                // A search field takes Escape for itself, back to the menu.
+                let in_search = controller
+                    .widget()
+                    .and_then(|popover| popover.root())
+                    .and_then(|root| root.focus())
+                    .is_some_and(|focus| focus.ancestor(gtk::SearchEntry::static_type()).is_some());
+                if key == gtk::gdk::Key::Escape && !in_search {
                     dismissed.set(true);
                 }
                 glib::Propagation::Proceed
@@ -706,6 +712,92 @@ mod tests {
                 pump_until(|| second.is_focus()),
                 "the focus stayed in the menu"
             );
+            window.destroy();
+        });
+    }
+
+    /// Escape that only leaves the menu's search closes nothing: an item
+    /// chosen afterwards keeps the focus it moved on purpose.
+    #[test]
+    fn search_escape_lets_an_item_move_the_focus() {
+        use gtk::gdk::{Key, ModifierType};
+        require_gtk_test(|| {
+            let window = gtk::Window::new();
+            let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let row = gtk::Button::with_label("alpha.txt");
+            let elsewhere = gtk::Button::with_label("Elsewhere");
+            host.append(&row);
+            host.append(&elsewhere);
+            window.set_child(Some(&host));
+            let actions = gio::SimpleActionGroup::new();
+            let open = gio::SimpleAction::new("open", None);
+            open.connect_activate({
+                let elsewhere = elsewhere.downgrade();
+                move |_, _| {
+                    if let Some(elsewhere) = elsewhere.upgrade() {
+                        elsewhere.grab_focus();
+                    }
+                }
+            });
+            actions.add_action(&open);
+            window.insert_action_group("win", Some(&actions));
+            window.present();
+            pump();
+            row.grab_focus();
+
+            let menu = BigContextMenu::new(&host);
+            attach_context_menu(&row, &menu, |_, _, _| {
+                let model = gio::Menu::new();
+                model.append(Some("Open"), Some("win.open"));
+                Some(BigContextMenuContent::new(
+                    model,
+                    BigMenuModelPopoverLabels::new("File Actions")
+                        .with_search("Search actions", "Nothing found"),
+                ))
+            });
+            assert!(press_menu_key(row.upcast_ref()));
+            assert!(pump_until(|| menu.popover().is_mapped()));
+            // What the menu sees first: its search field takes Escape after.
+            let press_on_menu = |key: Key| {
+                for keys in menu
+                    .popover()
+                    .observe_controllers()
+                    .into_iter()
+                    .filter_map(|controller| {
+                        controller.ok()?.downcast::<gtk::EventControllerKey>().ok()
+                    })
+                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)
+                {
+                    keys.emit_by_name::<bool>(
+                        "key-pressed",
+                        &[&key, &0_u32, &ModifierType::empty()],
+                    );
+                }
+            };
+            press_on_menu(Key::o);
+            let entry = GtkWindowExt::focus(&window)
+                .and_then(|focus| focus.ancestor(gtk::SearchEntry::static_type()))
+                .and_downcast::<gtk::SearchEntry>()
+                .expect("the letter opened the search");
+            press_on_menu(Key::Escape);
+            entry.emit_by_name::<()>("stop-search", &[]);
+            let mut pending = vec![menu.popover().clone().upcast::<gtk::Widget>()];
+            let mut item = None;
+            while let Some(widget) = pending.pop() {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                    && button.action_name().as_deref() == Some("win.open")
+                    && button.is_mapped()
+                {
+                    item = Some(button.clone());
+                }
+                pending.extend(children(&widget));
+            }
+            item.expect("the menu's Open").emit_clicked();
+            assert!(pump_until(|| !menu.popover().is_visible()));
+            for _ in 0..10 {
+                pump();
+            }
+            assert!(elsewhere.is_focus(), "the item's focus was pulled back");
             window.destroy();
         });
     }
