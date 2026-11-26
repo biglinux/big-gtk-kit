@@ -519,7 +519,7 @@ fn start_pending_decodes() {
 
 /// Rasterise SVG `bytes` in the glycin sandbox at `height_px`, keeping the
 /// picture's own proportions.
-async fn decode_svg(bytes: glib::Bytes, height_px: i32) -> Option<gdk::Texture> {
+pub(crate) async fn decode_svg(bytes: glib::Bytes, height_px: i32) -> Option<gdk::Texture> {
     let height = u32::try_from(height_px.max(1)).ok()?;
     crate::glycin_threads();
     let mut loader = glycin::Loader::new_bytes(bytes);

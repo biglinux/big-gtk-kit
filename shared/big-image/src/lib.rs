@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 //! The image-loading substrate of the suite. Decoding goes through the system's
-//! glycin sandbox and fails closed without one, at the size the image is shown
-//! (an SVG is rendered at that size, a raster never upscaled), on a worker:
-//! only the final `MemoryTexture` wrap runs on the caller's thread.
+//! glycin sandbox (bubblewrap, or where user namespaces are off a loader that
+//! confines itself with seccomp and Landlock) and fails closed when neither
+//! can run, at the size the image is shown (an SVG is rendered at that size, a
+//! raster never upscaled), on a worker: only the final `MemoryTexture` wrap
+//! runs on the caller's thread.
 
 use std::path::PathBuf;
 
@@ -329,8 +331,8 @@ pub fn read_metadata_sandbox_required(
 
 /// Decode `spec` in the Glycin sandbox.
 ///
-/// Validates a bounded local regular file and fails closed when Glycin cannot
-/// run in a real sandbox. This function runs on the calling thread; UI code
+/// Validates a bounded local regular file and fails closed when Glycin can
+/// confine no loader. This function runs on the calling thread; UI code
 /// should prefer [`load_sandboxed_texture`].
 ///
 /// # Errors

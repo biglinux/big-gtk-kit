@@ -80,9 +80,11 @@ log = { version = "0.4", features = ["std"] }
 [dev-dependencies]
 big-testkit = { workspace = true }
 
-# glycin 3.1.0 starts every loader at its caller's priority; the copy lets a
-# pool start its loaders at a nice value, which big-image's thumbnails use to
-# stay behind the program's own threads (third_party/glycin/BIGLINUX-PATCH.md).
+# glycin 3.1.0 starts every loader at its caller's priority, and unconfined
+# where bubblewrap cannot run; the copy lets a pool start its loaders at a nice
+# value, which big-image's thumbnails use to stay behind the program's own
+# threads, and confines that loader with seccomp and Landlock
+# (third_party/glycin/BIGLINUX-PATCH.md).
 # Cargo reads [patch] only in the workspace it builds, so a program that builds
 # big-image names this copy in its own.
 [patch.crates-io]

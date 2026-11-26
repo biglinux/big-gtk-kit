@@ -71,6 +71,7 @@ mod dbus;
 mod error;
 mod fontconfig;
 mod icc;
+mod landlock;
 mod orientation;
 mod pool;
 mod sandbox;

@@ -16,6 +16,7 @@ use crate::{Error, MimeType, config};
 pub enum SandboxMechanism {
     Bwrap,
     FlatpakSpawn,
+    /// No namespace: the loader confines itself with seccomp and Landlock.
     NotSandboxed,
 }
 

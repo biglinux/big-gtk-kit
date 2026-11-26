@@ -183,6 +183,8 @@ pub enum Error {
     MemFd(Arc<memfd::Error>),
     #[error("Seccomp: {0}")]
     Seccomp(Arc<SeccompError>),
+    #[error("Neither bubblewrap nor Landlock can confine a loader here")]
+    SandboxUnavailable,
     #[error("ICC profile: {0}")]
     IccProfile(#[from] lcms2::Error),
     #[error("Operation was explicitly canceled.\nOriginal error: {0:?}")]

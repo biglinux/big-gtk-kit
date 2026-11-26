@@ -34,10 +34,24 @@ decoding under big-image), with these changes:
   that wants an HDR picture at 16 bits takes every 10-bit SDR picture at 16
   bits too. big-image's texture decode keeps HDR frames this way.
 
+- A loader started where bubblewrap cannot make a namespace (user
+  namespaces off, `SandboxMechanism::NotSandboxed`) runs confined
+  (`src/sandbox.rs`, `src/landlock.rs`): it sets on itself, before it executes
+  the loader, the bubblewrap sandbox's memory limit and seccomp filter, with
+  `socket` and `connect` refused, since no network namespace keeps a socket
+  from the network and the session bus, and Landlock rules that let it open
+  what the bubblewrap sandbox holds: `/usr`, the library folders, the loader,
+  `/etc/ld.so.cache`, `/dev/null` and the other plain devices, the image's
+  folder for a loader that reads beside it, and fontconfig's files and cache. From Landlock ABI 6 it cannot signal another process. A
+  kernel without Landlock starts no loader: the load fails with
+  `Error::SandboxUnavailable`. Upstream runs that loader with nothing but a
+  cleared environment. `sandbox::tests` checks it.
+
 `Cargo.toml.orig`, `Cargo.lock` and the registry's bookkeeping files were left
 out.
 
 Remove this directory and the `[patch.crates-io]` entry in the workspace
 `Cargo.toml` when upstream lets a pool or a loader choose its processes'
 priority, releases idle loaders within the retention time and lets a caller
-choose the memory format by the frame's colors.
+choose the memory format by the frame's colors, and confines a loader
+without user namespaces.

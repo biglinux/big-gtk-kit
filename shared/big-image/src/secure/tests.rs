@@ -195,40 +195,34 @@ fn strict_request_rejects_special_files() {
     let _ = std::fs::remove_file(socket);
 }
 
-/// Set in the child that [`decoding_refused_without_sandbox`] starts.
-const WITHOUT_SANDBOX: &str = "BIG_IMAGE_TEST_WITHOUT_SANDBOX";
+/// Set in the child that [`decoding_confined_without_user_namespaces`] starts.
+const WITHOUT_USER_NAMESPACES: &str = "BIG_IMAGE_TEST_WITHOUT_USER_NAMESPACES";
 
 const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#3584e4"/></svg>"##;
+/// A still 1×1 GIF.
+const GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;";
+const JPEG: &[u8] = include_bytes!("../../tests/fixtures/blue.jpg");
 
-fn assert_unavailable(error: Option<BigImageError>) {
-    assert!(
-        matches!(error, Some(BigImageError::SandboxUnavailable)),
-        "{error:?}"
-    );
-}
-
-/// Where bubblewrap cannot run, every entry point refuses before a loader
-/// starts: the child finds no loader, so a load that went ahead would fail
-/// as a decode instead.
+/// Where bubblewrap cannot make a namespace, glycin's loader confines itself
+/// with seccomp and Landlock, and every entry point decodes through it.
 #[test]
-fn decoding_refused_without_sandbox() {
-    if std::env::var_os(WITHOUT_SANDBOX).is_some() {
-        every_entry_point_refuses();
+fn decoding_confined_without_user_namespaces() {
+    if std::env::var_os(WITHOUT_USER_NAMESPACES).is_some() {
+        every_entry_point_decodes();
     } else if Path::new(big_os_kit::confinement::BWRAP).exists() {
         run_without_user_namespaces();
     }
 }
 
 /// This test again, in a namespace that may not make another, where
-/// bubblewrap fails the way it does with user namespaces off. Without
-/// bubblewrap glycin still names it the sandbox, and a load fails as a decode.
+/// bubblewrap fails the way it does with user namespaces off.
 fn run_without_user_namespaces() {
     use big_os_kit::subprocess::BigSubprocessSpec;
 
-    let nowhere = glib::user_runtime_dir().join("big-image/unconfined-test");
-    // Named as our JPEG loader's directory, so a region decoder is asked
-    // for; nothing is read from it before the refusal.
-    let mut data_dirs = nowhere.join("jpg").into_os_string();
+    // Named as our JPEG loader's directory, so a region decoder is asked for.
+    let mut data_dirs = glib::user_runtime_dir()
+        .join("big-image/confined-test/jpg")
+        .into_os_string();
     data_dirs.push(":/usr/share");
     let out = BigSubprocessSpec::builder()
         .program(big_os_kit::confinement::BWRAP)
@@ -237,11 +231,10 @@ fn run_without_user_namespaces() {
         .arg(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "secure::tests::decoding_refused_without_sandbox",
+            "secure::tests::decoding_confined_without_user_namespaces",
             "--quiet",
         ])
-        .env(WITHOUT_SANDBOX, "1")
-        .env("GLYCIN_DATA_DIR", nowhere)
+        .env(WITHOUT_USER_NAMESPACES, "1")
         .env("XDG_DATA_DIRS", data_dirs)
         .timeout(std::time::Duration::from_secs(60))
         .allow_list([big_os_kit::confinement::BWRAP])
@@ -250,71 +243,59 @@ fn run_without_user_namespaces() {
         .unwrap();
     assert!(
         out.status.success() && out.stdout_lossy().contains("1 passed"),
-        "{}",
-        out.stdout_lossy()
+        "{}\n{}",
+        out.stdout_lossy(),
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
-fn every_entry_point_refuses() {
-    let svg = temp_path("unconfined.svg");
+fn every_entry_point_decodes() {
+    use gtk::prelude::TextureExt;
+
+    let svg = temp_path("confined.svg");
     std::fs::write(&svg, SVG).unwrap();
-    let gif = temp_path("unconfined.gif");
-    std::fs::write(&gif, b"GIF89a").unwrap();
+    let gif = temp_path("confined.gif");
+    std::fs::write(&gif, GIF).unwrap();
+    let jpeg = temp_path("confined.jpg");
+    std::fs::write(&jpeg, JPEG).unwrap();
     let spec = BigImageSpec::bounded(&svg, 16, 16);
 
-    assert_unavailable(crate::decode_rgba_sandboxed(&spec).err());
-    assert_unavailable(crate::decode_rgba_for_save(&spec, 256).err());
-    assert_unavailable(crate::read_metadata_sandbox_required(&svg).err());
     glib::MainContext::new().block_on(async {
-        assert_unavailable(crate::decode_rgba_sandboxed_async(&spec).await.err());
-        assert_unavailable(crate::load_sandboxed_texture(spec.clone()).await.err());
-        assert_unavailable(
-            crate::load_sandboxed_texture_cancellable(
-                spec.clone(),
-                BigImageFit::Contain,
-                gio::Cancellable::new(),
-            )
-            .await
-            .err(),
-        );
-        assert_unavailable(
-            decode_jpeg_bytes_async(vec![0xFF, 0xD8, 0xFF], 16, None)
-                .await
-                .err(),
-        );
-        assert_unavailable(
-            crate::open_animation(BigImageSpec::bounded(&gif, 16, 16))
-                .await
-                .err(),
-        );
-        assert_unavailable(
-            crate::open_region_decoder(temp_path("unconfined.jpg"))
-                .await
-                .err(),
+        assert_eq!(
+            glycin::SandboxMechanism::detect().await,
+            glycin::SandboxMechanism::NotSandboxed
         );
     });
-    let _ = std::fs::remove_file(svg);
-    let _ = std::fs::remove_file(gif);
-}
-
-/// A loader that came up unconfined is refused before it hands over a pixel.
-#[test]
-fn unconfined_loader_is_refused() {
-    use glycin::SandboxMechanism::NotSandboxed;
-
-    let svg = temp_path("loader-unconfined.svg");
-    std::fs::write(&svg, SVG).unwrap();
-    let spec = BigImageSpec::bounded(&svg, 16, 16);
-    assert_unavailable(decode_validated(&stage_request(&spec).unwrap(), NotSandboxed).err());
+    assert_eq!(crate::decode_rgba_sandboxed(&spec).unwrap().width, 16);
+    assert_eq!(crate::decode_rgba_for_save(&spec, 256).unwrap().width, 16);
+    assert_eq!(
+        crate::read_metadata_sandbox_required(&svg)
+            .unwrap()
+            .pixel_size,
+        Some((16, 16))
+    );
     glib::MainContext::new().block_on(async {
-        let staged = stage_request(&spec).unwrap();
-        assert_unavailable(SandboxedAnimation::open(staged, NotSandboxed).await.err());
-        let staged = stage_request(&spec).unwrap();
-        assert_unavailable(
-            SandboxedRegionDecoder::open(staged, NotSandboxed)
-                .await
-                .err(),
-        );
+        let decoded = crate::decode_rgba_sandboxed_async(&spec).await;
+        assert_eq!(decoded.unwrap().width, 16);
+        let texture = crate::load_sandboxed_texture(spec.clone()).await.unwrap();
+        assert_eq!(texture.width(), 16);
+        let texture = crate::load_sandboxed_texture_cancellable(
+            spec.clone(),
+            BigImageFit::Contain,
+            gio::Cancellable::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(texture.width(), 16);
+        let decoded = decode_jpeg_bytes_async(JPEG.to_vec(), 16, None).await;
+        assert_eq!(decoded.unwrap().width, 16);
+        let animation = crate::open_animation(BigImageSpec::bounded(&gif, 16, 16)).await;
+        assert!(animation.unwrap().is_none(), "a still GIF");
+        assert!(crate::open_region_decoder(&jpeg).await.is_ok());
+        let icon = crate::icon::decode_svg(glib::Bytes::from_static(SVG), 16).await;
+        assert_eq!(icon.unwrap().height(), 16);
     });
-    let _ = std::fs::remove_file(svg);
+    for path in [svg, gif, jpeg] {
+        let _ = std::fs::remove_file(path);
+    }
 }

@@ -70,19 +70,13 @@ pub async fn open_region_decoder(
     if !region_capable(&path) {
         return Ok(None);
     }
-    // Detect asynchronously: this is an async fn, so a blocking detect would nest
-    // one main-loop inside another and panic when driven from a running context.
     crate::glycin_threads();
-    let mechanism = glycin::SandboxMechanism::detect().await;
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     // The bound is unused by the region decoder (each crop carries its own
     // target); stage through the shared path with a placeholder.
     let spec = super::BigImageSpec::bounded(path, 1, 1);
     let staged = gtk::gio::spawn_blocking(move || super::secure::stage_region(&spec))
         .await
         .map_err(|_| BigImageError::WorkerGone)??;
-    let opened = super::secure::SandboxedRegionDecoder::open(staged, mechanism).await?;
+    let opened = super::secure::SandboxedRegionDecoder::open(staged).await?;
     Ok(opened.map(|inner| BigRegionDecoder { inner }))
 }

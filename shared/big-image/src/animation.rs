@@ -156,13 +156,7 @@ pub async fn open_animation(
     let Some(staged) = staged else {
         return Ok(None);
     };
-    // Awaited: a blocking detect would run a second executor inside the one
-    // polling this future, which panics.
-    let mechanism = glycin::SandboxMechanism::detect().await;
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
-    let opened = super::secure::SandboxedAnimation::open(staged, mechanism).await?;
+    let opened = super::secure::SandboxedAnimation::open(staged).await?;
     Ok(opened.map(|(inner, frame)| (BigAnimation { inner }, frame)))
 }
 

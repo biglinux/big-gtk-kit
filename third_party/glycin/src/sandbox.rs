@@ -2,7 +2,7 @@
 
 use std::ffi::{c_int, c_void};
 use std::fs::{DirEntry, File, canonicalize};
-use std::io::{self, BufRead, BufReader, Seek};
+use std::io::{self, BufRead, BufReader, Read, Seek};
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -18,6 +18,7 @@ use nix::libc::siginfo_t;
 use nix::sys::resource;
 
 use crate::config::{ConfigEntry, ImageLoaderConfig};
+use crate::landlock::{self, LandlockRuleset};
 use crate::util::{self, AsyncMutex, new_async_mutex, spawn_blocking};
 use crate::{Error, SandboxMechanism};
 
@@ -217,25 +218,25 @@ impl Sandbox {
 
         let mut shared_fds = Vec::new();
 
-        let (mut command, seccomp_fd) = match self.sandbox_mechanism {
+        let (mut command, seccomp_fd, confinement) = match self.sandbox_mechanism {
             SandboxMechanism::Bwrap => {
                 let seccomp_memfd = Self::seccomp_export_bpf(&self.seccomp_filter()?)?;
                 let command = self.bwrap_command(&seccomp_memfd).await?;
 
                 shared_fds.push(seccomp_memfd.as_raw_fd());
 
-                (command, Some(seccomp_memfd))
+                (command, Some(seccomp_memfd), None)
             }
             SandboxMechanism::FlatpakSpawn => {
                 let command = self.flatpak_spawn_command();
 
-                (command, None)
+                (command, None, None)
             }
             SandboxMechanism::NotSandboxed => {
-                eprintln!("WARNING: Glycin running without sandbox.");
-                let command = self.no_sandbox_command();
+                tracing::debug!("bubblewrap cannot run here: confining the loader with Landlock");
+                let (command, confinement) = self.confined_command().await?;
 
-                (command, None)
+                (command, None, Some(confinement))
             }
         };
 
@@ -275,6 +276,15 @@ impl Sandbox {
 
                 Ok(())
             });
+        }
+
+        // Last: the seccomp filter refuses the calls made before it.
+        if let Some(confinement) = confinement {
+            // SAFETY: setrlimit, prctl, landlock_restrict_self and seccomp
+            // are plain system calls on values built before the fork.
+            unsafe {
+                command.pre_exec(move || confinement.enforce());
+            }
         }
 
         Ok(SpawnedSandbox {
@@ -442,27 +452,14 @@ impl Sandbox {
                 mount(&mut command, "--ro-bind-try", path);
             }
 
-            // Fontconfig needs a writeable cache if the cache is outdated
-            let cache_dir = PathBuf::from_iter([
-                glib::user_cache_dir(),
-                "glycin".into(),
-                self.exec().iter().skip(1).collect(),
-            ]);
+            if let Some(cache_dir) = self.fontconfig_cache_dir().await {
+                command.arg("--bind-try");
+                command.arg(&cache_dir);
+                command.arg(&cache_dir);
 
-            let fc_cache_dir = PathBuf::from_iter([cache_dir.clone(), "fontconfig".into()]);
-
-            // Create cache dir
-            match util::spawn_blocking(move || std::fs::create_dir_all(fc_cache_dir)).await {
-                Err(err) => tracing::warn!("Failed to create fontconfig cache dir: {err:?}"),
-                Ok(()) => {
-                    command.arg("--bind-try");
-                    command.arg(&cache_dir);
-                    command.arg(&cache_dir);
-
-                    command.arg("--setenv");
-                    command.arg("XDG_CACHE_HOME");
-                    command.arg(&cache_dir);
-                }
+                command.arg("--setenv");
+                command.arg("XDG_CACHE_HOME");
+                command.arg(&cache_dir);
             }
         } else {
             tracing::warn!("Failed to load fonftconfig environment");
@@ -487,6 +484,25 @@ impl Sandbox {
         }
 
         Ok(command)
+    }
+
+    /// Fontconfig needs a writeable cache if the cache is outdated
+    async fn fontconfig_cache_dir(&self) -> Option<PathBuf> {
+        let cache_dir = PathBuf::from_iter([
+            glib::user_cache_dir(),
+            "glycin".into(),
+            self.exec().iter().skip(1).collect(),
+        ]);
+
+        let fc_cache_dir = PathBuf::from_iter([cache_dir.clone(), "fontconfig".into()]);
+
+        match util::spawn_blocking(move || std::fs::create_dir_all(fc_cache_dir)).await {
+            Err(err) => {
+                tracing::warn!("Failed to create fontconfig cache dir: {err:?}");
+                None
+            }
+            Ok(()) => Some(cache_dir),
+        }
     }
 
     fn flatpak_spawn_command(&self) -> Command {
@@ -538,7 +554,10 @@ impl Sandbox {
         command
     }
 
-    fn no_sandbox_command(&self) -> Command {
+    /// The loader where bubblewrap cannot make a namespace: the files it may
+    /// open are those the bubblewrap sandbox holds, and its system calls those
+    /// the bubblewrap filter allows, less new sockets.
+    async fn confined_command(&self) -> Result<(Command, Confinement), Error> {
         let mut command = Command::new(self.exec());
 
         command.env_clear();
@@ -550,14 +569,66 @@ impl Sandbox {
             }
         }
 
-        // Set sandbox memory limit
+        let system_setup_arc = SystemSetup::cached().await;
+        let system = match system_setup_arc.as_ref().as_ref() {
+            Err(err) => return Err(err.clone().into()),
+            Ok(system) => system,
+        };
+
+        let mut rules: Vec<(PathBuf, u64)> = vec![
+            ("/usr".into(), landlock::READ | landlock::EXECUTE),
+            ("/nix/store".into(), landlock::READ | landlock::EXECUTE),
+            ("/etc/ld.so.cache".into(), landlock::READ_FILE),
+            (
+                self.exec().to_owned(),
+                landlock::READ_FILE | landlock::EXECUTE,
+            ),
+        ];
+        for dir in &system.lib_dirs {
+            rules.push((dir.clone(), landlock::READ | landlock::EXECUTE));
+        }
+        for dir in &self.ro_bind_extra {
+            rules.push((dir.clone(), landlock::READ));
+        }
+        // The devices bubblewrap's `--dev` holds, less the terminal.
+        for device in [
+            "/dev/null",
+            "/dev/zero",
+            "/dev/full",
+            "/dev/random",
+            "/dev/urandom",
+        ] {
+            rules.push((device.into(), landlock::READ_FILE | landlock::WRITE_FILE));
+        }
+        if self.config_entry.fontconfig()
+            && let Some(fc_paths) = crate::fontconfig::cached_paths()
+        {
+            for path in fc_paths {
+                rules.push((path.clone(), landlock::READ));
+            }
+            if let Some(cache_dir) = self.fontconfig_cache_dir().await {
+                command.env("XDG_CACHE_HOME", &cache_dir);
+                rules.push((cache_dir, landlock::READ | landlock::CHANGE));
+            }
+        }
+
+        let ruleset = LandlockRuleset::new(&rules)?;
+        let seccomp_program = Self::seccomp_program(&self.seccomp_filter()?)?;
+
         unsafe {
             command.pre_exec(|| {
                 nix::sys::prctl::set_pdeathsig(nix::sys::signal::SIGKILL).map_err(Into::into)
             });
         }
 
-        command
+        Ok((
+            command,
+            Confinement {
+                memory_limit: Self::memory_limit(),
+                ruleset,
+                seccomp_program,
+            },
+        ))
     }
 
     /// Memory limit in bytes that should be applied to sandboxes
@@ -654,10 +725,23 @@ impl Sandbox {
             syscalls.push(ALLOWED_SYSCALLS_FONTCONFIG);
         }
 
+        // Outside a network namespace a socket reaches the network and the
+        // session bus.
+        let refused: &[&str] = if self.sandbox_mechanism == SandboxMechanism::NotSandboxed {
+            &["socket", "connect"]
+        } else {
+            &[]
+        };
+
         for syscall_name in syscalls.into_iter().flatten() {
+            let action = if refused.contains(syscall_name) {
+                ScmpAction::Errno(libc::EACCES)
+            } else {
+                ScmpAction::Allow
+            };
             match ScmpSyscall::from_name(syscall_name) {
                 Ok(syscall) => {
-                    filter.add_rule(ScmpAction::Allow, syscall)?;
+                    filter.add_rule(action, syscall)?;
                 }
                 Err(err) => tracing::warn!("Failed to allow syscall '{syscall_name}': {err}"),
             }
@@ -680,6 +764,29 @@ impl Sandbox {
         file.rewind()?;
 
         Ok(memfd)
+    }
+
+    /// The filter as the instructions `seccomp(2)` takes.
+    fn seccomp_program(filter: &ScmpFilterContext) -> Result<Vec<libc::sock_filter>, Error> {
+        let mut bytes = Vec::new();
+        Self::seccomp_export_bpf(filter)?
+            .as_file()
+            .read_to_end(&mut bytes)?;
+        let (instructions, []) = bytes.as_chunks::<8>() else {
+            return Err(io::Error::other("seccomp program of partial instructions").into());
+        };
+        if u16::try_from(instructions.len()).is_err() {
+            return Err(io::Error::other("seccomp program past 65535 instructions").into());
+        }
+        Ok(instructions
+            .iter()
+            .map(|&[c0, c1, jt, jf, k0, k1, k2, k3]| libc::sock_filter {
+                code: u16::from_ne_bytes([c0, c1]),
+                jt,
+                jf,
+                k: u32::from_ne_bytes([k0, k1, k2, k3]),
+            })
+            .collect())
     }
 
     /// Returns `true` if bwrap syscalls are blocked
@@ -755,6 +862,44 @@ impl Sandbox {
         } else {
             Ok(false)
         }
+    }
+}
+
+/// What the forked child of [`Sandbox::confined_command`] sets on itself.
+struct Confinement {
+    memory_limit: resource::rlim_t,
+    ruleset: LandlockRuleset,
+    seccomp_program: Vec<libc::sock_filter>,
+}
+
+impl Confinement {
+    fn enforce(&self) -> io::Result<()> {
+        // A loader past the limit fails its allocation, as in bubblewrap.
+        let _ = resource::setrlimit(
+            resource::Resource::RLIMIT_AS,
+            self.memory_limit,
+            self.memory_limit,
+        );
+        self.ruleset.restrict_self()?;
+        let program = libc::sock_fprog {
+            // seccomp_program refuses a longer one.
+            len: self.seccomp_program.len() as u16,
+            filter: self.seccomp_program.as_ptr().cast_mut(),
+        };
+        // SAFETY: `program` points at instructions that outlive the call;
+        // restrict_self set no_new_privs, which an unprivileged filter needs.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_seccomp,
+                libc::SECCOMP_SET_MODE_FILTER,
+                0,
+                &raw const program,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 }
 
@@ -947,5 +1092,115 @@ impl Drop for CapsGuard {
         if let Err(err) = set_caps(self.0) {
             tracing::error!("Failed to reset linux caps to original state: {err}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Set in the child [`fallback_loader_is_confined`] starts: the folder it
+    /// tries, and the port it connects to.
+    const PROBE_DIR: &str = "GLYCIN_TEST_PROBE_DIR";
+    const PROBE_PORT: &str = "GLYCIN_TEST_PROBE_PORT";
+
+    /// A loader started without bubblewrap reads what the bubblewrap sandbox
+    /// holds and nothing beside it, writes nothing and opens no socket: this
+    /// test binary, confined as such a loader, tries.
+    #[test]
+    fn fallback_loader_is_confined() {
+        if let Some(dir) = std::env::var_os(PROBE_DIR) {
+            try_beyond_confinement(&PathBuf::from(dir));
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let dir = std::env::temp_dir().join(format!("glycin-confined-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("secret"), "secret").unwrap();
+        let unix_listener = std::os::unix::net::UnixListener::bind(dir.join("socket")).unwrap();
+        unix_listener.set_nonblocking(true).unwrap();
+        let tcp_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        tcp_listener.set_nonblocking(true).unwrap();
+
+        let (dbus_socket, _peer) = UnixStream::pair().unwrap();
+        let sandbox = Sandbox::new(
+            SandboxMechanism::NotSandboxed,
+            ConfigEntry::Loader(ImageLoaderConfig {
+                exec: exe.clone(),
+                expose_base_dir: false,
+                fontconfig: false,
+            }),
+            dbus_socket,
+        );
+        let (_, confinement) = util::block_on(sandbox.confined_command()).unwrap();
+        let mut command = Command::new(exe);
+        command
+            .args(["--exact", "sandbox::tests::fallback_loader_is_confined"])
+            .env(PROBE_DIR, &dir)
+            .env(
+                PROBE_PORT,
+                tcp_listener.local_addr().unwrap().port().to_string(),
+            );
+        // SAFETY: as in `Sandbox::spawn`.
+        unsafe {
+            command.pre_exec(move || confinement.enforce());
+        }
+        let output = command.output().unwrap();
+
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{output:?}"
+        );
+        assert!(!dir.join("written").exists());
+        assert!(
+            unix_listener
+                .accept()
+                .is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock)
+        );
+        assert!(
+            tcp_listener
+                .accept()
+                .is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn try_beyond_confinement(dir: &Path) {
+        let port: u16 = std::env::var(PROBE_PORT).unwrap().parse().unwrap();
+        let denied = io::ErrorKind::PermissionDenied;
+
+        std::fs::read("/etc/ld.so.cache").unwrap();
+        assert_eq!(
+            std::fs::read(dir.join("secret")).unwrap_err().kind(),
+            denied
+        );
+        assert_eq!(
+            std::fs::write(dir.join("written"), "x").unwrap_err().kind(),
+            denied
+        );
+        assert_eq!(
+            UnixStream::connect(dir.join("socket")).unwrap_err().kind(),
+            denied
+        );
+        let tcp = std::net::TcpStream::connect(("127.0.0.1", port));
+        assert_eq!(tcp.unwrap_err().kind(), denied);
+    }
+
+    /// The installed loaders work within that confinement.
+    #[test]
+    fn fallback_loader_decodes() {
+        const SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>"#;
+
+        glib::MainContext::new().block_on(async {
+            let mut loader = crate::Loader::new_bytes(glib::Bytes::from_static(SVG));
+            loader.sandbox_selector(crate::SandboxSelector::NotSandboxed);
+            let image = loader.load().await.unwrap();
+            assert_eq!(
+                image.active_sandbox_mechanism(),
+                SandboxMechanism::NotSandboxed
+            );
+            let frame = image.next_frame().await.unwrap();
+            assert_eq!((frame.width(), frame.height()), (4, 4));
+        });
     }
 }

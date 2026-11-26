@@ -60,12 +60,8 @@ impl Drop for StagedSource {
 }
 
 pub(super) fn decode_sandbox_required(spec: &BigImageSpec) -> Result<BigRgbaImage, BigImageError> {
-    let mechanism = glib::MainContext::new().block_on(glycin::SandboxMechanism::detect());
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     let staged = stage_request(spec)?;
-    decode_validated(&staged, mechanism)
+    decode_validated(&staged)
 }
 
 /// A decode for a save: the bound may be any size, and the frame delivered
@@ -74,12 +70,8 @@ pub(super) fn decode_for_save(
     spec: &BigImageSpec,
     max_pixels: u64,
 ) -> Result<BigRgbaImage, BigImageError> {
-    let mechanism = glib::MainContext::new().block_on(glycin::SandboxMechanism::detect());
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     let staged = stage_request_within(spec, u64::MAX, max_pixels.min(MAX_SOURCE_PIXELS))?;
-    decode_validated(&staged, mechanism)
+    decode_validated(&staged)
 }
 
 /// Run blocking `work` where it cannot hold the main context: on GIO's pool
@@ -118,10 +110,6 @@ pub(super) async fn decode_sandbox_required_async(
     {
         return Err(BigImageError::Cancelled);
     }
-    let mechanism = glycin::SandboxMechanism::detect().await;
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     // Opening/stat'ing a user-selected path can block on FUSE or a slow mount, so
     // the fd-pinning staging stays off the main context. Thumbnails await this
     // RGBA path there (via `spawn_future_local`), so staging inline would jam the
@@ -140,7 +128,6 @@ pub(super) async fn decode_sandbox_required_async(
         staged.bound,
         staged.clip,
         staged.max_pixels,
-        mechanism,
         cancellable.as_ref(),
         whole_frame,
     )
@@ -163,10 +150,6 @@ pub(super) async fn decode_jpeg_bytes_async(
         return Err(BigImageError::Cancelled);
     }
     let bound = validate_bound(Some((bound, bound)), MAX_DISPLAY_PIXELS)?;
-    let mechanism = glycin::SandboxMechanism::detect().await;
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     crate::glycin_threads();
     let mut loader = glycin::Loader::new_bytes(glib::Bytes::from_owned(jpeg));
     loader.pool(thumbnail_pool());
@@ -178,7 +161,6 @@ pub(super) async fn decode_jpeg_bytes_async(
         bound,
         None,
         MAX_DISPLAY_PIXELS,
-        mechanism,
         cancellable.as_ref(),
         None,
     )
@@ -261,10 +243,6 @@ async fn sandboxed_frame(
     if cancellable.is_cancelled() {
         return Err(BigImageError::Cancelled);
     }
-    let mechanism = glycin::SandboxMechanism::detect().await;
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     let mut loader = staged_loader(&staged);
     loader.cancellable(cancellable.clone());
     if hdr {
@@ -276,7 +254,6 @@ async fn sandboxed_frame(
         staged.clip,
         staged.max_pixels,
         fit,
-        mechanism,
         Some(cancellable),
         None,
     )
@@ -321,23 +298,14 @@ pub(super) async fn load_gl_texture_sandbox_required_async(
 pub(super) fn read_metadata_sandbox_required(
     path: &Path,
 ) -> Result<super::BigImageMetadata, BigImageError> {
-    let mechanism = glib::MainContext::new().block_on(glycin::SandboxMechanism::detect());
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     validate_path_shape(path)?;
     let source = stage_source(path, MAX_SOURCE_BYTES)?;
     glib::MainContext::new().block_on(async move {
         crate::glycin_threads();
-        let mut loader = glycin::Loader::new(gio::File::for_path(&source.decode_path));
-        loader.sandbox_selector(mechanism.into_selector());
-        let image = loader
+        let image = glycin::Loader::new(gio::File::for_path(&source.decode_path))
             .load()
             .await
-            .map_err(|_| BigImageError::SandboxedDecodeFailed)?;
-        if image.active_sandbox_mechanism() == glycin::SandboxMechanism::NotSandboxed {
-            return Err(BigImageError::SandboxUnavailable);
-        }
+            .map_err(load_failure)?;
         // The size the file really has, taken from the same open: the pixels
         // a viewer shows were scaled to its window, so they answer a different
         // question than "how big is this image".
@@ -405,6 +373,16 @@ fn staged_loader(staged: &StagedRequest) -> glycin::Loader {
         loader.pool(thumbnail_pool());
     }
     loader
+}
+
+/// A failed `Loader::load`: glycin can confine no loader here, or the
+/// confined loader could not read the source.
+fn load_failure(error: glycin::ErrorCtx) -> BigImageError {
+    if matches!(error.error(), glycin::Error::SandboxUnavailable) {
+        BigImageError::SandboxUnavailable
+    } else {
+        BigImageError::SandboxedDecodeFailed
+    }
 }
 
 /// The loaders thumbnails decode in, started at [`crate::THUMBNAIL_NICE`].
@@ -606,10 +584,7 @@ fn validate_dimensions(width: u32, height: u32, max_pixels: u64) -> Result<(), B
     Ok(())
 }
 
-fn decode_validated(
-    spec: &StagedRequest,
-    mechanism: glycin::SandboxMechanism,
-) -> Result<BigRgbaImage, BigImageError> {
+fn decode_validated(spec: &StagedRequest) -> Result<BigRgbaImage, BigImageError> {
     let bound = spec.bound;
     let loader = staged_loader(spec);
     let result = glib::MainContext::new().block_on(decode_sandboxed(
@@ -617,7 +592,6 @@ fn decode_validated(
         bound,
         spec.clip,
         spec.max_pixels,
-        mechanism,
         None,
         None,
     ));
@@ -642,18 +616,10 @@ impl SandboxedAnimation {
     /// second frame is a sandbox process kept alive for nothing.
     pub(super) async fn open(
         spec: StagedRequest,
-        mechanism: glycin::SandboxMechanism,
     ) -> Result<Option<(Self, super::BigAnimationFrame)>, BigImageError> {
         let mut loader = staged_loader(&spec);
-        loader.sandbox_selector(mechanism.into_selector());
         loader.accepted_memory_formats(glycin::MemoryFormatSelection::R8g8b8a8);
-        let image = loader
-            .load()
-            .await
-            .map_err(|_| BigImageError::SandboxedDecodeFailed)?;
-        if image.active_sandbox_mechanism() == glycin::SandboxMechanism::NotSandboxed {
-            return Err(BigImageError::SandboxUnavailable);
-        }
+        let image = loader.load().await.map_err(load_failure)?;
         let details = image.details();
         validate_source_dimensions(details.width(), details.height())?;
         let animation = Self {
@@ -760,20 +726,10 @@ impl SandboxedRegionDecoder {
     /// Open a persistent region decoder, or `None` when region decode does not
     /// apply (only the reduce-decoding JPEG loader honors a clip; any other
     /// loader would return the whole image scaled and mislabel it as the region).
-    pub(super) async fn open(
-        spec: StagedRequest,
-        mechanism: glycin::SandboxMechanism,
-    ) -> Result<Option<Self>, BigImageError> {
+    pub(super) async fn open(spec: StagedRequest) -> Result<Option<Self>, BigImageError> {
         let mut loader = staged_loader(&spec);
-        loader.sandbox_selector(mechanism.into_selector());
         loader.accepted_memory_formats(glycin::MemoryFormatSelection::R8g8b8a8);
-        let image = loader
-            .load()
-            .await
-            .map_err(|_| BigImageError::SandboxedDecodeFailed)?;
-        if image.active_sandbox_mechanism() == glycin::SandboxMechanism::NotSandboxed {
-            return Err(BigImageError::SandboxUnavailable);
-        }
+        let image = loader.load().await.map_err(load_failure)?;
         if !(image.mime_type().as_str() == "image/jpeg" && crate::large_jpeg_source_enabled()) {
             return Ok(None);
         }
@@ -872,7 +828,6 @@ async fn decode_sandboxed(
     bound: (i32, i32),
     clip: Option<(u32, u32, u32, u32)>,
     max_pixels: u64,
-    mechanism: glycin::SandboxMechanism,
     cancellable: Option<&gio::Cancellable>,
     whole_frame: Option<WholeFrameAdmission<'_>>,
 ) -> Result<(BigRgbaImage, super::BigSourceSize), BigImageError> {
@@ -882,7 +837,6 @@ async fn decode_sandboxed(
         clip,
         max_pixels,
         BigImageFit::Contain,
-        mechanism,
         cancellable,
         whole_frame,
     )
@@ -983,7 +937,6 @@ async fn load_frame_sandboxed(
     clip: Option<(u32, u32, u32, u32)>,
     max_pixels: u64,
     fit: BigImageFit,
-    mechanism: glycin::SandboxMechanism,
     cancellable: Option<&gio::Cancellable>,
     whole_frame: Option<WholeFrameAdmission<'_>>,
 ) -> Result<
@@ -995,22 +948,18 @@ async fn load_frame_sandboxed(
     ),
     BigImageError,
 > {
-    loader.sandbox_selector(mechanism.into_selector());
     // RGB is accepted beside RGBA so an opaque source is not widened to a
     // fourth, always-opaque channel before it is packed or reaches the GPU.
     loader.accepted_memory_formats(
         glycin::MemoryFormatSelection::R8g8b8 | glycin::MemoryFormatSelection::R8g8b8a8,
     );
-    let image = loader.load().await.map_err(|_| {
+    let image = loader.load().await.map_err(|error| {
         if cancellable.is_some_and(gio::prelude::CancellableExt::is_cancelled) {
             BigImageError::Cancelled
         } else {
-            BigImageError::SandboxedDecodeFailed
+            load_failure(error)
         }
     })?;
-    if image.active_sandbox_mechanism() == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
 
     let details = image.details();
     let mime = image.mime_type();
