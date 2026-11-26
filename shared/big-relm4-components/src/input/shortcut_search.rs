@@ -72,9 +72,11 @@ impl ShortcutSearch {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
+        let typed = joined(&self.text);
         if self.text.is_empty()
             || title.to_lowercase().contains(&self.text)
-            || joined(label).contains(&joined(&self.text))
+            || label.to_lowercase().contains(&self.text)
+            || (!typed.is_empty() && joined(label).contains(&typed))
         {
             return true;
         }
@@ -169,6 +171,17 @@ mod tests {
                 ("ctrl -", vec!["Shrink text"]),
                 ("ctrl minus", vec!["Shrink text"]),
                 ("ctrl page up", vec!["Previous page"]),
+                (
+                    "+",
+                    vec![
+                        "New tab",
+                        "Reopen closed tab",
+                        "Close window",
+                        "Terminal",
+                        "Shrink text",
+                        "Previous page",
+                    ],
+                ),
                 ("ctrl+q", vec![]),
                 ("paste the text", vec![]),
             ] {
