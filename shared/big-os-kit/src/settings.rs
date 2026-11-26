@@ -346,6 +346,8 @@ struct BigSettingsDocumentInner<T> {
     store: BigVersionedJsonStore<T>,
     /// False when the file could not be read: it is left for whoever can.
     saves: Cell<bool>,
+    /// Why the file could not be read, until the first change reports it.
+    unread: RefCell<Option<BigStorageError>>,
     changes: BigSettingChangeStream,
     /// A background write is running; [`BigSettingsDocument::apply`] marks
     /// `save_again` instead of starting a second one.
@@ -368,6 +370,7 @@ impl<T> BigSettingsDocument<T> {
                 document: RefCell::new(document),
                 store,
                 saves: Cell::new(true),
+                unread: RefCell::new(None),
                 changes: BigSettingChangeStream::default(),
                 saving: Cell::new(false),
                 save_again: Cell::new(false),
@@ -429,7 +432,8 @@ where
     ///
     /// A file this build cannot read (damaged, too large, or written by a newer
     /// build) is left as it is: the defaults live in memory, changes still
-    /// apply and notify, and nothing is written over the file.
+    /// apply and notify, nothing is written over the file, and the first
+    /// change reports why through its `report`.
     #[must_use]
     pub fn open(store: BigVersionedJsonStore<T>) -> Self
     where
@@ -444,6 +448,7 @@ where
                 );
                 let document = Self::new(T::default(), store);
                 document.inner.saves.set(false);
+                document.inner.unread.replace(Some(error));
                 document
             }
         }
@@ -501,10 +506,15 @@ where
         document: T,
         report: impl Fn(&BigStorageError) + 'static,
     ) {
-        self.inner.on_save_failed.replace(Some(Rc::new(report)));
+        let report: SaveReport = Rc::new(report);
+        self.inner.on_save_failed.replace(Some(Rc::clone(&report)));
         self.inner.document.replace(document);
         self.inner.changes.emit(key);
         if !self.inner.saves.get() {
+            let unread = self.inner.unread.take();
+            if let Some(error) = unread {
+                report(&error);
+            }
             return;
         }
         if self.inner.saving.replace(true) {
@@ -892,7 +902,8 @@ mod tests {
             let _ = fs::remove_file(path);
         }
 
-        /// An unreadable file is never replaced by the defaults standing in for it.
+        /// An unreadable file is never replaced by the defaults standing in for
+        /// it, and the first change says why it is not saved.
         #[test]
         fn unreadable_file_is_kept() {
             for bytes in [
@@ -904,12 +915,17 @@ mod tests {
                 let document =
                     BigSettingsDocument::<TestSettings>::open(BigVersionedJsonStore::new(&path, 2));
 
-                document.apply_change(
-                    "enabled",
-                    |settings| settings.enabled = true,
-                    |error| panic!("{error}"),
-                );
+                let reports = Rc::new(Cell::new(0));
+                for _ in 0..2 {
+                    let counted = Rc::clone(&reports);
+                    document.apply_change(
+                        "enabled",
+                        |settings| settings.enabled = true,
+                        move |_| counted.set(counted.get() + 1),
+                    );
+                }
 
+                assert_eq!(reports.get(), 1);
                 assert!(document.snapshot().enabled);
                 assert!(!document.inner.saving.get());
                 assert_eq!(fs::read(&path).unwrap(), bytes);
