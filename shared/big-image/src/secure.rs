@@ -733,16 +733,7 @@ impl SandboxedAnimation {
 
 /// Stage `spec` for an animated decode; blocking, so it belongs on a worker.
 pub(super) fn stage_animation(spec: &BigImageSpec) -> Result<StagedRequest, BigImageError> {
-    let mechanism = glib::MainContext::new().block_on(glycin::SandboxMechanism::detect());
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     stage_request(spec)
-}
-
-/// The sandbox mechanism an animation must run under.
-pub(super) fn detect_mechanism() -> glycin::SandboxMechanism {
-    glib::MainContext::new().block_on(glycin::SandboxMechanism::detect())
 }
 
 /// Stage a source for a persistent region decoder (blocking; run on a worker).

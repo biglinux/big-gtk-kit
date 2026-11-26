@@ -146,7 +146,6 @@ pub async fn open_animation(
     if !may_be_animated(&spec.path) {
         return Ok(None);
     }
-    let mechanism = super::secure::detect_mechanism();
     let staged = gtk::gio::spawn_blocking(move || {
         has_animation_header(&spec.path)
             .then(|| super::secure::stage_animation(&spec))
@@ -157,6 +156,12 @@ pub async fn open_animation(
     let Some(staged) = staged else {
         return Ok(None);
     };
+    // Awaited: a blocking detect would run a second executor inside the one
+    // polling this future, which panics.
+    let mechanism = glycin::SandboxMechanism::detect().await;
+    if mechanism == glycin::SandboxMechanism::NotSandboxed {
+        return Err(BigImageError::SandboxUnavailable);
+    }
     let opened = super::secure::SandboxedAnimation::open(staged, mechanism).await?;
     Ok(opened.map(|(inner, frame)| (BigAnimation { inner }, frame)))
 }
