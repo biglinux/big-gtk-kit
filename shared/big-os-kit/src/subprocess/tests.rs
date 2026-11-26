@@ -612,6 +612,82 @@ fn desktop_variables_not_inherited() {
     );
 }
 
+/// The `LC_NUMERIC` and `BIG_PERSON_LC_NUMERIC` lines of what `env` prints
+/// when started from this process, for the person or as a helper.
+fn numeric_lines(for_person: bool) -> Vec<String> {
+    BigSubprocessSpec::builder()
+        .program("env")
+        .for_person(for_person)
+        .timeout(Duration::from_secs(5))
+        .build()
+        .run()
+        .expect("env runs")
+        .stdout_lossy()
+        .lines()
+        .filter(|line| {
+            line.starts_with("LC_NUMERIC=") || line.starts_with("BIG_PERSON_LC_NUMERIC=")
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// After this process pins its numbers to `C`, a helper keeps the pin and a
+/// program started for the person gets their `LC_ALL`, else `LC_NUMERIC`,
+/// else none; neither carries the variable that kept it.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn person_spawn_gets_person_numbers() {
+    const EXPECTED: &str = "BIG_OS_KIT_EXPECTED_NUMERIC";
+    if let Some(expected) = std::env::var_os(EXPECTED) {
+        // SAFETY: the child runs this one test, on the only thread that
+        // touches the environment.
+        unsafe { crate::init_c_numeric_locale() };
+        assert_eq!(numeric_lines(false), ["LC_NUMERIC=C"]);
+        let expected: Vec<String> = match expected.to_str().expect("UTF-8") {
+            "" => Vec::new(),
+            numeric => vec![format!("LC_NUMERIC={numeric}")],
+        };
+        assert_eq!(numeric_lines(true), expected);
+        return;
+    }
+    let cases: [(&[(&str, &str)], &str); 4] = [
+        (&[("LC_NUMERIC", "pt_BR.UTF-8")], "pt_BR.UTF-8"),
+        (
+            &[("LC_ALL", "de_DE.UTF-8"), ("LC_NUMERIC", "pt_BR.UTF-8")],
+            "de_DE.UTF-8",
+        ),
+        (&[("LANG", "pt_BR.UTF-8")], ""),
+        (&[("LC_ALL", ""), ("LANG", "pt_BR.UTF-8")], ""),
+    ];
+    for (locale, expected) in cases {
+        let mut child = BigSubprocessSpec::builder()
+            .program(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "subprocess::tests::person_spawn_gets_person_numbers",
+                "--quiet",
+            ])
+            .env_inherit(false)
+            .env(EXPECTED, expected);
+        if let Some(path) = std::env::var_os("PATH") {
+            child = child.env("PATH", path);
+        }
+        for (variable, value) in locale {
+            child = child.env(variable, value);
+        }
+        let out = child
+            .timeout(Duration::from_secs(60))
+            .build()
+            .run()
+            .expect("child test runs");
+        assert!(
+            out.status.success() && out.stdout_lossy().contains("1 passed"),
+            "{locale:?}: {}",
+            out.stdout_lossy()
+        );
+    }
+}
+
 /// Mesa's `debug_parse_bool_option` with a false default (src/util/u_debug.c)
 /// is the oracle: these words true in any case, every other value false.
 #[test]

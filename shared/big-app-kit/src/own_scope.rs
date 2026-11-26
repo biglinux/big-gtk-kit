@@ -438,17 +438,15 @@ fn launch_context(
     Some(context)
 }
 
-/// Give what `context` starts the system's environment: no desktop variables,
-/// the person's numeric locale, and the software renderer's variables set last
-/// (`__EGL_VENDOR_LIBRARY_FILENAMES` is in both lists).
+/// Give what `context` starts the person's environment, with the software
+/// renderer's variables set last (`__EGL_VENDOR_LIBRARY_FILENAMES` is in both
+/// lists).
 fn set_environment(context: &impl IsA<gio::AppLaunchContext>, renderer: Renderer) {
-    for variable in big_os_kit::subprocess::desktop_only_variables() {
-        context.unsetenv(variable);
-    }
-    match big_os_kit::person_numeric_locale() {
-        Some(numeric) if numeric.is_empty() => context.unsetenv("LC_NUMERIC"),
-        Some(numeric) => context.setenv("LC_NUMERIC", numeric),
-        None => {}
+    for (variable, value) in big_os_kit::subprocess::person_environment() {
+        match value {
+            Some(value) => context.setenv(variable, value),
+            None => context.unsetenv(variable),
+        }
     }
     if renderer == Renderer::Software {
         set_variables(context, &SOFTWARE_RENDERING);
@@ -533,7 +531,8 @@ fn rehome(context: &impl IsA<gio::AppLaunchContext>, started: Option<Started>) {
 }
 
 /// Move `pid` into a fresh transient scope on the systemd user manager, named
-/// after `name`.
+/// after `name`. A program spawned by argv for the person takes their
+/// environment from [`big_os_kit::subprocess::person_environment`].
 ///
 /// Fire-and-forget: on failure the program still runs, only coupled to ours, and
 /// a session without systemd only logs a warning. Callable from any thread: the

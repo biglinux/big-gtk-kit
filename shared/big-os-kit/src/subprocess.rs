@@ -168,6 +168,12 @@ pub struct BigSubprocessSpec {
     #[builder(default = true)]
     pub(crate) env_inherit: bool,
 
+    /// Start a program for the person rather than a helper of this process:
+    /// it gets [`person_environment`], their own numbers instead of the `C`
+    /// this process pinned, below the overrides.
+    #[builder(default = false)]
+    pub(crate) for_person: bool,
+
     /// Bytes piped to the child stdin. `None` = no stdin write.
     pub(crate) stdin: Option<Vec<u8>>,
 
@@ -755,9 +761,9 @@ const INHERITED_LIMITS: &str = "BIG_HOST_INHERITED_LIMITS";
 /// [`crate::service_ready::notify`], which speaks for this process alone, the
 /// limits it inherited, which they get as limits instead, the PID of its
 /// pressure watcher ([`crate::pressure_protocol::PROCESS_WATCHER`]), the
-/// person's numeric locale it kept ([`crate::person_numeric_locale`]), a renderer big-host
-/// chose for itself, so a GTK program started from the desktop keeps GTK's
-/// own choice, and the desktop's GPU variables ([`DESKTOP_GPU`]), so
+/// person's numeric locale it kept ([`person_environment`]), a renderer
+/// big-host chose for itself, so a GTK program started from the desktop keeps
+/// GTK's own choice, and the desktop's GPU variables ([`DESKTOP_GPU`]), so
 /// `prime-run` and `PrefersNonDefaultGPU` still reach the NVIDIA GPU.
 #[must_use]
 pub fn desktop_only_variables() -> Vec<&'static str> {
@@ -774,6 +780,30 @@ pub fn desktop_only_variables() -> Vec<&'static str> {
         variables.extend(DESKTOP_GPU_VARIABLES);
     }
     variables
+}
+
+/// The environment of a program started for the person, as changes to this
+/// process's: each variable with its value, or `None` to remove it. The
+/// [`desktop_only_variables`] go, and once [`crate::init_c_numeric_locale`]
+/// pinned numbers to `C`, `LC_NUMERIC` is the person's again, removed when
+/// they named none.
+///
+/// Only this gives the person's numbers back: a program started any other way
+/// inherits `LC_NUMERIC=C`, and, unless it lost the [`desktop_only_variables`],
+/// the variable that keeps the person's value.
+#[must_use]
+pub fn person_environment() -> Vec<(&'static str, Option<OsString>)> {
+    let mut changes: Vec<_> = desktop_only_variables()
+        .into_iter()
+        .map(|name| (name, None))
+        .collect();
+    if let Some(numeric) = std::env::var_os(crate::process_locale::PERSON_NUMERIC_LOCALE) {
+        changes.push((
+            "LC_NUMERIC",
+            Some(numeric).filter(|value| !value.is_empty()),
+        ));
+    }
+    changes
 }
 
 /// The desktop's GPU variables this process has, for a process of the
@@ -968,6 +998,14 @@ fn build_command(spec: &BigSubprocessSpec) -> std::process::Command {
         }
     } else {
         cmd.env_clear();
+    }
+    if spec.for_person {
+        for (key, value) in person_environment() {
+            match value {
+                Some(value) => cmd.env(key, value),
+                None => cmd.env_remove(key),
+            };
+        }
     }
     for (k, v) in &spec.env_overrides {
         cmd.env(k, v);
