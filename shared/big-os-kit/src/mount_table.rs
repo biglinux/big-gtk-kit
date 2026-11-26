@@ -216,15 +216,34 @@ fn dm_crypt_below(name: &str, depth: u8) -> bool {
         })
 }
 
+/// The kernel escapes only space, tab, newline and backslash, so a mount point
+/// may hold any other byte: one that is not UTF-8 spoils that line alone.
 fn read(file: &mut File) -> Option<Arc<str>> {
     file.rewind().ok()?;
-    let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
-    Some(Arc::from(text))
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(Arc::from(String::from_utf8_lossy(&bytes)))
 }
 
 #[cfg(test)]
 mod tests {
+    /// A mount point that is not UTF-8 leaves the other mounts readable.
+    #[test]
+    fn foreign_bytes_spoil_one_line() {
+        let path = std::env::temp_dir().join(format!("mountinfo-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            b"22 1 0:21 / / rw - btrfs /dev/sda2 rw\n90 22 0:60 / /media/\xff rw - nfs4 server:/x rw\n",
+        )
+        .unwrap();
+        let table = super::read(&mut std::fs::File::open(&path).unwrap()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            super::mount_holding(&table, std::path::Path::new("/home")),
+            Some(("/dev/sda2".to_owned(), "btrfs".to_owned()))
+        );
+    }
+
     #[test]
     fn holding_mount_is_the_longest() {
         let table = "\
