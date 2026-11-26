@@ -51,12 +51,20 @@ pub(crate) fn install() {
 /// program by a whole set every time. Kept, it costs one set for as long as
 /// the window lives. A dialog that releases cleanly should be built per
 /// opening instead: kept, it would cost memory while closed.
+///
+/// Kept only as a sheet: where libadwaita shows the dialog in a window of its
+/// own (over a window that is not a resizable `AdwWindow`), it is built per
+/// opening, since GTK refuses to show one kept dialog that way twice.
 pub fn present_kept<D: IsA<adw::Dialog>>(
     parent: &impl IsA<gtk::Widget>,
     build: impl FnOnce() -> D,
 ) {
     let parent = parent.as_ref();
-    let Some(window) = parent.root().and_downcast::<gtk::Window>() else {
+    let window = parent
+        .root()
+        .and_downcast::<gtk::Window>()
+        .filter(|_| presents_in_window(Some(parent)));
+    let Some(window) = window else {
         build().present(Some(parent));
         return;
     };
@@ -80,8 +88,8 @@ pub fn present_kept<D: IsA<adw::Dialog>>(
 ///
 /// A dialog once shown as a sheet cannot be shown in a window of its own:
 /// libadwaita 1.9 sets a parent on its content, which the sheet still holds,
-/// and GTK refuses it with a critical. So the pools take and give back only
-/// dialogs for which this holds.
+/// and GTK refuses it with a critical. So the pools and [`present_kept`] keep
+/// only dialogs for which this holds.
 pub(crate) fn presents_in_window(parent: Option<&gtk::Widget>) -> bool {
     parent
         .and_then(WidgetExt::root)
@@ -729,5 +737,49 @@ mod tests {
         drop(window);
         pump();
         assert_eq!(finalized.get(), 1, "the kept dialog outlived its window");
+    }
+
+    /// A dialog libadwaita shows in a window of its own is built per opening:
+    /// one kept and shown that way again is refused by GTK with a critical.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn kept_dialog_only_as_sheet() {
+        init();
+        let window = adw::Window::new();
+        window.present();
+        pump();
+        let built = Rc::new(Cell::new(0));
+        // Over a plain window, over one that cannot be resized, then back as a
+        // sheet, where the dialog kept before is shown again.
+        let plain = gtk::Window::new();
+        plain.present();
+        pump();
+        for (parent, resizable, total) in [
+            (plain.upcast_ref::<gtk::Widget>(), true, 1),
+            (plain.upcast_ref(), true, 2),
+            (window.upcast_ref(), true, 3),
+            (window.upcast_ref(), false, 4),
+            (window.upcast_ref(), false, 5),
+            (window.upcast_ref(), true, 5),
+        ] {
+            window.set_resizable(resizable);
+            let (count, last) = (built.clone(), Rc::new(RefCell::new(None)));
+            let made = last.clone();
+            present_kept(parent, move || {
+                count.set(count.get() + 1);
+                let dialog = adw::ShortcutsDialog::new();
+                made.replace(Some(dialog.clone().upcast::<adw::Dialog>()));
+                dialog
+            });
+            pump();
+            assert_eq!(built.get(), total);
+            let made = last.take();
+            if let Some(dialog) = window.visible_dialog().or(made) {
+                dialog.force_close();
+            }
+            pump();
+        }
+        plain.destroy();
+        window.destroy();
     }
 }
