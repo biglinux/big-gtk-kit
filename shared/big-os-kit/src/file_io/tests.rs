@@ -7,9 +7,9 @@
 
 use super::*;
 
-/// The kernel's answer, not the owner's bit: a file only its owner may
-/// run is refused to everybody else, and `/dev/shm`-style `noexec`
-/// mounts refuse every file whatever its bits.
+/// The kernel's answer, not the owner's bit: a file without an execute bit
+/// is refused, and `noexec` mounts such as `/proc` refuse every file
+/// whatever its bits.
 #[cfg(unix)]
 #[test]
 fn run_verdict_asks_the_kernel() {
@@ -17,16 +17,22 @@ fn run_verdict_asks_the_kernel() {
     let path = std::env::temp_dir().join(format!("big-os-kit-run-{}", std::process::id()));
     fs::write(&path, b"#!/bin/sh\n").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(may_run(&path).unwrap(), RunVerdict::NotPermitted);
+    let unmarked = may_run(&path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-    // The temporary folder may itself be `noexec`; either answer is the
-    // kernel's.
-    assert!(matches!(
-        may_run(&path).unwrap(),
-        RunVerdict::Runs | RunVerdict::NoExecMount
-    ));
+    let marked = may_run(&path).unwrap();
     fs::remove_file(&path).unwrap();
+    // The temporary folder may itself be `noexec`, which outranks the bits.
+    let expected = if marked == RunVerdict::NoExecMount {
+        (RunVerdict::NoExecMount, RunVerdict::NoExecMount)
+    } else {
+        (RunVerdict::NotPermitted, RunVerdict::Runs)
+    };
+    assert_eq!((unmarked, marked), expected);
     assert!(may_run(&path).is_err());
+    assert_eq!(
+        may_run(Path::new("/proc/self/status")).unwrap(),
+        RunVerdict::NoExecMount
+    );
 }
 use std::error::Error as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -233,6 +239,35 @@ fn abandoned_staging_is_cleared() {
     assert!(recent.exists());
     assert!(lookalikes.iter().all(|lookalike| lookalike.exists()));
     drop(staged);
+    let _ = fs::remove_dir_all(parent);
+}
+
+/// On a network share the process id may be another machine's, so a dead
+/// owner's staging directory there stays; off the share, it goes.
+#[test]
+fn abandoned_staging_on_share_stays() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let parent = file_io_test_dir("private-abandoned-share");
+    let staging = parent.join(".stage-999999999-0");
+    create_dir_all(&staging).unwrap();
+    let left = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+    fs::File::open(&staging)
+        .unwrap()
+        .set_modified(left)
+        .unwrap();
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+    let point = fs::canonicalize(&parent)
+        .unwrap()
+        .to_string_lossy()
+        .replace(' ', "\\040");
+    let share = format!("36 25 0:53 / {point} rw,relatime - nfs4 server:/export rw\n");
+
+    remove_abandoned(&parent, ".stage", &share);
+    let kept = staging.exists();
+    remove_abandoned(&parent, ".stage", "");
+
+    assert!(kept);
+    assert!(!staging.exists());
     let _ = fs::remove_dir_all(parent);
 }
 
@@ -509,6 +544,53 @@ fn link_rename_keeps_taken_name() {
     assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
     assert_eq!(fs::read_to_string(&second).unwrap(), "second");
     assert_eq!(fs::read_to_string(&target).unwrap(), "first");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// A source that cannot leave its folder (not writable here) stays under its
+/// one name: the link just made under the new name goes again.
+#[test]
+fn link_rename_undoes_its_link() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = file_io_test_dir("rename-by-link-stuck");
+    let closed = dir.join("closed");
+    create_dir_all(&closed).unwrap();
+    let source = closed.join("source");
+    fs::write(&source, "kept").unwrap();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o500)).unwrap();
+    let target = dir.join("target");
+
+    let moved = rename_by_link(&source, &target);
+
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        moved.map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::PermissionDenied)
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "kept");
+    assert!(!target.exists());
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Where `renameat2` takes no flag, a folder is refused with the kernel's
+/// `EINVAL` and stays: a folder cannot be linked.
+#[test]
+fn folder_rename_without_renameat2_is_refused() {
+    let dir = file_io_test_dir("rename-folder-no-flag");
+    let folder = dir.join("folder");
+    create_dir_all(&folder).unwrap();
+    let target = dir.join("target");
+    let moved = std::thread::spawn({
+        let (folder, target) = (folder.clone(), target.clone());
+        move || {
+            crate::storage::tests::refuse_on_this_thread(libc::SYS_renameat2, libc::EINVAL);
+            rename_no_replace(&folder, &target).map_err(|error| error.raw_os_error())
+        }
+    })
+    .join()
+    .unwrap();
+    assert_eq!(moved, Err(Some(libc::EINVAL)));
+    assert!(folder.is_dir() && !target.exists());
     let _ = fs::remove_dir_all(dir);
 }
 
