@@ -225,7 +225,8 @@ impl BigTaskSignal {
     ///
     /// Cooperative cancellation flips this signal first; after the configured
     /// deadline a private hard-cancel flag is set, and the existing subprocess
-    /// cancellation loop performs the kill path.
+    /// cancellation loop performs the kill path. A signal already cancelled
+    /// starts nothing.
     ///
     /// # Errors
     ///
@@ -249,6 +250,9 @@ impl BigTaskSignal {
         &self,
         spec: &BigSubprocessSpec,
     ) -> Result<BigSubprocessOutput, BigSubprocessError> {
+        if self.is_cancelled() {
+            return Err(BigSubprocessError::Cancelled);
+        }
         let hard_cancel = Arc::new(AtomicBool::new(false));
         self.set_hard_cancel_hook({
             let hard_cancel = Arc::clone(&hard_cancel);
@@ -658,5 +662,26 @@ mod tests {
 
         assert!(matches!(err, BigSubprocessError::Cancelled));
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    /// A task cancelled before its program starts does not wait out the
+    /// grace a running one gets.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn cancelled_signal_starts_nothing() {
+        let token = BigTaskToken::new(Duration::from_secs(5));
+        token.cancel();
+        let start = std::time::Instant::now();
+        let err = token
+            .signal()
+            .run_subprocess(
+                &BigSubprocessSpec::builder()
+                    .program("sleep")
+                    .arg("5")
+                    .build(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, BigSubprocessError::Cancelled));
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 }
