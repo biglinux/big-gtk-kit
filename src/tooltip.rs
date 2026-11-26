@@ -700,9 +700,14 @@ fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
 
 /// Give `widget` one name: the tooltip a person reads and the label a screen
 /// reader announces.
+///
+/// A button built with a label is labelled by that label, which outranks a
+/// label property, so the relation goes; a label set on the button after this
+/// call relates it again.
 pub fn name_control(widget: &impl IsA<gtk::Widget>, label: &str) {
     let widget = widget.upcast_ref::<gtk::Widget>();
     widget.set_tooltip_text(Some(label));
+    widget.reset_relation(gtk::AccessibleRelation::LabelledBy);
     widget.update_property(&[gtk::accessible::Property::Label(label)]);
 }
 
@@ -1043,6 +1048,29 @@ mod tests {
         set_show_when_inactive(false);
         window.destroy();
         pump();
+    }
+
+    /// GTK relates a labeled button to its label, which a screen reader reads
+    /// over the label property.
+    #[test]
+    fn named_labeled_button_reads_its_name() {
+        big_testkit::harness::require_gtk_test(|| {
+            let toggle = gtk::ToggleButton::with_label("Read");
+            name_control(&toggle, "Owner can read");
+            let window = gtk::Window::builder().child(&toggle).build();
+            window.present();
+            big_testkit::harness::pump();
+            assert!(!gtk::test_accessible_has_relation(
+                &toggle,
+                gtk::AccessibleRelation::LabelledBy
+            ));
+            assert!(big_testkit::harness::has_named_descendant(
+                &toggle,
+                gtk::AccessibleRole::ToggleButton,
+                "Owner can read"
+            ));
+            window.destroy();
+        });
     }
 
     #[test]
