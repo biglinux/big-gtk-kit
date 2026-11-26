@@ -14,8 +14,8 @@ dialog 982 fonts and 17 MiB.
 Drop the font on that path too.
 ---
  gsk/gpu/gskgpucachedglyph.c |  5 ++-
- testsuite/gsk/misc.c        | 67 +++++++++++++++++++++++++++++++++++++
- 2 files changed, 71 insertions(+), 1 deletion(-)
+ testsuite/gsk/misc.c        | 70 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 74 insertions(+), 1 deletion(-)
 
 diff --git a/gsk/gpu/gskgpucachedglyph.c b/gsk/gpu/gskgpucachedglyph.c
 index 223ff28c15..241a61609a 100644
@@ -34,7 +34,7 @@ index 223ff28c15..241a61609a 100644
    origin.x = floor (ink_rect.x * 1.0 / PANGO_SCALE + subpixel_x);
    origin.y = floor (ink_rect.y * 1.0 / PANGO_SCALE + subpixel_y);
 diff --git a/testsuite/gsk/misc.c b/testsuite/gsk/misc.c
-index a1dc9c8274..a99bcbe99e 100644
+index a1dc9c8274..4e57c7b434 100644
 --- a/testsuite/gsk/misc.c
 +++ b/testsuite/gsk/misc.c
 @@ -3,6 +3,7 @@
@@ -45,7 +45,7 @@ index a1dc9c8274..a99bcbe99e 100644
  
  #include <gobject/gvaluecollector.h>
  
-@@ -323,6 +324,71 @@ test_radial_gradient_opaque (void)
+@@ -323,6 +324,74 @@ test_radial_gradient_opaque (void)
    gsk_gradient_free (gradient);
  }
  
@@ -61,6 +61,7 @@ index a1dc9c8274..a99bcbe99e 100644
 +  PangoFont *font, *scaled;
 +  PangoGlyphItem *run;
 +  GskRenderNode *text, *node;
++  GskTransform *transform;
 +  GdkTexture *texture;
 +
 +  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
@@ -91,7 +92,9 @@ index a1dc9c8274..a99bcbe99e 100644
 +
 +  /* Under a scale transform, glyphs are drawn with the font reloaded at
 +   * that scale; the space has no ink and gets no cache entry */
-+  node = gsk_transform_node_new (text, gsk_transform_scale (NULL, 1.5, 1.5));
++  transform = gsk_transform_scale (NULL, 1.5, 1.5);
++  node = gsk_transform_node_new (text, transform);
++  gsk_transform_unref (transform);
 +  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 60, 40));
 +  g_object_unref (texture);
 +  gsk_render_node_unref (node);
@@ -117,7 +120,7 @@ index a1dc9c8274..a99bcbe99e 100644
  int
  main (int argc, char *argv[])
  {
-@@ -337,6 +403,7 @@ main (int argc, char *argv[])
+@@ -337,6 +406,7 @@ main (int argc, char *argv[])
    g_test_add_func ("/renderer/cairo", test_cairo_renderer);
    g_test_add_func ("/renderer/gl", test_gl_renderer);
    g_test_add_func ("/renderer/vulkan", test_vulkan_renderer);

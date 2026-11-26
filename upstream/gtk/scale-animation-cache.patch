@@ -18,9 +18,9 @@ multiple of 1/120 is drawn as before.
  gsk/gpu/gskgpucachedfill.c    |  19 +++-
  gsk/gpu/gskgpucachedstroke.c  |  19 +++-
  gsk/gpu/gskgpunodeprocessor.c |  32 ++++--
- gsk/gpu/gskgpuutilsprivate.h  |  23 +++++
- testsuite/gsk/misc.c          | 188 ++++++++++++++++++++++++++++++++++
- 5 files changed, 267 insertions(+), 14 deletions(-)
+ gsk/gpu/gskgpuutilsprivate.h  |  23 ++++
+ testsuite/gsk/misc.c          | 191 ++++++++++++++++++++++++++++++++++
+ 5 files changed, 270 insertions(+), 14 deletions(-)
 
 diff --git a/gsk/gpu/gskgpucachedfill.c b/gsk/gpu/gskgpucachedfill.c
 index a3f9d89ad1..661f317d59 100644
@@ -277,7 +277,7 @@ index 42c3410a46..d3695283cc 100644
 +  return MAX (ceilf (scale * GSK_GPU_SCALE_STEPS - 0.001f), 1) / GSK_GPU_SCALE_STEPS;
 +}
 diff --git a/testsuite/gsk/misc.c b/testsuite/gsk/misc.c
-index a1dc9c8274..2cba638a09 100644
+index a1dc9c8274..f2ff4b1c01 100644
 --- a/testsuite/gsk/misc.c
 +++ b/testsuite/gsk/misc.c
 @@ -1,11 +1,18 @@
@@ -299,7 +299,7 @@ index a1dc9c8274..2cba638a09 100644
  static void
  test_rendernode_gvalue (void)
  {
-@@ -224,6 +231,185 @@ test_gl_renderer (void)
+@@ -224,6 +231,188 @@ test_gl_renderer (void)
  #endif
  }
  
@@ -318,6 +318,7 @@ index a1dc9c8274..2cba638a09 100644
 +  PangoFont *font;
 +  char *path;
 +  GskRenderNode *text, *node;
++  GskTransform *transform;
 +  GdkTexture *plain, *scaled;
 +  guchar plain_data[40 * 30 * 4], scaled_data[40 * 30 * 4];
 +
@@ -368,7 +369,9 @@ index a1dc9c8274..2cba638a09 100644
 +
 +  /* Glyphs are rasterized at the nearest scale step and drawn pixel
 +   * for pixel; this short text lands on the same pixels */
-+  node = gsk_transform_node_new (text, gsk_transform_scale (NULL, 1.003, 1.003));
++  transform = gsk_transform_scale (NULL, 1.003, 1.003);
++  node = gsk_transform_node_new (text, transform);
++  gsk_transform_unref (transform);
 +  plain = gsk_renderer_render_texture (renderer, text, &GRAPHENE_RECT_INIT (0, 0, 40, 30));
 +  scaled = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 40, 30));
 +  gdk_texture_download (plain, plain_data, 40 * 4);
@@ -485,7 +488,7 @@ index a1dc9c8274..2cba638a09 100644
  static void
  test_vulkan_renderer (void)
  {
-@@ -336,6 +522,8 @@ main (int argc, char *argv[])
+@@ -336,6 +525,8 @@ main (int argc, char *argv[])
    g_test_add_func ("/rendernode/container/disjoint", test_container_disjoint);
    g_test_add_func ("/renderer/cairo", test_cairo_renderer);
    g_test_add_func ("/renderer/gl", test_gl_renderer);
