@@ -9,8 +9,10 @@ application.
 
 When GTK or libadwaita gets something wrong, the kit works around it with a
 different way of doing the same thing; its code never relies on a patched
-library. Each workaround checks for the faulty state first, so a fixed library
-leaves it idle. Fixes to send upstream are kept apart, in `upstream/`.
+library. A workaround that can tell the faulty state at run time checks for it
+first, so a fixed library leaves it idle; the others stay in force on a fixed
+library too: a list from `directory::unwatched` never follows its folder,
+whatever GTK runs. Fixes to send upstream are kept apart, in `upstream/`.
 
 The `big-gtk-kit` crate needs GTK 4.22 and libadwaita 1.9 or newer, the
 crates in `shared/` GTK 4.24; BigLinux ships GTK 4.24 and libadwaita 1.10.
