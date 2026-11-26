@@ -103,7 +103,7 @@ disallowed-methods = [
     { path = "std::fs::rename", reason = "replace a file's contents with `big_os_kit::storage::atomic_write` (or its `_private`, `_durable` and `create` forms); move an entry with `big_os_kit::file_io::rename`" },
     { path = "std::io::stdin", reason = "stdin is a blocking stream; keep it in workers/engines, not UI/app code" },
     # `input()` panics once the component's runtime has finished, and a panic
-    # inside a GLib callback aborts the process, which here is the whole desktop.
+    # inside a GLib callback aborts the process.
     # Send through the raw channel and ignore a closed receiver.
     { path = "relm4::channel::component::ComponentSender::input", reason = "panics once the component has shut down; use `let _ = sender.input_sender().send(msg)`" },
     { path = "relm4::channel::component::AsyncComponentSender::input", reason = "panics once the component has shut down; use `let _ = sender.input_sender().send(msg)`" },
