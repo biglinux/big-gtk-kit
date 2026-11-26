@@ -509,7 +509,6 @@ fn spawn_curl(
         HttpMethod::Get => "GET",
         HttpMethod::Post => "POST",
     });
-    command.arg("--include");
     if follow_redirects {
         command
             .arg("--location")
@@ -560,6 +559,10 @@ fn base_curl(deadline: Deadline, user_agent: &str) -> Command {
         .arg("--disable")
         .arg("--silent")
         .arg("--show-error")
+        // The headers come first on the output; behind a proxy, only the
+        // server's, never the proxy's answer to CONNECT.
+        .arg("--include")
+        .arg("--suppress-connect-headers")
         .arg("--connect-timeout")
         .arg(FAST_TIMEOUT_SECS.to_string());
     match deadline {
@@ -626,7 +629,7 @@ fn read_final_headers(
 fn read_one_header_block(stdout: &mut impl Read) -> Result<Vec<u8>, HttpError> {
     let mut headers = Vec::new();
     let mut byte = [0_u8; 1];
-    while headers.len() <= MAX_HEADER_BYTES {
+    while headers.len() < MAX_HEADER_BYTES {
         let n = stdout.read(&mut byte).map_err(|error| HttpError::Read {
             part: "headers",
             error,
@@ -869,6 +872,105 @@ mod tests {
         assert_eq!(response.status, 302);
     }
 
+    /// A POST carries its caller's API key, so a redirect comes back as the
+    /// answer instead of taking the key to another host.
+    #[test]
+    fn credentialed_post_refuses_redirects() {
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:1/\r\n\
+              Content-Length: 0\r\nConnection: close\r\n\r\n",
+        ]);
+        let response = http_post_json_stream_with_extra_headers(
+            &url,
+            "{}",
+            &RequestHeaders::default(),
+            &[("x-api-key", "secret")],
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(response.status, 307);
+    }
+
+    /// A stream follows redirects as the capped GET does: not with a Referer.
+    #[test]
+    fn stream_keeps_a_referer_home() {
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/\r\n\
+              Content-Length: 0\r\nConnection: close\r\n\r\n",
+        ]);
+        let headers = RequestHeaders {
+            referer: "http://provider.example/",
+            ..RequestHeaders::default()
+        };
+        let response = http_get_stream(&url, &headers, Duration::from_secs(5)).unwrap();
+        server.join().unwrap();
+        assert_eq!(response.status, 302);
+    }
+
+    /// A name that does not resolve is not asked again: the retry would only
+    /// add its delay. Timed against one attempt made after it, which a
+    /// resolver's cache can only make faster.
+    #[test]
+    fn unresolved_host_is_not_retried() {
+        let url = "http://unresolved.invalid/";
+        let started = std::time::Instant::now();
+        assert_eq!(http_get_with_retry(url, &[]), None);
+        let retried = started.elapsed();
+        let started = std::time::Instant::now();
+        let single = http_get_bytes_capped(
+            url,
+            &RequestHeaders::default(),
+            1024,
+            Duration::from_secs(5),
+        );
+        let one_attempt = started.elapsed();
+        assert!(
+            matches!(
+                single,
+                Err(HttpError::CurlExited(CURL_COULDNT_RESOLVE_HOST))
+            ),
+            "{single:?}"
+        );
+        assert!(
+            retried < one_attempt + RETRY_DELAY,
+            "{retried:?} against one attempt of {one_attempt:?}"
+        );
+    }
+
+    /// No argv carries a NUL, and curl's config file would cut the URL at it.
+    #[test]
+    fn nul_in_url_is_refused() {
+        let error = http_get_bytes_capped(
+            "http://127.0.0.1:1/\0x",
+            &RequestHeaders::default(),
+            1024,
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(matches!(error, HttpError::NulInUrl), "{error}");
+    }
+
+    /// The cap counts every byte of a block, its blank line included.
+    #[test]
+    fn header_block_stops_at_its_cap() {
+        let block = |length: usize| {
+            let mut block = vec![b'x'; length - 4];
+            block.extend_from_slice(b"\r\n\r\n");
+            block
+        };
+        let whole = block(MAX_HEADER_BYTES);
+        assert_eq!(
+            read_one_header_block(&mut whole.as_slice()).unwrap().len(),
+            MAX_HEADER_BYTES
+        );
+        let over = block(MAX_HEADER_BYTES + 1);
+        assert!(matches!(
+            read_one_header_block(&mut over.as_slice()),
+            Err(HttpError::HeadersTooLarge)
+        ));
+    }
+
     /// A body cut short ends in an error, not in a shorter body.
     #[test]
     fn cut_stream_reads_as_an_error() {
@@ -914,6 +1016,19 @@ mod tests {
         assert_eq!(
             arguments(&command).first().map(String::as_str),
             Some("--disable")
+        );
+    }
+
+    /// Under `https_proxy` or `ALL_PROXY`, which curl honors, `--include`
+    /// prints the proxy's `200 Connection established` first, and it would
+    /// read as the server's answer.
+    #[test]
+    fn proxy_answer_stays_out_of_headers() {
+        let command = base_curl(Deadline::Total(Duration::from_secs(1)), "");
+        assert!(
+            arguments(&command)
+                .iter()
+                .any(|argument| argument == "--suppress-connect-headers")
         );
     }
 }
