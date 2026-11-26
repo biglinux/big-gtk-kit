@@ -4,8 +4,8 @@
 //!
 //! A reading answers "how much now"; the question underneath is usually "is this
 //! normal", and a minute of history drawn in a card's width answers it. One
-//! widget for every graph of the suite, so a processor in the desktop's card and
-//! in the System Monitor look like the same thing.
+//! widget for every graph of the suite, so the same reading looks the same in
+//! every program that draws it.
 //!
 //! Drawn only while mapped, from samples the caller already has: the graph never
 //! reads anything or keeps a timer of its own.

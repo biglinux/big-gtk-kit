@@ -15,8 +15,7 @@ Do not use it for one fixed label/box or product-specific policy.
 modules `chart`, `css`, `desktop_entry`, `feedback`, `input`, `layout`, `list`, `qr`,
 `renderer`, `shape`, `task`, `templates`, `text`, `time` and `wayland`.
 
-The exact public API and safety requirements are in crate-level rustdoc. Do not
-infer current methods from roadmap documents.
+The exact public API and safety requirements are in the crate's rustdoc.
 
 ## Ownership and lifecycle
 
@@ -37,14 +36,13 @@ window or split pane. Pass translated menu labels and your own buttons through
 `set_items`; the shared owner handles separators and overflow.
 `breadcrumb_button` supplies the standard icon, ellipsis and spacing.
 
-Navigation stays in the product: Bigfiles retains location editing and middle
-click, while the terminal retains its linked-directory behavior. Overflow entries invoke
-the original button after closing the menu. Capture product owners weakly in
-the button callbacks, as with other GTK children.
+Navigation stays in the program: what a button does (location editing, a middle
+click) is its own. Overflow entries invoke the original button after closing the
+menu. Capture the program's state weakly in the button callbacks, as with other
+GTK children.
 
-`input::permissions::BigPermissionEditor` supplies owner/group/others access rows
-for BigFiles and BigTerminal. Add `rows()` to a
-preferences group, read `mode()` when applying, and capture widgets weakly in
+`input::permissions::BigPermissionEditor` supplies owner/group/others access
+rows. Add `rows()` to a preferences group, read `mode()` when applying, and capture widgets weakly in
 `connect_changed`. Consumers own identity checks, filesystem writes and errors;
 the editor changes only its nine ordinary access choices.
 
@@ -65,7 +63,8 @@ menu is something else hears the same requests through
 
 GTK 4.24, libadwaita 1.10, Relm4 0.11.
 
-The workspace feature gates and nearest product PKGBUILD define exact versions.
+The feature gates in the workspace `Cargo.toml` set the oldest versions the code
+calls.
 
 ## Example
 
@@ -75,7 +74,7 @@ The workspace feature gates and nearest product PKGBUILD define exact versions.
 
 ```bash
 cargo fmt -p big-relm4-components -- --check
-cargo clippy -p big-relm4-components --all-targets --all-features --locked -- -D warnings
+cargo clippy -p big-relm4-components --all-targets --locked -- -D warnings
 cargo nextest run -p big-relm4-components --locked
 cargo test -p big-relm4-components --doc --locked
 ```
@@ -92,10 +91,9 @@ tools/headless-gate.sh --accessible cargo test -p big-relm4-components --locked 
 ```
 
 `input::dropdown::choice_row(title, labels)` builds the native libadwaita choice
-row used by settings and terminal rule forms. Pass translated plain-text labels;
+row of a setting or form. Pass translated plain-text labels;
 use the returned `AdwComboRow` directly for selection and change notifications.
-Its explicit combo-box role exposes the selector to AT-SPI. The existing gallery
-`settings-rows` example uses it through `big-settings-rows`. Every choice row and
+Its explicit combo-box role exposes the selector to AT-SPI. Every choice row and
 drop-down of the suite is built by `input::dropdown::build`,
 `build_drop_down` or `from_strings`, which name each choice for a screen reader;
 `clippy.toml` bans the stock constructors.

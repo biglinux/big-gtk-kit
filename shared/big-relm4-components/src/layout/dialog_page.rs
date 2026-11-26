@@ -5,16 +5,12 @@
 use adw::prelude::*;
 use relm4::gtk;
 
-/// Standard margins for dialog content.
+/// The margins of dialog content, in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BigDialogMargins {
-    /// Start.
     pub start: i32,
-    /// End.
     pub end: i32,
-    /// Top.
     pub top: i32,
-    /// Bottom.
     pub bottom: i32,
 }
 
@@ -41,28 +37,20 @@ pub struct BigDialogPage {
 }
 
 impl BigDialogPage {
-    /// Construct a [`BigDialogPage`] populated from the caller-supplied fields.
-    ///
-    /// All setters/builder methods can still adjust the result before it is
-    /// passed to the GTK layer.
+    /// A page whose content box fills the space under the header.
     #[must_use]
     pub fn plain() -> Self {
         Self::new(ScrollMode::Plain)
     }
 
-    /// Construct a [`BigDialogPage`] populated from the caller-supplied fields.
-    ///
-    /// All setters/builder methods can still adjust the result before it is
-    /// passed to the GTK layer.
+    /// A page whose content box scrolls vertically under the header.
     #[must_use]
     pub fn scrolled() -> Self {
         Self::new(ScrollMode::Scrolled)
     }
 
-    /// Construct a [`BigDialogPage`] populated from the caller-supplied fields.
-    ///
-    /// All setters/builder methods can still adjust the result before it is
-    /// passed to the GTK layer.
+    /// A scrolled page whose content is at most `maximum_size` pixels wide,
+    /// as [`adw::Clamp`] measures it with `tightening_threshold`.
     #[must_use]
     pub fn scrolled_clamped(maximum_size: i32, tightening_threshold: i32) -> Self {
         Self::new(ScrollMode::ScrolledClamped {
@@ -107,43 +95,31 @@ impl BigDialogPage {
         }
     }
 
-    /// Return a reference to the `root` exposed by this [`BigDialogPage`].
-    ///
-    /// Useful when callers need to bind signals, query state, or compose the
-    /// widget into a larger surface without taking ownership.
+    /// The toolbar view to place in a dialog.
     #[must_use]
     pub fn root(&self) -> &adw::ToolbarView {
         &self.root
     }
 
-    /// Return a reference to the `header` exposed by this [`BigDialogPage`].
-    ///
-    /// Useful when callers need to bind signals, query state, or compose the
-    /// widget into a larger surface without taking ownership.
+    /// The header bar, for the page's title and buttons.
     #[must_use]
     pub fn header(&self) -> &adw::HeaderBar {
         &self.header
     }
 
-    /// Return a reference to the `content` exposed by this [`BigDialogPage`].
-    ///
-    /// Useful when callers need to bind signals, query state, or compose the
-    /// widget into a larger surface without taking ownership.
+    /// The vertical box, with the dialog margins, that holds the page's controls.
     #[must_use]
     pub fn content(&self) -> &gtk::Box {
         &self.content
     }
 
-    /// Consume `self` and yield the underlying root.
+    /// The toolbar view to place in a dialog, giving up the other parts.
     #[must_use]
     pub fn into_root(self) -> adw::ToolbarView {
         self.root
     }
 
-    /// Return a reference to the `append description` exposed by this [`BigDialogPage`].
-    ///
-    /// Useful when callers need to bind signals, query state, or compose the
-    /// widget into a larger surface without taking ownership.
+    /// Append a wrapped, dimmed paragraph of `text` to the content, and return it.
     pub fn append_description(&self, text: &str) -> gtk::Label {
         let label = dialog_description(text);
         self.content.append(&label);

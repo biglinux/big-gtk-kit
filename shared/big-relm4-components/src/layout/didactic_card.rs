@@ -27,29 +27,31 @@ pub enum BigDidacticCardLayout {
     Plain,
 }
 
-/// Display-free specification describing big didactic card behavior.
+/// What a didactic card shows and how it lays it out, built without a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BigDidacticCardSpec {
-    /// Resource prefix.
+    /// The GResource folder holding the illustration, `/org/app/illustrations`.
     pub resource_prefix: String,
-    /// Illustration name.
+    /// The illustration's file in `resource_prefix`; `None` draws no picture.
     pub illustration_name: Option<String>,
-    /// Title.
+    /// The heading, and the card's accessible name.
     pub title: String,
-    /// Description.
+    /// The paragraph under the title, which describes the card and its control
+    /// to a screen reader; empty shows none.
     pub description: String,
-    /// Layout.
+    /// How the illustration, text and control are arranged.
     pub layout: BigDidacticCardLayout,
-    /// Card spacing.
+    /// Pixels between the illustration, the text and the control.
     pub card_spacing: i32,
-    /// Text spacing.
+    /// Pixels between the title and the description.
     pub text_spacing: i32,
-    /// Description max chars.
+    /// The width, in characters, at which the description wraps.
     pub description_max_chars: i32,
 }
 
 impl BigDidacticCardSpec {
-    /// Creates a new instance.
+    /// A horizontal card with the illustration `illustration_name` from
+    /// `resource_prefix`.
     #[must_use]
     pub fn new(
         resource_prefix: impl Into<String>,
@@ -69,8 +71,7 @@ impl BigDidacticCardSpec {
         }
     }
 
-    /// Build a plain-layout card with no illustration. Useful for
-    /// onboarding flows where art is missing.
+    /// A card of text alone, with no illustration.
     #[must_use]
     pub fn plain(title: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
@@ -126,7 +127,8 @@ pub struct BigDidacticCard {
 }
 
 impl BigDidacticCard {
-    /// Creates a new instance.
+    /// Build the card `spec` describes, with `control` beside or under its text
+    /// (none in the [`BigDidacticCardLayout::Summary`] layout).
     #[must_use]
     pub fn new(spec: BigDidacticCardSpec, control: Option<&impl IsA<gtk::Widget>>) -> Self {
         let (text, description) = text_column(&spec);
@@ -155,24 +157,20 @@ impl BigDidacticCard {
         Self { root }
     }
 
-    /// Return a reference to the `root` exposed by this [`BigDidacticCard`].
-    ///
-    /// Useful when callers need to bind signals, query state, or compose the
-    /// widget into a larger surface without taking ownership.
+    /// The card's box, to place in a page.
     #[must_use]
     pub fn root(&self) -> &gtk::Box {
         &self.root
     }
 
-    /// Consume `self` and yield the underlying root.
+    /// The card's box, to place in a page, giving up the wrapper.
     #[must_use]
     pub fn into_root(self) -> gtk::Box {
         self.root
     }
 }
 
-/// Convenience: build a card with an embedded control and return its
-/// root box.
+/// The box of a card built from `spec` with `control`.
 #[must_use]
 pub fn didactic_card(spec: BigDidacticCardSpec, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     BigDidacticCard::new(spec, Some(control)).into_root()
@@ -234,14 +232,13 @@ fn full_width_card<T: IsA<gtk::Widget>>(
     card
 }
 
-// Base card chrome every consumer gets without wiring product CSS. A product
-// that wants a different density overrides it with a more specific selector.
+// The card's look without a stylesheet of the program's own, which overrides it
+// (see `ensure_didactic_card_css_installed`).
 const DIDACTIC_CARD_BASE_CSS: &str = "
 .didactic-card {
     /* Variables, not the named card colors: a named color resolves from the
-       process-wide style manager, which an app that tints its chrome per
-       window (the terminal) never switches, so the card stayed dark under a
-       light window. The variables follow the window's own values. */
+       process-wide style manager, which a program tinting each window's chrome
+       leaves as it is. The variables follow the window's own values. */
     background-color: var(--card-bg-color);
     color: var(--card-fg-color);
     border: 1px solid alpha(currentColor, 0.08);

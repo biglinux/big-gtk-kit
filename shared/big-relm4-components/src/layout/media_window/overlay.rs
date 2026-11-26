@@ -11,13 +11,12 @@ use relm4::gtk;
 
 use super::chrome::{BigMediaChrome, BigMediaChromePlacement};
 
-/// Semantic role for one media overlay child.
+/// What a layer over the picture is, which sets its edge and its place in the
+/// stack.
 ///
-/// The role names the user's visible layer purpose and carries its alignment
-/// and stacking order. Consumers add role layers in stacking order: viewer
-/// adornment overlays first, then chrome through [`BigMediaChrome`]. Every
-/// layer floats over the scene, neither clipped to it nor counted in its size
-/// request.
+/// Layers go in by [`stacking_order`](Self::stacking_order): adornments first,
+/// then chrome through [`BigMediaChrome`]. Every layer floats over the picture,
+/// neither clipped to it nor counted in its size request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BigMediaOverlayLayerRole {
@@ -133,11 +132,9 @@ impl BigMediaOverlayStack {
         self.overlay.add_overlay(layer);
     }
 
-    /// Install a widget under a semantic media-surface role.
+    /// Lay `layer` over the picture as `layer_role` places it.
     ///
-    /// This is the role-first entry point used by shared immersive surfaces:
-    /// the role supplies the stacking and alignment policy,
-    /// while the caller keeps ownership of the widget itself.
+    /// A debug build panics when a layer goes in below one already added.
     ///
     /// # Examples
     ///
@@ -173,11 +170,10 @@ impl BigMediaOverlayStack {
         }
     }
 
-    /// Install media chrome through its overlay role.
+    /// Lay the bar of `chrome` that `layer_role` names over the picture.
     ///
-    /// Top and bottom chrome delegate to the existing [`BigMediaChrome`]
-    /// installation helpers. Non-chrome roles return `false` so callers can
-    /// route ordinary widgets through [`install_role`](Self::install_role).
+    /// Returns `false`, adding nothing, for a role that is no chrome; such a
+    /// layer goes in through [`install_role`](Self::install_role).
     ///
     /// # Examples
     ///

@@ -86,8 +86,8 @@ impl State {
 
 /// One window's notice strip. Clones speak through the same strip.
 ///
-/// Place [`Self::widget`] in the window's layout (a workspace's
-/// `BigWorkspaceSpec::notice`, or the top of the content), never over it.
+/// Place [`Self::widget`] in the window's layout (at the top of the content,
+/// for instance), never over it.
 ///
 /// A strip that goes while it holds the keyboard hands it back to the control
 /// that had it before, or to the content after the strip once that control is

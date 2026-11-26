@@ -1,21 +1,21 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! Shared immersive chrome and toast-host policy for a full-window media view
-//! (the image pane's immersive surface): a real `AdwHeaderBar` (top) with an
-//! accessible primary menu, and a bottom control bar.
+//! The chrome of a full-window media view: an `AdwHeaderBar` with a primary
+//! menu and a bottom control bar, floating over the picture, and the controller
+//! that hides them while the person watches.
 //!
-//! Design: the app owns its media `gtk::Overlay`, its picture surface, and
-//! any clipped offload surface. The framework owns the repeatable shell policy:
-//! toast host creation, content mounting, header, primary menu and bottom
-//! revealer. This keeps each app's media plumbing
-//! untouched (a `GtkGraphicsOffload` subsurface, which an `AdwToolbarView`
-//! would throttle to about 1 fps) while shared shell mechanics are not
-//! re-derived.
+//! The program keeps its picture surface; [`BigMediaOverlayStack`] lays the
+//! bars over it in a `gtk::Overlay` rather than an `AdwToolbarView`, which
+//! would throttle a `GtkGraphicsOffload` subsurface under it to about 1 fps.
 //!
-//! The primary menu is a real `GtkButton` on a real `AdwHeaderBar`, opening
-//! explicit `MenuItem` rows so assistive technologies can name and activate
-//! the trigger plus every action.
+//! The primary menu is a `gtk::Button` opening a popover of action rows, so
+//! a screen reader names and activates the button and every action.
+//!
+//! - `chrome`: the header bar, its primary menu and the bottom bar.
+//! - `immersion`: hides the chrome, and the pointer if asked, after a moment
+//!   idle.
+//! - `overlay`: the overlay that stacks the picture, adornments and chrome.
 
 mod chrome;
 mod immersion;
