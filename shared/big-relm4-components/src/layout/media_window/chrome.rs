@@ -12,9 +12,6 @@ const MIN_MENU_POPOVER_MAX_HEIGHT_PX: i32 = 240;
 const MENU_POPOVER_VIEWPORT_MARGIN_PX: i32 = 120;
 const MENU_POPOVER_VERTICAL_PADDING_PX: i32 = 12;
 const MENU_POPOVER_ROW_HEIGHT_PX: i32 = 41;
-const WINDOW_CONTROL_CLASS: &str = "big-media-window-control";
-const WINDOW_MAXIMIZE_ICON: &str = "window-maximize-symbolic";
-const WINDOW_RESTORE_ICON: &str = "window-restore-symbolic";
 
 /// Which part of [`BigMediaChrome`] to add at the current overlay position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,50 +93,8 @@ impl BigMediaChrome {
                 menu_popover.popup();
             }
         });
-        let minimize_button = media_window_control_button("window-minimize-symbolic");
-        minimize_button.connect_clicked(|button| {
-            if let Some(window) = window_for_control(button) {
-                window.minimize();
-            }
-        });
-        let maximize_restore_button = media_window_control_button(WINDOW_MAXIMIZE_ICON);
-        maximize_restore_button.connect_root_notify(|button| {
-            let Some(window) = window_for_control(button) else {
-                return;
-            };
-            update_maximize_restore_icon(button, window.is_maximized());
-            let button = button.downgrade();
-            window.connect_maximized_notify(move |window| {
-                if let Some(button) = button.upgrade() {
-                    update_maximize_restore_icon(&button, window.is_maximized());
-                }
-            });
-        });
-        maximize_restore_button.connect_clicked(|button| {
-            let Some(window) = window_for_control(button) else {
-                return;
-            };
-            if window.is_maximized() {
-                window.unmaximize();
-            } else {
-                window.maximize();
-            }
-        });
-        let close_button = media_window_control_button("window-close-symbolic");
-        close_button.connect_clicked(|button| {
-            if let Some(window) = window_for_control(button) {
-                window.close();
-            }
-        });
-        let window_controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        window_controls.set_valign(gtk::Align::Center);
-        window_controls.set_visible(false);
-        window_controls.append(&minimize_button);
-        window_controls.append(&maximize_restore_button);
-        window_controls.append(&close_button);
         header_end_slot.append(&header_end_actions);
         header_end_slot.append(&menu_button);
-        header_end_slot.append(&window_controls);
         header.pack_start(&header_start_slot);
         header.pack_end(&header_end_slot);
 
@@ -230,30 +185,6 @@ impl BigMediaChrome {
     pub fn bottom_revealer(&self) -> &gtk::Revealer {
         &self.bottom_revealer
     }
-}
-
-fn media_window_control_button(icon_name: &str) -> gtk::Button {
-    gtk::Button::builder()
-        .child(&gtk::Image::from_icon_name(icon_name))
-        .css_classes([WINDOW_CONTROL_CLASS])
-        .has_frame(false)
-        .valign(gtk::Align::Center)
-        .build()
-}
-
-fn window_for_control(control: &gtk::Button) -> Option<gtk::Window> {
-    control.root()?.downcast::<gtk::Window>().ok()
-}
-
-fn update_maximize_restore_icon(button: &gtk::Button, is_maximized: bool) {
-    let Some(image) = button.child().and_downcast::<gtk::Image>() else {
-        return;
-    };
-    image.set_icon_name(Some(if is_maximized {
-        WINDOW_RESTORE_ICON
-    } else {
-        WINDOW_MAXIMIZE_ICON
-    }));
 }
 
 fn scroll_wrap_menu_popover(popover: &gtk::Popover) -> gtk::ScrolledWindow {
@@ -373,29 +304,6 @@ mod tests {
             );
             assert!(chrome.menu_popover.is_visible());
             window.destroy();
-        });
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn maximize_glyph_follows_window_state() {
-        big_testkit::harness::require_gtk_test(|| {
-            let button = super::media_window_control_button(super::WINDOW_MAXIMIZE_ICON);
-            super::update_maximize_restore_icon(&button, true);
-            let image = button
-                .child()
-                .and_downcast::<gtk::Image>()
-                .expect("window control owns an image");
-            assert_eq!(
-                image.icon_name().as_deref(),
-                Some(super::WINDOW_RESTORE_ICON)
-            );
-
-            super::update_maximize_restore_icon(&button, false);
-            assert_eq!(
-                image.icon_name().as_deref(),
-                Some(super::WINDOW_MAXIMIZE_ICON)
-            );
         });
     }
 
