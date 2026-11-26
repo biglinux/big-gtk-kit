@@ -511,15 +511,13 @@ where
             self.inner.save_again.set(true);
             return;
         }
-        let inner = Rc::downgrade(&self.inner);
+        // Held until the last change is written, even past the document's
+        // owner: a change made while a write runs is written after it.
+        let owner = Rc::clone(&self.inner);
         glib::spawn_future_local(async move {
             loop {
-                let Some(owner) = inner.upgrade() else {
-                    return;
-                };
                 let store = owner.store.clone();
                 let snapshot = owner.document.borrow().clone();
-                drop(owner);
                 let written = gio::spawn_blocking(move || store.write(&snapshot))
                     .await
                     .unwrap_or_else(|_| {
@@ -527,9 +525,6 @@ where
                             "settings writer stopped",
                         )))
                     });
-                let Some(owner) = inner.upgrade() else {
-                    return;
-                };
                 if let Err(error) = written {
                     let report = owner.on_save_failed.borrow().clone();
                     if let Some(report) = report {
@@ -788,6 +783,32 @@ mod tests {
                 .read()
                 .unwrap();
             assert_eq!(saved, Some(level(2.0)));
+            let _ = fs::remove_file(&path);
+        }
+
+        /// The window that owned the document may close while it writes.
+        #[test]
+        fn change_during_write_outlives_the_document() {
+            let context = glib::MainContext::default();
+            let _owner = context
+                .acquire()
+                .expect("test thread owns the default context");
+            let path = settings_test_path("apply-then-drop");
+            let document = BigSettingsDocument::new(
+                TestSettings::default(),
+                BigVersionedJsonStore::new(&path, 1),
+            );
+            let level = |level| TestSettings {
+                enabled: true,
+                level,
+            };
+            document.apply("level", level(1.0), |_| {});
+            context.iteration(false);
+            document.apply("level", level(2.0), |_| {});
+            drop(document);
+
+            let store = BigVersionedJsonStore::<TestSettings>::new(&path, 1);
+            wait(|| store.read().ok().flatten() == Some(level(2.0)));
             let _ = fs::remove_file(&path);
         }
 

@@ -6,6 +6,9 @@
 //! pidfd names still lives, so a reused pid cannot vouch for another program.
 //! An installed program started with a variable that loads code into it
 //! ([`CODE_LOADING_VARIABLES`]) runs that code too, and vouches for nothing.
+//! It names a program, never a permission: a process that sends a call and
+//! then executes the installed program passes, so anything privileged stays
+//! behind polkit.
 
 use std::os::fd::BorrowedFd;
 #[cfg(feature = "bus-caller")]
