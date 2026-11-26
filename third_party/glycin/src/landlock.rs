@@ -97,39 +97,7 @@ impl LandlockRuleset {
         // SAFETY: a descriptor the call just returned, owned by nobody else.
         let ruleset = unsafe { OwnedFd::from_raw_fd(fd) };
         for (path, access) in rules {
-            let Ok(file) = nix::fcntl::open(
-                path.as_path(),
-                nix::fcntl::OFlag::O_PATH | nix::fcntl::OFlag::O_CLOEXEC,
-                nix::sys::stat::Mode::empty(),
-            ) else {
-                continue;
-            };
-            let mut access = access & handled;
-            if !nix::sys::stat::fstat(&file)
-                .is_ok_and(|stat| stat.st_mode & libc::S_IFMT == libc::S_IFDIR)
-            {
-                access &= FILE_RIGHTS;
-            }
-            let beneath = PathBeneathAttr {
-                allowed_access: access,
-                parent_fd: file.as_raw_fd(),
-            };
-            // SAFETY: the ruleset and the attribute are valid for the call.
-            let added = unsafe {
-                libc::syscall(
-                    libc::SYS_landlock_add_rule,
-                    ruleset.as_raw_fd(),
-                    RULE_PATH_BENEATH,
-                    &raw const beneath,
-                    0,
-                )
-            };
-            if added < 0 {
-                return Err(Error::StdIoError {
-                    err: std::sync::Arc::new(std::io::Error::last_os_error()),
-                    info: format!("Landlock refused {}", path.display()),
-                });
-            }
+            add_path_rule(&ruleset, path, access & handled)?;
         }
         Ok(Self(ruleset))
     }
@@ -148,4 +116,42 @@ impl LandlockRuleset {
             Err(std::io::Error::last_os_error())
         }
     }
+}
+
+/// Grant `access` beneath `path` in `ruleset`, narrowed to what a file may take
+/// when `path` is no directory; a path that cannot be opened grants nothing.
+fn add_path_rule(ruleset: &OwnedFd, path: &PathBuf, access: u64) -> Result<(), Error> {
+    let Ok(file) = nix::fcntl::open(
+        path.as_path(),
+        nix::fcntl::OFlag::O_PATH | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    ) else {
+        return Ok(());
+    };
+    let mut access = access;
+    if !nix::sys::stat::fstat(&file).is_ok_and(|stat| stat.st_mode & libc::S_IFMT == libc::S_IFDIR)
+    {
+        access &= FILE_RIGHTS;
+    }
+    let beneath = PathBeneathAttr {
+        allowed_access: access,
+        parent_fd: file.as_raw_fd(),
+    };
+    // SAFETY: the ruleset and the attribute are valid for the call.
+    let added = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_add_rule,
+            ruleset.as_raw_fd(),
+            RULE_PATH_BENEATH,
+            &raw const beneath,
+            0,
+        )
+    };
+    if added < 0 {
+        return Err(Error::StdIoError {
+            err: std::sync::Arc::new(std::io::Error::last_os_error()),
+            info: format!("Landlock refused {}", path.display()),
+        });
+    }
+    Ok(())
 }

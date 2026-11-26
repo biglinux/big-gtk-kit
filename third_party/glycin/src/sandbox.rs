@@ -554,6 +554,37 @@ impl Sandbox {
         command
     }
 
+    /// The files the loader may reach without bubblewrap: what its read-only
+    /// binds and `--dev` hold, fonts aside.
+    fn confined_rules(&self, lib_dirs: &[PathBuf]) -> Vec<(PathBuf, u64)> {
+        let mut rules: Vec<(PathBuf, u64)> = vec![
+            ("/usr".into(), landlock::READ | landlock::EXECUTE),
+            ("/nix/store".into(), landlock::READ | landlock::EXECUTE),
+            ("/etc/ld.so.cache".into(), landlock::READ_FILE),
+            (
+                self.exec().to_owned(),
+                landlock::READ_FILE | landlock::EXECUTE,
+            ),
+        ];
+        for dir in lib_dirs {
+            rules.push((dir.clone(), landlock::READ | landlock::EXECUTE));
+        }
+        for dir in &self.ro_bind_extra {
+            rules.push((dir.clone(), landlock::READ));
+        }
+        // The devices bubblewrap's `--dev` holds, less the terminal.
+        for device in [
+            "/dev/null",
+            "/dev/zero",
+            "/dev/full",
+            "/dev/random",
+            "/dev/urandom",
+        ] {
+            rules.push((device.into(), landlock::READ_FILE | landlock::WRITE_FILE));
+        }
+        rules
+    }
+
     /// The loader where bubblewrap cannot make a namespace: the files it may
     /// open are those the bubblewrap sandbox holds, and its system calls those
     /// the bubblewrap filter allows, less new sockets.
@@ -575,31 +606,7 @@ impl Sandbox {
             Ok(system) => system,
         };
 
-        let mut rules: Vec<(PathBuf, u64)> = vec![
-            ("/usr".into(), landlock::READ | landlock::EXECUTE),
-            ("/nix/store".into(), landlock::READ | landlock::EXECUTE),
-            ("/etc/ld.so.cache".into(), landlock::READ_FILE),
-            (
-                self.exec().to_owned(),
-                landlock::READ_FILE | landlock::EXECUTE,
-            ),
-        ];
-        for dir in &system.lib_dirs {
-            rules.push((dir.clone(), landlock::READ | landlock::EXECUTE));
-        }
-        for dir in &self.ro_bind_extra {
-            rules.push((dir.clone(), landlock::READ));
-        }
-        // The devices bubblewrap's `--dev` holds, less the terminal.
-        for device in [
-            "/dev/null",
-            "/dev/zero",
-            "/dev/full",
-            "/dev/random",
-            "/dev/urandom",
-        ] {
-            rules.push((device.into(), landlock::READ_FILE | landlock::WRITE_FILE));
-        }
+        let mut rules = self.confined_rules(&system.lib_dirs);
         if self.config_entry.fontconfig()
             && let Some(fc_paths) = crate::fontconfig::cached_paths()
         {
