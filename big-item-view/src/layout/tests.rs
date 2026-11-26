@@ -54,7 +54,11 @@ fn headings_push_runs_down() {
     );
     assert_eq!(runs.over(&rows).position_at(5.0, 85.0), Some(3));
     assert_eq!(runs.over(&rows).content_size().1, 140.0);
-    assert_eq!(runs.over(&rows).visible_range((0.0, 0.0)), 0..3);
+    assert_eq!(
+        runs.over(&rows).visible_range((0.0, 0.0)),
+        0..2,
+        "a line starting at the bottom edge is off screen"
+    );
     assert_eq!(runs.over(&rows).visible_headings((0.0, 0.0)), 0..1);
     assert_eq!(
         runs.over(&rows).positions_in(&Rect {
@@ -293,7 +297,7 @@ fn check_shown(runs: &Runs<'_>, metrics: &Metrics, placed: &Placed, y: f32, case
     let end = placed
         .items
         .iter()
-        .rposition(|item| item.y <= bottom)
+        .rposition(|item| item.y < bottom)
         .map_or(0, |p| p as u32 + 1);
     let range = runs.visible_range((0.0, y));
     assert_eq!(range, first..end.max(first), "{case}: items shown at {y}");

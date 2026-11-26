@@ -717,8 +717,11 @@ impl Runs<'_> {
         let end = match self.line_at(bottom.max(0.0)) {
             // Everything before this heading's run.
             Line::Heading { index } => starts[index],
+            // A line that starts right at `bottom` is not on screen.
             Line::Items { index, line } => {
-                (starts[index] + (line + 1) * lanes).min(self.end_of(index))
+                let top = self.tops[index] + line as f32 * self.metrics.cell_size().1;
+                let lines = if top < bottom { line + 1 } else { line };
+                (starts[index] + lines * lanes).min(self.end_of(index))
             }
             Line::Past => n,
         };
