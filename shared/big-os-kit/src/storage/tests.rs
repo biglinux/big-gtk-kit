@@ -86,6 +86,40 @@ fn replaced_document_keeps_its_link() {
     assert_eq!(written, b"new");
 }
 
+/// Saving over a FIFO or a folder refuses before anything is written, and
+/// leaves it as it was.
+#[test]
+fn replace_refuses_special_files() {
+    let directory = storage_test_path("replace-special");
+    fs::create_dir(&directory).unwrap();
+    let fifo = directory.join("pipe");
+    // SAFETY: a live NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(c_path(&fifo).as_ptr(), 0o600) }, 0);
+    let folder = directory.join("folder");
+    fs::create_dir(&folder).unwrap();
+
+    for target in [&fifo, &folder] {
+        let error = atomic_save_document(target, b"new").err();
+        assert_eq!(
+            error.map(|error| error.kind()),
+            Some(std::io::ErrorKind::InvalidInput),
+            "{}",
+            target.display()
+        );
+    }
+
+    assert!(std::os::unix::fs::FileTypeExt::is_fifo(
+        &fs::symlink_metadata(&fifo).unwrap().file_type()
+    ));
+    assert!(folder.is_dir());
+    assert_eq!(
+        fs::read_dir(&directory).unwrap().count(),
+        2,
+        "no temporary left behind"
+    );
+    let _ = fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn stale_replacement_changes_nothing() {
     let directory = storage_test_path("replace-stale");

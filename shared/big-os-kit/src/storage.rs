@@ -448,7 +448,9 @@ pub fn atomic_create_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> 
 /// this returns `Ok(false)`. A file owned by another user, or one carrying
 /// attributes an unprivileged writer cannot set again (`security.*`,
 /// `trusted.*`), or one whose group this user is not in, is refused with
-/// [`std::io::ErrorKind::Unsupported`] and left as it was.
+/// [`std::io::ErrorKind::Unsupported`] and left as it was; anything but a
+/// regular file (a folder, a FIFO, a device) with
+/// [`std::io::ErrorKind::InvalidInput`].
 ///
 /// # Errors
 /// Returns the refusal above or the I/O failure; the original is untouched
@@ -461,6 +463,12 @@ pub fn atomic_replace_document(
 ) -> std::io::Result<bool> {
     let path = &written_through(path)?;
     let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "only a regular file is replaced",
+        ));
+    }
     if metadata.uid() != crate::microdaemon::current_effective_user_id() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
