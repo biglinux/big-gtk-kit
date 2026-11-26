@@ -18,13 +18,15 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 /// Environment variables that make a program load code from where they point:
-/// the dynamic loader's, and those of the libraries loaded by the programs
-/// these checks vouch for (GLib, GTK, GdkPixbuf, GStreamer, PipeWire, Mesa,
-/// EGL, Vulkan, VA-API, VDPAU, Qt, Fcitx, Python).
-pub const CODE_LOADING_VARIABLES: [&str; 40] = [
+/// the dynamic loader's, the C library's (iconv modules), and those of the
+/// libraries loaded by the programs these checks vouch for (GLib, GTK,
+/// GdkPixbuf, GStreamer, PipeWire, Mesa, EGL, NVIDIA's EGL, Vulkan, VA-API,
+/// VDPAU, Qt, Fcitx, Python).
+pub const CODE_LOADING_VARIABLES: [&str; 45] = [
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
     "LD_AUDIT",
+    "GCONV_PATH",
     "GIO_MODULE_DIR",
     "GIO_EXTRA_MODULES",
     "GTK_MODULES",
@@ -38,6 +40,8 @@ pub const CODE_LOADING_VARIABLES: [&str; 40] = [
     "GST_PLUGIN_PATH_1_0",
     "GST_PLUGIN_SYSTEM_PATH",
     "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "GST_PLUGIN_SCANNER",
+    "GST_PLUGIN_SCANNER_1_0",
     "GST_REGISTRY",
     "GST_REGISTRY_1_0",
     "PIPEWIRE_MODULE_DIR",
@@ -46,6 +50,8 @@ pub const CODE_LOADING_VARIABLES: [&str; 40] = [
     "GBM_BACKENDS_PATH",
     "__EGL_VENDOR_LIBRARY_DIRS",
     "__EGL_VENDOR_LIBRARY_FILENAMES",
+    "__EGL_EXTERNAL_PLATFORM_CONFIG_DIRS",
+    "__EGL_EXTERNAL_PLATFORM_CONFIG_FILENAMES",
     "VK_ICD_FILENAMES",
     "VK_DRIVER_FILES",
     "VK_ADD_DRIVER_FILES",
@@ -73,16 +79,31 @@ pub fn installed_path(running: &Path) -> Option<&str> {
 
 /// Whether `pid` runs the installed program `path`, with nothing its
 /// environment loads into it ([`loads_no_foreign_code`]). The caller may
-/// have a mount namespace of its own, as a hardened systemd unit has, so the
-/// file it runs must also be owned by root and writable by nobody else: a
-/// program the user built and mounted there in a namespace of the user's is
-/// neither.
+/// have a mount namespace of its own, where `/proc/PID/exe` names whatever
+/// file was mounted at `path`, so the file it runs must also be the one at
+/// `path` here, or one an upgrade unlinked, owned by root and writable by
+/// nobody else. A root-owned program the user mounted over `path` in a user
+/// namespace before an upgrade unlinks it passes then: with Yama's
+/// `ptrace_scope` at 1 no more than a parent tracing its child can do, at 2
+/// or 3 a route of its own.
 #[cfg(feature = "bus-caller")]
 pub fn runs_installed(pid: u32, path: &str) -> bool {
     let exe = format!("/proc/{pid}/exe");
     std::fs::read_link(&exe).is_ok_and(|running| installed_path(&running) == Some(path))
-        && std::fs::metadata(&exe).is_ok_and(|file| file.uid() == 0 && file.mode() & 0o022 == 0)
+        && std::fs::metadata(&exe).is_ok_and(|running| {
+            std::fs::metadata(path).is_ok_and(|installed| {
+                let same = running.dev() == installed.dev() && running.ino() == installed.ino();
+                installed_file(running.uid(), running.mode(), same, running.nlink())
+            })
+        })
         && loads_no_foreign_code(pid)
+}
+
+/// Whether the running file is root's, writable by nobody else, and the file
+/// at the installed path (`same`) or one an upgrade unlinked (no `links`).
+#[cfg(feature = "bus-caller")]
+fn installed_file(owner: u32, mode: u32, same: bool, links: u64) -> bool {
+    owner == 0 && mode & 0o022 == 0 && (same || links == 0)
 }
 
 /// The entries of [`CODE_LOADING_VARIABLES`] in the systemd user manager's
@@ -333,22 +354,29 @@ mod tests {
         for (name, value) in environment {
             spec = spec.env(*name, *value);
         }
-        let sleep = spec
-            .program("/usr/bin/sleep")
-            .args(["5"])
-            .build()
-            .spawn()
-            .expect("sleep");
-        let exe = format!("/proc/{}/exe", sleep.id());
-        let environ = format!("/proc/{}/environ", sleep.id());
+        started(
+            &spec.program("/usr/bin/sleep").args(["5"]).build(),
+            "/usr/bin/sleep",
+        )
+    }
+
+    /// The process `spec` starts, once `/proc/PID/exe` names `runs` and its
+    /// environment can be read.
+    fn started(
+        spec: &crate::subprocess::BigSubprocessSpec,
+        runs: &str,
+    ) -> crate::subprocess::BigSubprocessChild {
+        let child = spec.spawn().expect("started");
+        let exe = format!("/proc/{}/exe", child.id());
+        let environ = format!("/proc/{}/environ", child.id());
         let start = std::time::Instant::now();
-        while (std::fs::read_link(&exe).is_ok_and(|running| running != Path::new("/usr/bin/sleep"))
+        while (std::fs::read_link(&exe).is_ok_and(|running| running != Path::new(runs))
             || std::fs::read(&environ).is_ok_and(|read| read.is_empty()))
             && start.elapsed() < std::time::Duration::from_secs(5)
         {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        sleep
+        child
     }
 
     /// The installed file passes, run from its place or replaced since; a
@@ -371,6 +399,71 @@ mod tests {
         assert!(named(path));
         assert!(named("/usr/bin/big-body-tracker-daemon (deleted)"));
         assert!(!named("/home/me/big-body-tracker-daemon"));
+    }
+
+    /// A root-owned program mounted over the installed path, in a namespace
+    /// of the user's, is named as the installed one and still refused.
+    #[cfg(feature = "bus-caller")]
+    #[test]
+    fn mounted_over_program_is_refused() {
+        let spec = crate::subprocess::BigSubprocessSpec::builder()
+            .program("/usr/bin/unshare")
+            .args([
+                "--user",
+                "--map-root-user",
+                "--mount",
+                "/usr/bin/sh",
+                "-c",
+                "mount --bind /usr/bin/sleep /usr/bin/true && exec /usr/bin/true 5",
+            ])
+            .build();
+        let mut mounted = started(&spec, "/usr/bin/true");
+        let named = std::fs::read_link(format!("/proc/{}/exe", mounted.id()));
+        let ran = runs_installed(mounted.id(), "/usr/bin/true");
+        let _ = mounted.kill();
+        let _ = mounted.wait();
+        assert_eq!(
+            named.ok().as_deref(),
+            Some(Path::new("/usr/bin/true")),
+            "the mount took effect"
+        );
+        assert!(!ran);
+    }
+
+    /// Only root's file that nobody else can write passes, and only the file
+    /// at the installed path or one an upgrade unlinked.
+    #[cfg(feature = "bus-caller")]
+    #[test]
+    fn installed_file_is_roots_alone() {
+        const PROGRAM: u32 = 0o100_755;
+        assert!(installed_file(0, PROGRAM, true, 1));
+        assert!(
+            installed_file(0, PROGRAM, false, 0),
+            "unlinked by an upgrade"
+        );
+        assert!(
+            !installed_file(0, PROGRAM, false, 1),
+            "another of root's files"
+        );
+        assert!(
+            !installed_file(0, 0o100_775, true, 1),
+            "writable by the group"
+        );
+        assert!(!installed_file(0, 0o100_757, true, 1), "writable by all");
+        assert!(!installed_file(1000, PROGRAM, true, 1), "the user's");
+    }
+
+    /// Another user's process, whose environment this one cannot read,
+    /// vouches for nothing.
+    #[cfg(feature = "bus-caller")]
+    #[test]
+    fn unreadable_environment_vouches_for_nothing() {
+        assert!(
+            std::fs::read("/proc/1/environ").is_err(),
+            "pid 1 belongs to another user"
+        );
+        let known = std::sync::Mutex::new(Vec::new());
+        assert!(!loads_no_foreign_code_beside(1, &known, || None));
     }
 
     /// A process checked while alive passes; one that exited is refused,
@@ -413,6 +506,8 @@ mod tests {
         assert!(clean(b"LD_PRELOAD_NOT=x\0XLD_PRELOAD=x\0LD_PRELOAD\0"));
         assert!(!clean(b"HOME=/home/p\0LD_PRELOAD=/home/p/evil.so\0"));
         assert!(!clean(b"GIO_EXTRA_MODULES=/home/p/gio"));
+        assert!(!clean(b"GCONV_PATH=/home/p/gconv"), "iconv modules");
+        assert!(!clean(b"__EGL_EXTERNAL_PLATFORM_CONFIG_DIRS=/home/p/egl"));
         assert!(!clean(b"LD_PRELOAD="), "set, though empty");
         assert!(!clean(b"LD_LIBRARY_PATH=/home/p/lib"), "another value");
         assert!(

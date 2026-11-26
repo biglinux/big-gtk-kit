@@ -107,7 +107,7 @@ ast-grep rules under `rules/` find the hand-made copies of the last two.
 | `accessible::relate` | `update_relation` | gtk-rs 0.11 leaks the target list on every call |
 | `alert::choose`, `choose_future` | `AlertDialogExtManual::choose` | libadwaita-rs 0.9 keeps every dialog asked that way |
 | `alert::Alert` | `adw::AlertDialog::new`, `builder` | libadwaita 1.9 leaves three breakpoints of every dialog shown as a sheet behind, about 1.8 KB an opening; an `Alert` made for a parent in an `AdwWindow` asks again with a dialog already made; add responses, connect `closed` and downgrade through it (a `WeakAlert` from an earlier question stops upgrading) |
-| `breakpoint::add` | `add_breakpoint` | libadwaita 1.9 never releases a window's breakpoints |
+| `breakpoint::add` | `add_breakpoint` | libadwaita up to 1.10 never releases a window's breakpoints, and leaves their handlers aimed at the freed window |
 | `css::add_provider_for_widget_lifetime` | `style_context_add_provider_for_display` per widget | the display keeps the provider and its rules |
 | `css::install`, `css::DisplaySheet` | `style_context_add_provider_for_display` | the display keeps every provider it is given: a sheet added again restyles every window for nothing |
 | `css::provider` | `CssProvider::new` | a program's provider answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` from its own properties, light and no preference, whatever the system says |
@@ -180,29 +180,24 @@ window's overlay, joined to the row by a bridge. Two ways to open one:
   the pointer may travel into it; a click or Enter opens it for the keyboard,
   which the pointer then never replaces. A short sidebar of options uses it.
 
-Both place the card on the row's end side, or the other side when only that
-has room, and report what happens as events the owner passes back, so no
-handler holds a widget.
+Both place the card on the row's end side, the other side when only that has
+room, or below the row when neither has, and report what happens as events
+the owner passes back, so no handler holds a widget.
 
 ## Checks
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --config 'build.warnings="deny"'
-tools/headless-gate.sh cargo nextest run --workspace
-tools/headless-gate.sh cargo nextest run --workspace --run-ignored only -j 1 \
-    -E 'not test(/::(mount_change_is_seen|closed_about_keeps_cache|removed_link_label_keeps_cache)$/)'
-tools/headless-gate.sh --accessible cargo nextest run --workspace --run-ignored only \
-    -E 'test(/::(closed_about_keeps_cache|removed_link_label_keeps_cache)$/)'
-tools/headless-gate.sh cargo test --workspace --doc
-ast-grep scan
-cargo deny --workspace check
-ruff check . && ruff format --check .
+scripts/quality-check.sh
 ```
+
+runs every check a change passes: formatting, Clippy, the tests with every
+feature (the ignored ones too, and the patched glycin copy's, which the
+workspace leaves out), the doc tests, the ast-grep rules, `cargo deny`, ruff
+and the tools' own checks.
 
 `tools/headless-gate.sh` runs the tests in a private KWin session with a home
 of its own. The ignored tests take the activation, so they run one at a time;
-two read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
+five read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
 namespace. rustdoc runs the doc tests from `TMPDIR`, which must allow
 execution.
 

@@ -440,9 +440,6 @@ where
     C::Root: IsA<glib::Object>,
     S: AsRef<OsStr>,
 {
-    // Before GTK is touched, and before any thread exists: the input-method
-    // module is read during toolkit initialization and cannot be changed after.
-    configure_wayland_input_method();
     // Before anything can panic: every program gets the same record, so a crash
     // leaves a trace without each one asking for it. A panic in a GTK callback
     // aborts the process (`crash_marker`).
@@ -498,21 +495,31 @@ where
 /// big-compositor composes dead keys itself and sends the text through
 /// text-input, which is also how the on-screen keyboard reaches a field;
 /// `simple` would not enable text-input there.
-fn configure_wayland_input_method() {
+///
+/// GTK reads `GTK_IM_MODULE` first and the `gtk-im-module` setting next, so the
+/// setting fills the gap without writing the environment, which is unsound
+/// once another thread runs. Call it after GTK started, before any text field.
+fn fill_input_method_gap() {
+    let Some(settings) = gtk::Settings::default() else {
+        return;
+    };
     let session_type = std::env::var_os("XDG_SESSION_TYPE");
     let desktop = std::env::var_os("XDG_CURRENT_DESKTOP");
     let configured = std::env::var_os("GTK_IM_MODULE");
-    if !needs_simple_input_method(
-        session_type.as_deref(),
-        desktop.as_deref(),
-        configured.as_deref(),
-        input_method_daemon_is_running,
-    ) {
+    let set_by_desktop = settings
+        .gtk_im_module()
+        .is_some_and(|module| !module.is_empty());
+    if set_by_desktop
+        || !needs_simple_input_method(
+            session_type.as_deref(),
+            desktop.as_deref(),
+            configured.as_deref(),
+            input_method_daemon_is_running,
+        )
+    {
         return;
     }
-    // SAFETY: the first thing `run_root_with_args` does, before GTK
-    // initialization and before this process spawns a thread.
-    unsafe { std::env::set_var("GTK_IM_MODULE", "simple") };
+    settings.set_gtk_im_module(Some("simple"));
 }
 
 /// How long the desktop portal gets to answer each question before this
@@ -672,6 +679,7 @@ fn boot_application(spec: &AppShellSpec) -> Option<adw::Application> {
     // before it exits.
     let (resource_paths, base_css) = (spec.resource_paths, spec.base_css);
     app.connect_startup(move |_| {
+        fill_input_method_gap();
         register_resource_paths(resource_paths);
         if let Some(css) = base_css {
             big_relm4_components::css::install(css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);

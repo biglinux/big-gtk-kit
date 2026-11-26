@@ -33,7 +33,9 @@ const PNG_SIDE: i32 = 512;
 #[must_use]
 pub fn drawing(text: &str, side: i32, accessible_label: &str) -> Option<gtk::DrawingArea> {
     let code = qrcodegen::QrCode::encode_text(text, qrcodegen::QrCodeEcc::Medium).ok()?;
+    // A screen reader reads no label on the generic role a drawing has.
     let area = gtk::DrawingArea::builder()
+        .accessible_role(gtk::AccessibleRole::Img)
         .content_width(side)
         .content_height(side)
         .build();
@@ -87,12 +89,25 @@ fn draw(code: &qrcodegen::QrCode, context: &cairo::Context, width: i32, height: 
 
 #[cfg(test)]
 mod tests {
-    use super::png;
+    use super::{drawing, png};
 
     #[test]
     fn rendered_code_is_png() {
         let bytes = png("https://example.invalid/frame").expect("a short payload encodes");
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn drawn_code_is_a_named_image() {
+        big_testkit::harness::require_gtk_test(|| {
+            let area = drawing("https://example.invalid/frame", 120, "Wi-Fi code")
+                .expect("a short payload encodes");
+            assert!(big_testkit::harness::has_named_descendant(
+                &area,
+                gtk::AccessibleRole::Img,
+                "Wi-Fi code"
+            ));
+        });
     }
 
     #[test]

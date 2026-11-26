@@ -559,18 +559,28 @@ fn capture_dialog(
     let key = gtk::EventControllerKey::new();
     let input = sender.input_sender().clone();
     let replace = replace_button.downgrade();
-    key.connect_key_pressed(move |_, key, _, modifiers| {
+    key.connect_key_pressed(move |controller, key, _, modifiers| {
         if key == gdk::Key::Escape {
             let _ = input.send(BigShortcutEditorInput::CancelCapture);
             return glib::Propagation::Stop;
         }
-        // A bare Tab is the keyboard's way to Replace while a conflict shows it.
+        // Tab and Shift+Tab are the keyboard's way to Replace and back while a
+        // conflict shows it.
         let replace_shown = replace.upgrade().is_some_and(|button| button.is_visible());
         let held = gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK;
-        if replace_shown && key == gdk::Key::Tab && !modifiers.intersects(held) {
+        if replace_shown
+            && matches!(key, gdk::Key::Tab | gdk::Key::ISO_Left_Tab)
+            && !modifiers.intersects(held)
+        {
             return glib::Propagation::Proceed;
         }
-        let Some(accel) = key_accel(key, modifiers) else {
+        let Some(event) = controller
+            .current_event()
+            .and_then(|event| event.downcast::<gdk::KeyEvent>().ok())
+        else {
+            return glib::Propagation::Proceed;
+        };
+        let Some(accel) = key_accel(key, modifiers, event.consumed_modifiers()) else {
             return glib::Propagation::Proceed;
         };
         let _ = input.send(BigShortcutEditorInput::CommitCapture(accel));
@@ -665,6 +675,15 @@ impl BigShortcutEditor {
             show_capture_error(widgets, requirement);
             return;
         }
+        // A reservation first: a row may hold a reserved key, and Replace
+        // would hand that key on.
+        if let Some(owner) = accel_match(&accel)
+            .and_then(|pressed| reservation_conflict_title(&self.reservations, &pressed))
+        {
+            show_capture_error(widgets, &conflict_message(&self.labels.conflict, &owner));
+            let _ = sender.output(BigShortcutEditorOutput::ConflictRejected { action, owner });
+            return;
+        }
         if let Some(owner) = conflict_action_for_rows(&self.rows, &action, &accel) {
             let owner = self.rows[owner].title.clone();
             show_capture_error(widgets, &conflict_message(&self.labels.conflict, &owner));
@@ -672,13 +691,6 @@ impl BigShortcutEditor {
             // like any key; Tab moves to Replace.
             widgets.replace_button.set_visible(true);
             self.contested_accel = Some(accel);
-            return;
-        }
-        if let Some(owner) =
-            reservation_conflict_title(&self.reservations, &normalize_accel(&accel))
-        {
-            show_capture_error(widgets, &conflict_message(&self.labels.conflict, &owner));
-            let _ = sender.output(BigShortcutEditorOutput::ConflictRejected { action, owner });
             return;
         }
         self.active_action = None;
@@ -720,7 +732,8 @@ impl BigShortcutEditor {
 fn show_capture_error(widgets: &BigShortcutEditorWidgets, message: &str) {
     widgets.conflict_label.set_label(message);
     widgets.conflict_label.set_visible(true);
-    crate::feedback::announce::announce(
+    // From the window: the line was hidden, a widget no screen reader has met.
+    crate::feedback::announce::announce_from_window(
         &widgets.conflict_label,
         message,
         gtk::AccessibleAnnouncementPriority::High,
@@ -728,7 +741,7 @@ fn show_capture_error(widgets: &BigShortcutEditorWidgets, message: &str) {
 }
 
 fn same_accel(left: &str, right: &str) -> bool {
-    normalize_accel(left) == normalize_accel(right)
+    accel_match(left) == accel_match(right)
 }
 
 fn capture_requirement<'a>(
@@ -750,10 +763,10 @@ fn capture_requirement<'a>(
     }
 }
 
+/// Whether `accel` is written with a modifier; `<Shift>` counts only where
+/// [`key_accel`] kept it, so Shift+? (`question`) types text and is no shortcut.
 fn accel_has_modifiers(accel: &str) -> bool {
-    normalize_accel(accel)
-        .split_once(':')
-        .is_some_and(|(modifiers, _)| !modifiers.is_empty())
+    parse_accel(accel).is_some_and(|(_, modifiers)| !modifiers.is_empty())
 }
 
 fn accelerator_label(accel: &str, labels: &BigShortcutEditorLabels) -> String {
@@ -788,12 +801,10 @@ fn refresh_conflicts(rows: &[BigShortcutRow]) {
 
 /// The index of the other row that holds `accel`.
 fn conflict_action_for_rows(rows: &[BigShortcutRow], action: &str, accel: &str) -> Option<usize> {
-    let normalized = normalize_accel(accel);
-    if normalized.is_empty() {
-        return None;
-    }
-    rows.iter()
-        .position(|row| row.action != action && normalize_accel(&row.current_accel) == normalized)
+    let pressed = accel_match(accel)?;
+    rows.iter().position(|row| {
+        row.action != action && accel_match(&row.current_accel).as_ref() == Some(&pressed)
+    })
 }
 
 fn conflict_title(
@@ -802,66 +813,109 @@ fn conflict_title(
     action: &str,
     accel: &str,
 ) -> Option<String> {
-    let normalized = normalize_accel(accel);
-    if normalized.is_empty() {
+    let pressed = accel_match(accel)?;
+    rows.iter()
+        .find(|row| {
+            row.action != action && accel_match(&row.current_accel).as_ref() == Some(&pressed)
+        })
+        .map(|row| row.title.clone())
+        .or_else(|| reservation_conflict_title(reservations, &pressed))
+}
+
+/// What two accelerators are compared by. GTK matches one press to `<Ctrl>plus`
+/// and to `<Ctrl><Shift>plus` alike, since the Shift that typed `+` is consumed
+/// (`gdk_key_event_matches`), so neither the text nor GTK's parse alone tells
+/// two accelerators apart.
+#[derive(Debug, PartialEq, Eq)]
+enum AccelMatch {
+    /// The keyval and modifiers a press carries once GTK sets the consumed
+    /// Shift aside.
+    Press(gdk::Key, gdk::ModifierType),
+    /// Text GTK reads no key from, compared as written.
+    Text(String),
+}
+
+/// `None` for the empty accelerator, a shortcut turned off.
+fn accel_match(accel: &str) -> Option<AccelMatch> {
+    let accel = accel.trim();
+    if accel.is_empty() {
         return None;
     }
-    rows.iter()
-        .find(|row| row.action != action && normalize_accel(&row.current_accel) == normalized)
-        .map(|row| row.title.clone())
-        .or_else(|| reservation_conflict_title(reservations, &normalized))
+    let Some((key, modifiers)) = parse_accel(accel) else {
+        return Some(AccelMatch::Text(accel.to_owned()));
+    };
+    let matched = gdk::ModifierType::CONTROL_MASK
+        | gdk::ModifierType::SHIFT_MASK
+        | gdk::ModifierType::ALT_MASK
+        | gdk::ModifierType::SUPER_MASK
+        | gdk::ModifierType::HYPER_MASK
+        | gdk::ModifierType::META_MASK;
+    let mut modifiers = modifiers & matched;
+    // With Shift, GTK matches the keyval Shift gives.
+    let key = match (modifiers.contains(gdk::ModifierType::SHIFT_MASK), key) {
+        (true, gdk::Key::Tab) => gdk::Key::ISO_Left_Tab,
+        (true, key) => key.to_upper(),
+        (false, key) => key,
+    };
+    if shift_types(key) {
+        modifiers.remove(gdk::ModifierType::SHIFT_MASK);
+    }
+    Some(AccelMatch::Press(key, modifiers))
 }
 
-fn normalize_accel(accel: &str) -> String {
-    let mut rest = accel.trim();
-    let mut modifiers = Vec::new();
-    while let Some(without_open) = rest.strip_prefix('<') {
-        let Some((modifier, remaining)) = without_open.split_once('>') else {
-            break;
-        };
-        modifiers.push(normalize_modifier(modifier));
-        rest = remaining;
-    }
-    if modifiers.is_empty() && rest.contains('+') {
-        let mut parts = rest.split('+').collect::<Vec<_>>();
-        if let Some(key) = parts.pop() {
-            modifiers.extend(parts.into_iter().map(normalize_modifier));
-            rest = key;
-        }
-    }
-    let key = rest.trim().to_ascii_lowercase();
-    if key.is_empty() {
-        return String::new();
-    }
-    modifiers.sort_unstable();
-    modifiers.dedup();
-    format!("{}:{key}", modifiers.join("+"))
+/// `accel` in GTK's syntax (`<Primary>z`) or as people write keys
+/// (`Ctrl+Space`), where GTK's names may be in any case.
+fn parse_accel(accel: &str) -> Option<(gdk::Key, gdk::ModifierType)> {
+    let written = match accel.rsplit_once('+') {
+        Some((modifiers, key)) if !accel.starts_with('<') && !key.is_empty() => modifiers
+            .split('+')
+            .map(|modifier| format!("<{}>", modifier.trim()))
+            .chain(std::iter::once(key.trim().to_owned()))
+            .collect(),
+        _ => accel.to_owned(),
+    };
+    gtk::accelerator_parse(&written).or_else(|| gtk::accelerator_parse(written.to_lowercase()))
 }
 
-fn normalize_modifier(modifier: &str) -> String {
-    match modifier.trim().to_ascii_lowercase().as_str() {
-        "control" | "ctrl" | "primary" => "ctrl".to_string(),
-        "mod1" | "alt" => "alt".to_string(),
-        other => other.to_string(),
-    }
+/// Whether a Shift held for `key` chose it, so GTK sets it aside: a
+/// [`caseless_character`] the keyboard's layout types only with Shift (`plus`,
+/// `question`). A key reached without Shift keeps it (`bracketleft` on US and
+/// ABNT2, the keypad's).
+fn shift_types(key: gdk::Key) -> bool {
+    caseless_character(key)
+        && gdk::Display::default()
+            .and_then(|display| display.map_keyval(key))
+            .is_some_and(|places| places.iter().all(|place| place.level() > 0))
+}
+
+/// Whether `key` is a character without case, other than a space: a Shift
+/// that chose it is no part of a shortcut, while a letter keeps its Shift, as
+/// Ctrl+Shift+Z does.
+fn caseless_character(key: gdk::Key) -> bool {
+    key.to_lower() == key.to_upper()
+        && key
+            .to_unicode()
+            .is_some_and(|character| !character.is_control() && !character.is_whitespace())
 }
 
 fn reservation_conflict_title(
     reservations: &[BigShortcutReservation],
-    normalized_accel: &str,
+    pressed: &AccelMatch,
 ) -> Option<String> {
-    if normalized_accel.is_empty() {
-        return None;
-    }
     reservations
         .iter()
-        .find(|reservation| normalize_accel(&reservation.accel) == normalized_accel)
+        .find(|reservation| accel_match(&reservation.accel).as_ref() == Some(pressed))
         .map(|reservation| reservation.title.clone())
 }
 
 /// The accelerator a key press asks for; empty for a bare Backspace, which
-/// turns the shortcut off.
-fn key_accel(key: gdk::Key, modifiers: gdk::ModifierType) -> Option<String> {
+/// turns the shortcut off. `consumed` are the modifiers the press used to
+/// choose `key` ([`gdk::KeyEvent::consumed_modifiers`]).
+fn key_accel(
+    key: gdk::Key,
+    modifiers: gdk::ModifierType,
+    consumed: gdk::ModifierType,
+) -> Option<String> {
     if is_modifier_key(key) {
         return None;
     }
@@ -882,7 +936,9 @@ fn key_accel(key: gdk::Key, modifiers: gdk::ModifierType) -> Option<String> {
     if modifiers.contains(gdk::ModifierType::ALT_MASK) {
         accel.push_str("<Alt>");
     }
-    if modifiers.contains(gdk::ModifierType::SHIFT_MASK) && !key_name_encodes_shift(&key_name) {
+    let shift_chose_key =
+        consumed.contains(gdk::ModifierType::SHIFT_MASK) && caseless_character(key);
+    if modifiers.contains(gdk::ModifierType::SHIFT_MASK) && !shift_chose_key {
         accel.push_str("<Shift>");
     }
     accel.push_str(&key_name);
@@ -910,10 +966,6 @@ fn is_modifier_key(key: gdk::Key) -> bool {
             | gdk::Key::Super_L
             | gdk::Key::Super_R
     )
-}
-
-fn key_name_encodes_shift(key_name: &str) -> bool {
-    matches!(key_name, "exclam" | "at" | "greater" | "less")
 }
 
 #[cfg(test)]
@@ -947,64 +999,160 @@ mod tests {
 
     #[test]
     fn reservations_report_user_visible_titles() {
-        let reservations = vec![BigShortcutReservation::new("Play / Pause", "space")];
-
-        assert_eq!(
-            reservation_conflict_title(&reservations, &normalize_accel("Space")),
-            Some("Play / Pause".to_string())
-        );
+        big_testkit::harness::require_gtk_test(|| {
+            let reservations = vec![BigShortcutReservation::new("Play / Pause", "space")];
+            let pressed = accel_match("Space").expect("a key");
+            assert_eq!(
+                reservation_conflict_title(&reservations, &pressed),
+                Some("Play / Pause".to_string())
+            );
+        });
     }
 
     #[test]
     fn canonicalization_matches_primary_and_control_syntaxes() {
-        assert_eq!(
-            normalize_accel("<Primary><Shift>Z"),
-            normalize_accel("Shift+Ctrl+z")
-        );
+        big_testkit::harness::require_gtk_test(|| {
+            assert!(same_accel("<Primary><Shift>Z", "Shift+Ctrl+z"));
+        });
+    }
+
+    /// The oracle is `gdk_key_event_matches`: a consumed Shift is set aside, and
+    /// with Shift written the keyval is the one Shift gives.
+    #[test]
+    fn accels_compare_like_gtk() {
+        big_testkit::harness::require_gtk_test(|| {
+            assert!(same_accel("<Shift>Tab", "<Shift>ISO_Left_Tab"));
+            assert!(!same_accel("<Ctrl><Shift>z", "<Ctrl>z"));
+            assert!(!same_accel("<Shift>space", "space"));
+            assert!(!same_accel("<Shift>F5", "F5"));
+            assert!(!same_accel("<Shift>KP_Subtract", "KP_Subtract"));
+            // Which characters need Shift is the layout's: these rows hold on
+            // US and ABNT2, the layout tools/headless-gate.sh runs with.
+            let level = |key: gdk::Key| {
+                gdk::Display::default()
+                    .and_then(|display| display.map_keyval(key))
+                    .and_then(|places| places.first().map(gdk::KeymapKey::level))
+            };
+            if level(gdk::Key::plus) == Some(1) && level(gdk::Key::bracketleft) == Some(0) {
+                assert!(same_accel("<Ctrl><Shift>plus", "<Primary>plus"));
+                assert!(same_accel("<Shift>question", "question"));
+                assert!(!same_accel("<Ctrl><Shift>bracketleft", "<Ctrl>bracketleft"));
+            }
+            assert!(same_accel("", " "));
+            assert!(!same_accel("", "n"));
+        });
     }
 
     #[test]
     fn modifiers_wait_for_main_key() {
+        let none = gdk::ModifierType::empty();
         assert_eq!(
-            key_accel(gdk::Key::Control_L, gdk::ModifierType::CONTROL_MASK),
+            key_accel(gdk::Key::Control_L, gdk::ModifierType::CONTROL_MASK, none),
             None
         );
         assert_eq!(
-            key_accel(gdk::Key::k, gdk::ModifierType::CONTROL_MASK),
+            key_accel(gdk::Key::k, gdk::ModifierType::CONTROL_MASK, none),
             Some("<Ctrl>k".to_string())
         );
     }
 
     #[test]
-    fn capture_policy_requires_modifiers() {
-        let labels = labels();
+    fn super_and_hyper_are_refused() {
+        let none = gdk::ModifierType::empty();
+        for held in [gdk::ModifierType::SUPER_MASK, gdk::ModifierType::HYPER_MASK] {
+            assert_eq!(
+                key_accel(gdk::Key::k, gdk::ModifierType::CONTROL_MASK | held, none),
+                None
+            );
+        }
+    }
 
-        assert_eq!(
-            capture_requirement(BigShortcutCapturePolicy::ModifiedKey, "f", &labels),
-            Some("Press a modified key")
-        );
-        assert_eq!(
-            capture_requirement(BigShortcutCapturePolicy::ModifiedKey, "<Ctrl>f", &labels),
-            None
-        );
+    /// Shift stays only where it did not choose the character pressed.
+    #[test]
+    fn captured_shift_follows_the_press() {
+        let shift = gdk::ModifierType::SHIFT_MASK;
+        let ctrl_shift = gdk::ModifierType::CONTROL_MASK | shift;
+        let cases = [
+            (gdk::Key::plus, ctrl_shift, shift, "<Ctrl>plus"),
+            (
+                gdk::Key::exclam,
+                gdk::ModifierType::ALT_MASK | shift,
+                shift,
+                "<Alt>exclam",
+            ),
+            (gdk::Key::question, shift, shift, "question"),
+            (gdk::Key::Z, ctrl_shift, shift, "<Ctrl><Shift>Z"),
+            (gdk::Key::ISO_Left_Tab, shift, shift, "<Shift>ISO_Left_Tab"),
+            (
+                gdk::Key::space,
+                shift,
+                gdk::ModifierType::empty(),
+                "<Shift>space",
+            ),
+            (
+                gdk::Key::KP_Subtract,
+                shift,
+                gdk::ModifierType::empty(),
+                "<Shift>KP_Subtract",
+            ),
+        ];
+        for (key, modifiers, consumed, accel) in cases {
+            assert_eq!(key_accel(key, modifiers, consumed).as_deref(), Some(accel));
+        }
+    }
+
+    #[test]
+    fn capture_policy_requires_modifiers() {
+        big_testkit::harness::require_gtk_test(|| {
+            let labels = labels();
+            let modified = BigShortcutCapturePolicy::ModifiedKey;
+            assert_eq!(
+                capture_requirement(modified, "f", &labels),
+                Some("Press a modified key")
+            );
+            assert_eq!(
+                capture_requirement(modified, "question", &labels),
+                Some("Press a modified key")
+            );
+            assert_eq!(capture_requirement(modified, "<Ctrl>f", &labels), None);
+            assert_eq!(capture_requirement(modified, "<Shift>Z", &labels), None);
+        });
     }
 
     type Outputs = std::rc::Rc<std::cell::RefCell<Vec<BigShortcutEditorOutput>>>;
 
-    /// An editor with Play on Space and Next on N, shown in a window.
+    /// An editor with Play on Space, Next on N and Zoom In, which takes only a
+    /// modified key, on Ctrl++, shown in a window.
     fn shown_editor() -> (relm4::Controller<BigShortcutEditor>, gtk::Window, Outputs) {
+        shown_editor_with(Vec::new())
+    }
+
+    fn shown_editor_with(
+        reservations: Vec<BigShortcutReservation>,
+    ) -> (relm4::Controller<BigShortcutEditor>, gtk::Window, Outputs) {
         use relm4::{Component, ComponentController};
         let outputs = Outputs::default();
         let sink = std::rc::Rc::clone(&outputs);
         let editor = BigShortcutEditor::builder()
-            .launch(BigShortcutEditorInit::new(
-                "Shortcuts",
-                vec![
-                    BigShortcutEntry::new("Playback", "Play", "play", "space", "space"),
-                    BigShortcutEntry::new("Playback", "Next", "next", "n", "n"),
-                ],
-                BigShortcutEditorLabels::translated(str::to_owned),
-            ))
+            .launch(
+                BigShortcutEditorInit::new(
+                    "Shortcuts",
+                    vec![
+                        BigShortcutEntry::new("Playback", "Play", "play", "space", "space"),
+                        BigShortcutEntry::new("Playback", "Next", "next", "n", "n"),
+                        BigShortcutEntry::new(
+                            "View",
+                            "Zoom In",
+                            "zoom-in",
+                            "<Primary>plus",
+                            "<Primary>plus",
+                        )
+                        .with_capture_policy(BigShortcutCapturePolicy::ModifiedKey),
+                    ],
+                    BigShortcutEditorLabels::translated(str::to_owned),
+                )
+                .with_reservations(reservations),
+            )
             .connect_receiver(move |_, output| sink.borrow_mut().push(output));
         let window = gtk::Window::builder().child(editor.widget()).build();
         window.present();
@@ -1035,7 +1183,11 @@ mod tests {
     }
 
     fn changed(action: &str, accel: &str) -> BigShortcutEditorOutput {
-        let default_accel = if action == "play" { "space" } else { "n" };
+        let default_accel = match action {
+            "play" => "space",
+            "zoom-in" => "<Primary>plus",
+            _ => "n",
+        };
         BigShortcutEditorOutput::Changed(BigShortcutChange {
             action: action.to_owned(),
             accel: accel.to_owned(),
@@ -1046,7 +1198,11 @@ mod tests {
     #[test]
     fn backspace_captures_disable() {
         assert_eq!(
-            key_accel(gdk::Key::BackSpace, gdk::ModifierType::empty()),
+            key_accel(
+                gdk::Key::BackSpace,
+                gdk::ModifierType::empty(),
+                gdk::ModifierType::empty()
+            ),
             Some(String::new())
         );
     }
@@ -1134,6 +1290,124 @@ mod tests {
             assert!(widgets.replace_button.is_visible());
             let focus = widgets.capture_content.root().and_then(|root| root.focus());
             assert_eq!(focus, Some(widgets.capture_content.clone().upcast()));
+            window.destroy();
+        });
+    }
+
+    /// A reservation wins over the row that holds the same key, so Replace
+    /// never hands a reserved key on.
+    #[test]
+    fn reserved_key_is_refused() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let reservation = BigShortcutReservation::new("Main Menu", "space");
+            let (editor, window, outputs) = shown_editor_with(vec![reservation]);
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("space".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(
+                *outputs.borrow(),
+                [BigShortcutEditorOutput::ConflictRejected {
+                    action: "next".to_owned(),
+                    owner: "Main Menu".to_owned(),
+                }]
+            );
+            assert!(!editor.widgets().replace_button.is_visible());
+            assert_eq!(editor.model().rows[1].current_accel, "n");
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn modified_row_refuses_bare_key() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, outputs) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("zoom-in".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("w".to_owned()));
+            big_testkit::harness::pump();
+            assert!(outputs.borrow().is_empty());
+            let widgets = editor.widgets();
+            assert!(widgets.conflict_label.is_visible());
+            assert_eq!(
+                widgets.conflict_label.label(),
+                "Press a shortcut with Ctrl, Alt, or Shift."
+            );
+            assert_eq!(editor.model().rows[2].current_accel, "<Primary>plus");
+            window.destroy();
+        });
+    }
+
+    /// Ctrl+Shift+= is captured as GTK fires it, the same press as Ctrl++.
+    #[test]
+    fn shifted_symbol_meets_its_plain_default() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, outputs) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture(
+                "<Ctrl><Shift>plus".to_owned(),
+            ));
+            big_testkit::harness::pump();
+            assert!(outputs.borrow().is_empty());
+            assert!(editor.widgets().replace_button.is_visible());
+            editor.emit(BigShortcutEditorInput::CancelCapture);
+            editor.emit(BigShortcutEditorInput::BeginCapture("zoom-in".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture(
+                "<Ctrl><Shift>plus".to_owned(),
+            ));
+            big_testkit::harness::pump();
+            let row = editor.model().rows[2].row.clone();
+            assert!(!button(&row, "Reset shortcut").is_visible());
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn reset_into_taken_key_is_refused() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, outputs) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("play".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("n".to_owned()));
+            editor.emit(BigShortcutEditorInput::ReplaceConflict);
+            big_testkit::harness::pump();
+            outputs.borrow_mut().clear();
+            editor.emit(BigShortcutEditorInput::Reset("next".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(
+                *outputs.borrow(),
+                [BigShortcutEditorOutput::ConflictRejected {
+                    action: "next".to_owned(),
+                    owner: "Play".to_owned(),
+                }]
+            );
+            let next = &editor.model().rows[1];
+            assert_eq!(next.current_accel, "");
+            assert_eq!(
+                next.row.subtitle().as_deref(),
+                Some("“Play” already uses this shortcut.")
+            );
+            window.destroy();
+        });
+    }
+
+    /// The first refusal is said aloud, though its line was hidden until then.
+    #[test]
+    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-relm4-components -- --ignored"]
+    fn capture_refusal_is_announced() {
+        big_testkit::harness::require_gtk_test(|| {
+            use big_testkit::atspi::{Announcements, accessibility_bus, settle};
+            use relm4::ComponentController;
+            let (editor, window, _) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            settle();
+            let (bus, application) =
+                accessibility_bus().expect("the AT-SPI bridge (headless-gate.sh --accessible)");
+            let heard = Announcements::listen(&bus, &application);
+            editor.emit(BigShortcutEditorInput::CommitCapture("space".to_owned()));
+            settle();
+            assert_eq!(heard.take(), ["“Play” already uses this shortcut."]);
             window.destroy();
         });
     }

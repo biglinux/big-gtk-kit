@@ -222,9 +222,11 @@ pub fn read_listing_entry(path: &Path) -> std::io::Result<DirectoryListingEntry>
 
 /// Read one directory and return child metadata without filtering or sorting.
 ///
-/// Entries whose metadata disappears during the scan are skipped; other
-/// metadata and directory iteration errors are returned. Entry metadata and
-/// link targets are read without following symlinks; `targets_directory`
+/// Entries whose metadata disappears during the scan are skipped, and so are
+/// entries whose metadata cannot be read: a caller that must know the list is
+/// whole, such as one that totals a folder, reads
+/// [`read_directory_listing_snapshot`] and its `incomplete`. Entry metadata
+/// and link targets are read without following symlinks; `targets_directory`
 /// follows a symlink once only to classify navigation targets.
 ///
 /// # Errors
@@ -476,6 +478,49 @@ mod tests {
         .unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(read, (0, Some(Some(libc::EIO))));
+    }
+
+    /// The whole read fails the same way, instead of a short folder.
+    #[test]
+    fn failed_read_fails_the_snapshot() {
+        let dir = directory_listing_test_dir("failed-snapshot");
+        fs::write(dir.join("file"), b"x").unwrap();
+        let read = std::thread::spawn({
+            let dir = dir.clone();
+            move || {
+                crate::storage::tests::refuse_on_this_thread(libc::SYS_getdents64, libc::EIO);
+                read_directory_listing_snapshot(&dir).map_err(|error| error.raw_os_error())
+            }
+        })
+        .join()
+        .unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            read.map(|snapshot| snapshot.entries.len()),
+            Err(Some(libc::EIO))
+        );
+    }
+
+    /// An entry removed between the folder's read and its own look is gone,
+    /// not unreadable: the listing stays whole.
+    #[test]
+    fn vanished_entry_keeps_listing_whole() {
+        let dir = directory_listing_test_dir("vanished");
+        fs::write(dir.join("file"), b"x").unwrap();
+        let read = std::thread::spawn({
+            let dir = dir.clone();
+            move || {
+                let mut reader = DirectoryListingReader::open(&dir).unwrap();
+                // Every look at an entry now finds nothing, as after a removal.
+                crate::storage::tests::refuse_on_this_thread(libc::SYS_statx, libc::ENOENT);
+                let batch = reader.next_batch(usize::MAX);
+                (batch.len(), reader.incomplete())
+            }
+        })
+        .join()
+        .unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(read, (0, false));
     }
 
     /// Reading in batches yields what one whole read does.

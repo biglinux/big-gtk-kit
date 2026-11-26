@@ -124,10 +124,14 @@ mod tests {
             window.present();
             pump();
             watch(&window.surface().expect("realized"), &finalized);
-            button.popup();
-            pump();
-            button.popdown();
-            pump();
+            // Twice: the second map is on the same popup surface, whose parent
+            // must be released once.
+            for _ in 0..2 {
+                button.popup();
+                pump();
+                button.popdown();
+                pump();
+            }
             drop((popover, button));
             window.destroy();
             drop(window);

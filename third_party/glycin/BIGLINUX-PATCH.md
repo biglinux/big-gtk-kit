@@ -19,7 +19,7 @@ decoding under big-image), with these changes:
   leaves; a loader used after that (a finished load cancelled late) was not
   idle long enough when the cleanup ran, and stayed until the next decode,
   for minutes or the whole session. `pool::tests` checks it
-  (`cargo test -p glycin --lib`).
+  (`cargo nextest run -p glycin --lib`, one of the workspace's checks).
 - The same cleanup releases idle editor processes, which upstream keeps for
   the life of the program: an encoder (big-image's PNG output) or an edit
   started one and it never left.
@@ -40,4 +40,4 @@ out.
 Remove this directory and the `[patch.crates-io]` entry in the workspace
 `Cargo.toml` when upstream lets a pool or a loader choose its processes'
 priority, releases idle loaders within the retention time and lets a caller
-choose the memory format by the frame's colours.
+choose the memory format by the frame's colors.

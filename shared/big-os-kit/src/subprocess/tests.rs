@@ -1220,3 +1220,80 @@ fn child_runs_at_asked_niceness() {
     assert_eq!(niceness(own + 5), own + 5);
     assert_eq!(niceness(own - 1), own, "never made less nice");
 }
+
+/// What a helper for hostile input starts with: the address space and file
+/// size asked for, no core file, and the open-file limit this process
+/// inherited, though it raised its own.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn helper_starts_with_its_limits() {
+    const ADDRESS_SPACE: u64 = 1 << 30;
+    const FILE_SIZE: u64 = 1 << 20;
+    let _serial = FILE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+    let files = getrlimit(Resource::Nofile);
+    setrlimit(
+        Resource::Nofile,
+        Rlimit {
+            current: Some(raw_limit(files.maximum).min(1024)),
+            maximum: files.maximum,
+        },
+    )
+    .expect("a lower open-file limit");
+    let inherited_files = raw_limit(getrlimit(Resource::Nofile).current);
+    raise_file_limit();
+    let out = BigSubprocessSpec::builder()
+        .program("cat")
+        .arg("/proc/self/limits")
+        .max_address_space_bytes(ADDRESS_SPACE)
+        .max_file_size_bytes(FILE_SIZE)
+        .timeout(Duration::from_secs(5))
+        .build()
+        .run()
+        .expect("cat runs");
+    let limits = out.stdout_lossy();
+    let limit = |name: &str| {
+        let line = limits
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .unwrap_or_else(|| panic!("no {name} in {limits}"));
+        let mut fields = line.split_whitespace();
+        let mut next = || fields.next().map(str::to_owned);
+        (next(), next())
+    };
+    let soft = |value: u64| Some(value.to_string());
+    let address_space = ADDRESS_SPACE.min(raw_limit(getrlimit(Resource::As).current));
+    let file_size = FILE_SIZE.min(raw_limit(getrlimit(Resource::Fsize).current));
+    assert_eq!(limit("Max address space").0, soft(address_space));
+    assert_eq!(limit("Max file size").0, soft(file_size));
+    assert_eq!(limit("Max core file size"), (soft(0), soft(0)));
+    assert_eq!(limit("Max open files").0, soft(inherited_files));
+}
+
+/// A helper started to die with its parent ends when the thread that started
+/// it does, which the kernel's death signal counts as the parent.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn helper_ends_with_its_parent() {
+    let mut helper = std::thread::spawn(|| {
+        BigSubprocessSpec::builder()
+            .program("sleep")
+            .arg("30")
+            .die_with_parent(true)
+            .build()
+            .spawn()
+            .expect("sleep")
+    })
+    .join()
+    .expect("the starting thread");
+    let start = std::time::Instant::now();
+    let mut ended = helper.try_wait().expect("polled");
+    while ended.is_none() && start.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(10));
+        ended = helper.try_wait().expect("polled");
+    }
+    if ended.is_none() {
+        let _ = helper.kill();
+        let _ = helper.wait();
+    }
+    assert!(ended.is_some_and(|status| !status.success()), "{ended:?}");
+}

@@ -159,6 +159,12 @@ mod tests {
         assert_eq!(&read, b"frame");
         rustix::io::pwrite(mapping.fd(), b"ready", 4091).unwrap();
         assert_eq!(&mapping.bytes()[4091..], b"ready");
+        for len in [0, 4095, 4097] {
+            assert!(
+                rustix::fs::ftruncate(mapping.fd(), len).is_err(),
+                "the other holder resized it to {len}"
+            );
+        }
         assert!(SharedMapping::new("test", 0).is_err());
     }
 }

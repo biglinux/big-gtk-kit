@@ -247,23 +247,35 @@ pub fn present(
         move |_, position| pick(position, Pick::Plain)
     });
 
-    // Down moves into the list, Enter picks the selected row (Shift+Enter
-    // beside it), and Escape closes: a GtkSearchEntry eats Escape for its own
-    // "stop search", so the dialog would never see it.
+    // On the whole content, so the keys hold in the list as in the entry, and
+    // in capture: a GtkSearchEntry eats Escape for its own "stop search".
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed({
-        let (list, dialog, selection) =
-            (list.downgrade(), dialog.downgrade(), selection.downgrade());
+        let (list, entry, dialog, selection) = (
+            list.downgrade(),
+            entry.downgrade(),
+            dialog.downgrade(),
+            selection.downgrade(),
+        );
         move |_, key, _, modifiers| {
-            let (Some(list), Some(dialog), Some(selection)) =
-                (list.upgrade(), dialog.upgrade(), selection.upgrade())
-            else {
+            let (Some(list), Some(entry), Some(dialog), Some(selection)) = (
+                list.upgrade(),
+                entry.upgrade(),
+                dialog.upgrade(),
+                selection.upgrade(),
+            ) else {
                 return glib::Propagation::Proceed;
             };
+            let in_list = big_gtk_kit::focus::holds_focus(&list);
             match key {
-                gtk::gdk::Key::Down => {
+                gtk::gdk::Key::Down if !in_list => {
                     list.grab_focus();
+                    glib::Propagation::Stop
+                }
+                gtk::gdk::Key::Up if in_list && selection.selected() == 0 => {
+                    entry.grab_focus();
+                    entry.set_position(-1);
                     glib::Propagation::Stop
                 }
                 gtk::gdk::Key::Escape => {
@@ -285,7 +297,8 @@ pub fn present(
             }
         }
     });
-    entry.add_controller(keys);
+    content.add_controller(keys);
+    entry.set_key_capture_widget(Some(&content));
 
     dialog.present();
     entry.grab_focus();
@@ -518,6 +531,75 @@ mod tests {
             list.emit_by_name::<()>("activate", &[&0_u32]);
             assert!(big_testkit::harness::pump_until(|| ran.borrow().is_some()));
             assert_eq!(ran.borrow().as_deref(), Some("home"));
+        });
+    }
+
+    /// The search field and the list of the picker shown over `window`.
+    fn picker_parts(window: &adw::Window) -> (gtk::SearchEntry, gtk::ListView) {
+        let dialog = window.visible_dialog().expect("the picker");
+        let entry = subtree(&dialog)
+            .find_map(|widget| widget.downcast::<gtk::SearchEntry>().ok())
+            .expect("the search field");
+        let list = subtree(&dialog)
+            .find_map(|widget| widget.downcast::<gtk::ListView>().ok())
+            .expect("the list");
+        (entry, list)
+    }
+
+    /// The keys hold with the keyboard in the list: Up from the first row goes
+    /// back to the entry, and Shift+Enter picks the selected row beside.
+    #[test]
+    fn keys_hold_in_the_list() {
+        big_testkit::harness::require_gtk_test(|| {
+            use gtk::gdk::{Key, ModifierType};
+            let window = adw::Window::new();
+            window.present();
+            let picked = Rc::new(RefCell::new(None));
+            let row = |key: &str| PickRow {
+                title: key.to_owned(),
+                subtitle: String::new(),
+                key: key.to_owned(),
+            };
+            present(
+                window.upcast_ref(),
+                PickLabels::command_palette(str::to_owned),
+                "",
+                move |_| vec![row("a.txt"), row("b.txt"), row("notes.md")],
+                {
+                    let picked = Rc::clone(&picked);
+                    move |_, row, _, how| *picked.borrow_mut() = Some((row.key, how))
+                },
+            );
+            let (entry, list) = picker_parts(&window);
+            let content = entry.parent().expect("the content");
+            let press = |key: Key, modifiers: ModifierType| {
+                big_testkit::harness::press_key(
+                    &content,
+                    Some(gtk::PropagationPhase::Capture),
+                    key,
+                    modifiers,
+                )
+            };
+            let focused = |widget: &gtk::Widget| big_gtk_kit::focus::holds_focus(widget);
+            assert!(press(Key::Down, ModifierType::empty()));
+            assert!(big_testkit::harness::pump_until(|| focused(
+                list.upcast_ref()
+            )));
+            assert!(press(Key::Up, ModifierType::empty()));
+            assert!(focused(entry.upcast_ref()), "Up on the first row");
+            assert!(press(Key::Down, ModifierType::empty()));
+            let selection = list
+                .model()
+                .and_downcast::<gtk::SingleSelection>()
+                .expect("one selected row");
+            selection.set_selected(1);
+            assert!(!press(Key::Up, ModifierType::empty()), "the list moves up");
+            assert!(press(Key::Return, ModifierType::SHIFT_MASK));
+            assert!(big_testkit::harness::pump_until(|| picked
+                .borrow()
+                .is_some()));
+            assert_eq!(*picked.borrow(), Some(("b.txt".to_owned(), Pick::Beside)));
+            window.destroy();
         });
     }
 }

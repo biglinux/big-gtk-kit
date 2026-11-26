@@ -7,11 +7,11 @@
 
 //! Atomic JSON persistence primitives for BigLinux apps.
 //!
-//! `BigAtomicJsonStore` writes through a `<path>.tmp.<pid>.<seq>` sibling
+//! `BigAtomicJsonStore` writes through a `.<name>.tmp.<pid>.<seq>` sibling
 //! file and renames it into place. `rename(2)` is atomic on the same
 //! filesystem, so a reader never sees half a document; a partial write from a
-//! crash stays in the temporary file until the next write of the same file
-//! removes it.
+//! crash stays in the temporary file until a write of the same file, a minute
+//! or more after, removes it.
 //!
 //! Nothing here waits for the disk unless its name says `durable`: these stores
 //! hold program state, and an `fsync` per write stalls the machine to save
@@ -347,7 +347,7 @@ fn atomic_sibling_temp_path(target: &Path) -> PathBuf {
 /// missing.
 ///
 /// GTK-free and blocking: offload it (e.g. via
-/// `big_relm4_components::file_io::write_bytes_async`) so a slow/network
+/// `big_relm4_components::task::spawn_blocking_result`) so a slow/network
 /// filesystem can't stall the UI thread.
 ///
 /// Existing Unix permission bits are copied to the replacement inode; new files
@@ -508,6 +508,12 @@ pub fn atomic_replace_document(
 #[cfg(target_os = "linux")]
 pub fn atomic_save_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = written_through(path)?;
+    // Replace a file seen to exist at once: creating it first would write the
+    // whole document twice. A file made after this look still comes back as
+    // `AlreadyExists`.
+    if fs::symlink_metadata(&target).is_ok() {
+        return atomic_replace_document(&target, bytes, || true).map(drop);
+    }
     match atomic_create_document(&target, bytes) {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             atomic_replace_document(&target, bytes, || true).map(drop)

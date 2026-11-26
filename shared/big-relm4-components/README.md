@@ -13,7 +13,7 @@ Do not use it for one fixed label/box or product-specific policy.
 ## Main entry points
 
 modules `chart`, `css`, `desktop_entry`, `feedback`, `input`, `layout`, `list`, `qr`,
-`task`, `text`, `time` and `wayland`.
+`renderer`, `shape`, `task`, `templates`, `text`, `time` and `wayland`.
 
 The exact public API and safety requirements are in crate-level rustdoc. Do not
 infer current methods from roadmap documents.
@@ -55,10 +55,11 @@ one-line explanations, shortcuts and submenus that open beside their row,
 plus a strip of side-by-side buttons, a switch row and a slider
 (`described_item`, `append_strip_section`, `switch_item`, `scale_item`,
 `mark_destructive`).
-Context menus use `build_menu_model_action_popover_menu`, which returns a
-`PopoverMenu` with the `menu` accessible role; anchor it yourself, build a
-fresh one per opening and unparent the previous one on the next opening,
-never in `closed`.
+Context menus use `BigContextMenu`: one popover parented to its host for the
+host's life and filled again at every opening. `attach_context_menu` opens it
+on a secondary click, a long press, the Menu key and Shift+F10; a surface whose
+menu is something else hears the same requests through
+`connect_context_menu_request`.
 
 ## Native dependencies
 
@@ -82,8 +83,9 @@ cargo test -p big-relm4-components --doc --locked
 Run graphical tests through `tools/headless-gate.sh` when the changed behavior
 needs GTK.
 
-The `feedback::links` test reads this process's AT-SPI cache, so it is ignored
-by default and needs the real bridge:
+The tests that read this process's AT-SPI bus (the links, a field's refusal, the
+notice strip and the shortcut capture) are ignored by default and need the real
+bridge:
 
 ```bash
 tools/headless-gate.sh --accessible cargo test -p big-relm4-components --locked -- --ignored

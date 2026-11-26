@@ -539,7 +539,8 @@ fn dismissed(error: &glib::Error) -> bool {
 /// and already lives on the GTK main loop: a dialog stays open for as long as
 /// a person takes, and nothing may block while it does.
 mod portal {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     use gtk::prelude::*;
     use gtk::{gio, glib};
@@ -550,6 +551,8 @@ mod portal {
     const REQUEST: &str = "org.freedesktop.portal.Request";
     /// The person chose something.
     const SUCCESS: u32 = 0;
+    /// The person closed the dialog.
+    const CANCELLED: u32 = 1;
 
     thread_local! {
         static TOKENS: Tokens = Tokens::new();
@@ -578,7 +581,7 @@ mod portal {
         }
     }
 
-    /// Ask the portal, calling `answered` with the URIs, or `None` when no
+    /// Ask the portal, calling `answered` once with the URIs, or `None` when no
     /// portal answered and the caller should fall back.
     pub(super) fn ask(
         method: &'static str,
@@ -600,10 +603,23 @@ mod portal {
         // Subscribed before the call, not after: the portal may answer a
         // request the person had already dealt with before this returns, and a
         // signal nobody is listening for is simply lost. The subscription is a
-        // guard, so dropping it is what stops listening: on the answer, and
-        // equally when no portal took the call.
-        let answered = std::rc::Rc::new(answered);
-        let subscription = std::rc::Rc::new(std::cell::RefCell::new(None));
+        // guard, and holding it is what waiting means: whichever ends the
+        // request first (the answer, a refused call, the portal leaving the
+        // bus) drops it and answers.
+        let subscription = Rc::new(RefCell::new(None));
+        let watcher = Rc::new(Cell::new(None));
+        let finish = {
+            let (subscription, watcher) = (Rc::clone(&subscription), Rc::clone(&watcher));
+            Rc::new(move |answer: Option<Vec<gio::File>>| {
+                if subscription.borrow_mut().take().is_none() {
+                    return;
+                }
+                if let Some(watcher) = watcher.take() {
+                    gio::bus_unwatch_name(watcher);
+                }
+                answered(answer);
+            })
+        };
         let guard = bus.subscribe_to_signal(
             Some(PORTAL),
             Some(REQUEST),
@@ -612,14 +628,8 @@ mod portal {
             None,
             gio::DBusSignalFlags::NONE,
             {
-                let (answered, subscription) = (
-                    std::rc::Rc::clone(&answered),
-                    std::rc::Rc::clone(&subscription),
-                );
-                move |signal: gio::DBusSignalRef<'_>| {
-                    subscription.borrow_mut().take();
-                    answered(Some(uris(signal.parameters)));
-                }
+                let finish = Rc::clone(&finish);
+                move |signal: gio::DBusSignalRef<'_>| finish(response(signal.parameters))
             },
         );
         subscription.borrow_mut().replace(guard);
@@ -629,6 +639,7 @@ mod portal {
             title.to_variant(),
             with_token(&options, &token),
         ]);
+        let connection = bus.clone();
         bus.call(
             Some(PORTAL),
             PORTAL_PATH,
@@ -639,14 +650,26 @@ mod portal {
             gio::DBusCallFlags::NONE,
             -1,
             gio::Cancellable::NONE,
-            move |result| {
-                if let Err(error) = result {
+            move |result| match result {
+                // Watched from the reply on, when the name has its owner: a
+                // portal that crashes with the dialog open never answers.
+                Ok(_) if subscription.borrow().is_some() => {
+                    let vanished = Rc::clone(&finish);
+                    watcher.set(Some(gio::bus_watch_name_on_connection(
+                        &connection,
+                        PORTAL,
+                        gio::BusNameWatcherFlags::NONE,
+                        |_, _, _| {},
+                        move |_, _| vanished(None),
+                    )));
+                }
+                Ok(_) => {}
+                Err(error) => {
                     // No portal on this desktop, or it refused the call. Either
                     // way the caller still needs a dialog, so say "not answered"
                     // rather than "no file".
                     log::debug!("the file portal did not take the request: {error}");
-                    subscription.borrow_mut().take();
-                    answered(None);
+                    finish(None);
                 }
             },
         );
@@ -669,28 +692,31 @@ mod portal {
         dict.end()
     }
 
-    /// The chosen files, or nothing when the person cancelled or the portal
-    /// ended the dialog itself.
-    fn uris(body: &glib::Variant) -> Vec<gio::File> {
-        let Some(response) = body.child_value(0).get::<u32>() else {
-            return Vec::new();
-        };
-        if response != SUCCESS {
-            return Vec::new();
+    /// The chosen files, none when the person cancelled, or `None` when the
+    /// portal's dialog failed and the toolkit's should ask instead.
+    pub(super) fn response(body: &glib::Variant) -> Option<Vec<gio::File>> {
+        let (response, results) = body.get::<(u32, glib::VariantDict)>()?;
+        match response {
+            SUCCESS => Some(
+                results
+                    .lookup_value("uris", None)
+                    .and_then(|uris| uris.get::<Vec<String>>())
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|uri| gio::File::for_uri(uri))
+                    .collect(),
+            ),
+            CANCELLED => Some(Vec::new()),
+            _ => None,
         }
-        let results = glib::VariantDict::new(Some(&body.child_value(1)));
-        results
-            .lookup_value("uris", None)
-            .and_then(|uris| uris.get::<Vec<String>>())
-            .unwrap_or_default()
-            .iter()
-            .map(|uri| gio::File::for_uri(uri))
-            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
     use super::*;
 
     /// Two copies of the crate in one process, each counting from zero,
@@ -700,6 +726,141 @@ mod tests {
         let (first, second) = (portal::Tokens::new(), portal::Tokens::new());
         assert_ne!(first.next(), second.next());
         assert_ne!(first.next(), first.next(), "and one copy never repeats");
+    }
+
+    /// Responses as the portal's `org.freedesktop.portal.Request` documents
+    /// them: 0 chose, 1 cancelled, 2 ended another way.
+    #[test]
+    fn portal_response_reads_its_code() {
+        let body = |code: u32| {
+            let results = glib::VariantDict::new(None);
+            results.insert("uris", vec!["file:///a"]);
+            (code, results).to_variant()
+        };
+        let uris = |answer: Option<Vec<gio::File>>| {
+            answer.map(|files| {
+                files
+                    .iter()
+                    .map(|file| file.uri().to_string())
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(
+            uris(portal::response(&body(0))),
+            Some(vec!["file:///a".to_owned()])
+        );
+        assert_eq!(
+            uris(portal::response(&body(1))),
+            Some(Vec::new()),
+            "cancelled"
+        );
+        assert_eq!(uris(portal::response(&body(2))), None, "failed");
+        assert_eq!(uris(portal::response(&().to_variant())), None, "malformed");
+    }
+
+    /// A connection of its own on the session bus serving a `FileChooser`
+    /// that takes `OpenFile`, sets `asked`, and never sends its response.
+    fn portal_that_never_answers(asked: &Rc<Cell<bool>>) -> gio::DBusConnection {
+        let address =
+            gio::dbus_address_get_for_bus_sync(gio::BusType::Session, gio::Cancellable::NONE)
+                .expect("a session bus");
+        let portal = gio::DBusConnection::for_address_sync(
+            &address,
+            gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+            None,
+            gio::Cancellable::NONE,
+        )
+        .expect("a connection of the portal's own");
+        let node = gio::DBusNodeInfo::for_xml(
+            r#"<node><interface name="org.freedesktop.portal.FileChooser">
+              <method name="OpenFile">
+                <arg type="s" direction="in"/><arg type="s" direction="in"/>
+                <arg type="a{sv}" direction="in"/><arg type="o" direction="out"/>
+              </method>
+            </interface></node>"#,
+        )
+        .expect("valid introspection");
+        let interface = node
+            .lookup_interface("org.freedesktop.portal.FileChooser")
+            .expect("declared");
+        let taken = Rc::clone(asked);
+        portal
+            .register_object("/org/freedesktop/portal/desktop", &interface)
+            .method_call(move |_, _, _, _, _, _, invocation| {
+                taken.set(true);
+                let handle = glib::variant::ObjectPath::try_from(
+                    "/org/freedesktop/portal/desktop/request/unanswered",
+                )
+                .expect("an object path");
+                invocation.return_value(Some(&(handle,).to_variant()));
+            })
+            .build()
+            .expect("registered");
+        portal
+    }
+
+    /// A portal that takes the request and leaves the bus without answering
+    /// hands it to the toolkit's dialog rather than leaving it waiting.
+    #[test]
+    #[ignore = "owns the portal's name: needs the private bus of tools/headless-gate.sh"]
+    fn portal_leaving_unanswered_falls_back() {
+        let context = glib::MainContext::new();
+        let turn_until = |done: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !done() && std::time::Instant::now() < deadline {
+                if !context.iteration(false) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+            done()
+        };
+        context
+            .with_thread_default(|| {
+                let asked = Rc::new(Cell::new(false));
+                let portal = portal_that_never_answers(&asked);
+                let owned = Rc::new(Cell::new(None));
+                let (acquired, lost) = (Rc::clone(&owned), Rc::clone(&owned));
+                let owner = gio::bus_own_name_on_connection(
+                    &portal,
+                    "org.freedesktop.portal.Desktop",
+                    gio::BusNameOwnerFlags::DO_NOT_QUEUE,
+                    move |_, _| acquired.set(Some(true)),
+                    move |_, _| lost.set(Some(false)),
+                );
+                assert!(turn_until(&|| owned.get().is_some()));
+                assert_eq!(
+                    owned.get(),
+                    Some(true),
+                    "the portal's name is free on this bus"
+                );
+
+                let answer = Rc::new(RefCell::new(None));
+                let answered = Rc::clone(&answer);
+                portal::ask(
+                    "OpenFile",
+                    "",
+                    "Open",
+                    glib::VariantDict::new(None).end(),
+                    move |files| {
+                        answered
+                            .borrow_mut()
+                            .replace(files.map(|files| files.len()));
+                    },
+                );
+                assert!(
+                    turn_until(&|| asked.get()),
+                    "the request reached the portal"
+                );
+                // Unowned first: gio-rs unwraps the connection GIO hands a
+                // closed one's `name_lost` as NULL.
+                gio::bus_unown_name(owner);
+                portal.close_sync(gio::Cancellable::NONE).expect("closed");
+
+                assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
+                assert_eq!(*answer.borrow(), Some(None), "not answered: fall back");
+            })
+            .expect("the context of this thread");
     }
 
     #[test]

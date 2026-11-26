@@ -8,13 +8,16 @@ Use this crate to boot a GTK/libadwaita application, handle single-instance acti
 
 ## Do not use when
 
-Do not use it for window layout, settings schemas, product actions, or display-free services.
+Do not use it for window layout, settings schemas, or display-free services.
 
 ## Main entry points
 
 `AppShell`, `AppShellSpec`, `AppShellComponent`, `GettextInit`, `SessionRuntime`,
 `taskbar_progress::TaskbarProgress` (a task's progress on the product's taskbar
-button).
+button), `BigWindowSet` (the primary window and every workspace window, and
+which one is active), and the window actions every product spells the same:
+`install_product_actions` (Help and About for a `BigProduct`),
+`install_window_quit`, `install_fullscreen_action` and `install_input_action`.
 
 The exact public API and safety requirements are in crate-level rustdoc. Do not
 infer current methods from roadmap documents.

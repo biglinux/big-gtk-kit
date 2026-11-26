@@ -468,6 +468,105 @@ fn headings_resize_and_move_by_keys() {
     window.destroy();
 }
 
+/// WCAG 2.2 relative luminance of an sRGB pixel.
+fn luminance(pixel: &[u8]) -> f64 {
+    let linear = |channel: u8| {
+        let c = f64::from(channel) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(pixel[0]) + 0.7152 * linear(pixel[1]) + 0.0722 * linear(pixel[2])
+}
+
+/// What `page` drew in its last frame, as RGBA rows of `stride` bytes, once
+/// it has drawn one.
+fn rendered(window: &gtk::Window, page: &gtk::Box) -> (glib::Bytes, usize) {
+    // A widget paintable shows what the widget drew in its last frame.
+    let paint = || {
+        let snapshot = gtk::Snapshot::new();
+        gtk::WidgetPaintable::new(Some(page)).snapshot(
+            &snapshot,
+            f64::from(page.width()),
+            f64::from(page.height()),
+        );
+        snapshot.to_node()
+    };
+    assert!(pump_until(|| paint().is_some()), "the page never painted");
+    let node = paint().expect("the page painted");
+    let (width, height) = (page.width(), page.height());
+    let viewport = gtk::graphene::Rect::new(0.0, 0.0, width as f32, height as f32);
+    let texture = window
+        .renderer()
+        .expect("a realized window")
+        .render_texture(&node, Some(&viewport));
+    let mut downloader = gdk::TextureDownloader::new(&texture);
+    downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
+    downloader.download_bytes()
+}
+
+/// Oracle: WCAG 2.2 success criterion 1.4.3 asks 4.5:1 of text this size,
+/// measured between the strongest glyph pixel and the heading's background.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn heading_title_meets_text_contrast() {
+    let geometry = Geometry {
+        columns: vec![Column {
+            id: 0,
+            title: "Name".into(),
+            shows: ColumnShows::Primary,
+            width: 200,
+            expand: true,
+            xalign: 0.0,
+            sort: None,
+        }],
+        ..Geometry::rows(22)
+    };
+    let view = ItemView::new(Rc::new(Counting::default()), geometry);
+    let header = ColumnHeader::new(&view);
+    // The theme's window background, painted by the widget rendered below.
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    page.add_css_class("background");
+    page.append(&header);
+    page.append(&view);
+    let window = gtk::Window::builder()
+        .default_width(300)
+        .default_height(100)
+        .child(&page)
+        .build();
+    window.present();
+    let heading = header.first_child().expect("the Name heading");
+    let title = heading
+        .first_child()
+        .and_then(|content| content.first_child())
+        .expect("the heading's title");
+
+    let (pixels, stride) = rendered(&window, &page);
+    let pixel = |x: usize, y: usize| &pixels[y * stride + x * 4..][..4];
+
+    let corner = heading
+        .compute_bounds(&page)
+        .expect("the heading is laid out");
+    let background = pixel(corner.x() as usize + 1, corner.y() as usize + 1);
+    let ground = luminance(background);
+    let bounds = title.compute_bounds(&page).expect("the title is laid out");
+    let mut strongest = 1.0_f64;
+    for y in bounds.y() as usize..(bounds.y() + bounds.height()) as usize {
+        for x in bounds.x() as usize..(bounds.x() + bounds.width()) as usize {
+            let glyph = luminance(pixel(x, y));
+            let ratio = (glyph.max(ground) + 0.05) / (glyph.min(ground) + 0.05);
+            strongest = strongest.max(ratio);
+        }
+    }
+    assert!(
+        strongest >= 4.5,
+        "heading title contrast {strongest:.2}:1 on {background:?}"
+    );
+    window.destroy();
+}
+
 fn pump() {
     let context = glib::MainContext::default();
     let mut guard = 0;

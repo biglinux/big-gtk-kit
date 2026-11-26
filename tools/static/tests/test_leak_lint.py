@@ -649,6 +649,25 @@ class Strict(unittest.TestCase):
         )
         self.assertEqual(self.run_main(waived, "--strict"), 0)
 
+    def test_unusable_path_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "case.rs"
+            source.write_text("fn main() {}\n")
+            notes = Path(tmp) / "README.md"
+            notes.write_text("notes\n")
+            for extra in (Path(tmp) / "missing", notes):
+                with (
+                    self.subTest(extra=extra.name),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    self.assertEqual(
+                        leak_lint.main(
+                            ["--strict", "--no-icons", str(source), str(extra)]
+                        ),
+                        2,
+                    )
+
 
 class Suppression(unittest.TestCase):
     def test_allow_with_a_reason_suppresses(self):

@@ -6,6 +6,9 @@
 //! Only under the real bridge (`headless-gate.sh --accessible`); under
 //! the test AT context [`accessibility_bus`] finds no bus.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
@@ -17,6 +20,52 @@ pub fn settle() {
     for _ in 0..50 {
         context.iteration(false);
         std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// What this process says to a screen reader while it is kept: the text of each
+/// `Announcement` event the bridge sends.
+pub struct Announcements {
+    _subscription: gio::SignalSubscription,
+    heard: Rc<RefCell<Vec<String>>>,
+}
+
+impl Announcements {
+    /// Listen on `bus` (from [`accessibility_bus`]) to `application`; the
+    /// events arrive while this thread's main loop runs ([`settle`]).
+    #[must_use]
+    pub fn listen(bus: &gio::DBusConnection, application: &str) -> Self {
+        let heard = Rc::<RefCell<Vec<String>>>::default();
+        let sink = Rc::clone(&heard);
+        let subscription = bus.subscribe_to_signal(
+            Some(application),
+            Some("org.a11y.atspi.Event.Object"),
+            Some("Announcement"),
+            None,
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |signal| {
+                // (siiva{sv}): the text is the variant after the two numbers.
+                let text = signal
+                    .parameters
+                    .try_child_value(3)
+                    .and_then(|value| value.as_variant())
+                    .and_then(|text| text.get::<String>());
+                if let Some(text) = text {
+                    sink.borrow_mut().push(text);
+                }
+            },
+        );
+        Self {
+            _subscription: subscription,
+            heard,
+        }
+    }
+
+    /// What was said since the last call, oldest first.
+    #[must_use]
+    pub fn take(&self) -> Vec<String> {
+        self.heard.take()
     }
 }
 

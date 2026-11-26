@@ -33,12 +33,13 @@ pub fn build(builder: adw::builders::ComboRowBuilder) -> adw::ComboRow {
     let row = builder.build();
     show_whole_choices(&row);
     name_list_items(row.factory(), row.list_factory());
-    focus_chosen_item_on_open(&row);
+    focus_chosen_item_on_open(&row, |row| row.selected());
     row
 }
 
-/// The drop-down `builder` describes, its choices named.
-/// `clippy.toml` sends every drop-down of the suite through here.
+/// The drop-down `builder` describes, its choices named and the chosen one
+/// focused when it opens. `clippy.toml` sends every drop-down of the suite
+/// through here.
 #[must_use]
 pub fn build_drop_down(builder: gtk::builders::DropDownBuilder) -> gtk::DropDown {
     #[expect(
@@ -47,6 +48,7 @@ pub fn build_drop_down(builder: gtk::builders::DropDownBuilder) -> gtk::DropDown
     )]
     let dropdown = builder.build();
     name_list_items(dropdown.factory(), dropdown.list_factory());
+    focus_chosen_item_on_open(&dropdown, gtk::DropDown::selected);
     dropdown
 }
 
@@ -125,22 +127,30 @@ fn fit_where_shown(label: &gtk::Label) {
     }
 }
 
-/// GTK opens the popup with focus on its first item the first time, since the
-/// list has no items yet when the popup maps, and the first key goes to that
-/// item. Scrolling to the chosen item once mapped puts focus on it.
-fn focus_chosen_item_on_open(row: &adw::ComboRow) {
-    let Some(popover) = first_descendant::<gtk::Popover>(row.upcast_ref()) else {
+/// GTK opens the popup with the focus on its first item; once the popover has
+/// shown, the chosen item takes it, or only scrolls into view where a search
+/// field keeps the keyboard.
+fn focus_chosen_item_on_open<W: IsA<gtk::Widget>>(owner: &W, selected: fn(&W) -> u32) {
+    let Some(popover) = first_descendant::<gtk::Popover>(owner.upcast_ref()) else {
         return;
     };
-    let row = row.downgrade();
-    popover.connect_map(move |popover| {
-        let Some(row) = row.upgrade() else {
+    let owner = owner.downgrade();
+    popover.connect_show(move |popover| {
+        let Some(owner) = owner.upgrade() else {
             return;
         };
-        if row.selected() != gtk::INVALID_LIST_POSITION
+        let chosen = selected(&owner);
+        if chosen != gtk::INVALID_LIST_POSITION
             && let Some(list) = first_descendant::<gtk::ListView>(popover.upcast_ref())
         {
-            list.scroll_to(row.selected(), gtk::ListScrollFlags::FOCUS, None);
+            let searching = first_descendant::<gtk::SearchEntry>(popover.upcast_ref())
+                .is_some_and(|search| search.is_visible());
+            let flags = if searching {
+                gtk::ListScrollFlags::NONE
+            } else {
+                gtk::ListScrollFlags::FOCUS
+            };
+            list.scroll_to(chosen, flags, None);
         }
     });
 }
@@ -281,6 +291,23 @@ mod tests {
                 assert_eq!(focused(), Some(1));
                 window.destroy();
             }
+            let dropdown = from_strings(&labels);
+            dropdown.set_selected(2);
+            let window = gtk::Window::builder().child(&dropdown).build();
+            window.present();
+            big_testkit::harness::pump();
+            for opening in 0..2 {
+                gtk::prelude::WidgetExt::activate(&dropdown);
+                let popover =
+                    first_descendant::<gtk::Popover>(dropdown.upcast_ref()).expect("popup");
+                let list = first_descendant::<gtk::ListView>(popover.upcast_ref()).expect("list");
+                let focused = || children(&list).position(|widget| widget.has_focus());
+                assert!(big_testkit::harness::pump_until(|| focused().is_some()));
+                assert_eq!(focused(), Some(2), "opening {opening}");
+                popover.popdown();
+                assert!(big_testkit::harness::pump_until(|| !popover.is_mapped()));
+            }
+            window.destroy();
         });
     }
 }

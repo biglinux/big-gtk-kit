@@ -5,7 +5,7 @@
 //! titled with it, `ctrl+t` finds what Ctrl+T does, `Super` every shortcut
 //! that holds Super.
 
-use gtk::gdk::ModifierType;
+use gtk::gdk::{self, ModifierType};
 
 /// A shortcut search as somebody types it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -60,12 +60,23 @@ impl ShortcutSearch {
     /// Whether the shortcut titled `title`, whose keys read `label` on screen and
     /// are `keys` (the modifiers held and the key's name, `t` or `Return`), is one
     /// this search finds: its title or label holds what was typed, or one of its
-    /// keys holds every modifier typed and is the key typed.
+    /// keys holds every modifier typed and is the key typed, by its name or as
+    /// GTK shows it (`Return` reads `Enter`).
     #[must_use]
     pub fn finds(&self, title: &str, label: &str, keys: &[(ModifierType, &str)]) -> bool {
+        // `+` and spaces join keys alike: "ctrl page up" reads "Ctrl+Page Up".
+        let joined = |text: &str| {
+            text.to_lowercase()
+                .split(|letter: char| letter == '+' || letter.is_whitespace())
+                .filter(|word| !word.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let typed = joined(&self.text);
         if self.text.is_empty()
             || title.to_lowercase().contains(&self.text)
             || label.to_lowercase().contains(&self.text)
+            || (!typed.is_empty() && joined(label).contains(&typed))
         {
             return true;
         }
@@ -80,11 +91,19 @@ impl ShortcutSearch {
                 *held
             };
             held.contains(*modifiers)
-                && key
-                    .as_deref()
-                    .is_none_or(|key| name.eq_ignore_ascii_case(key))
+                && key.as_deref().is_none_or(|key| {
+                    name.eq_ignore_ascii_case(key)
+                        || shown_key(name).is_some_and(|shown| shown == key)
+                })
         })
     }
+}
+
+/// The key `name` as GTK shows it, in lower case.
+fn shown_key(name: &str) -> Option<String> {
+    let key = gdk::Key::from_name(name)?;
+    let shown = gtk::accelerator_get_label(key, ModifierType::empty()).to_lowercase();
+    Some(shown)
 }
 
 #[cfg(test)]
@@ -94,58 +113,86 @@ mod tests {
     /// The searches the shortcut pages promise: a name, `ctrl+t`, `Super`.
     #[test]
     fn finds_by_name_or_key() {
-        let control = ModifierType::CONTROL_MASK;
-        let shift = ModifierType::SHIFT_MASK;
-        let logo = ModifierType::SUPER_MASK;
-        let new_tab = ("New tab", "Ctrl+T", vec![(control, "t")]);
-        let reopen = (
-            "Reopen closed tab",
-            "Shift+Ctrl+T",
-            vec![(control | shift, "t")],
-        );
-        let close = ("Close window", "Ctrl+W", vec![(control, "w")]);
-        let menu = ("Open the menu", "Super", vec![(logo, "")]);
-        let terminal = (
-            "Terminal",
-            "Super + T",
-            vec![(ModifierType::META_MASK, "t")],
-        );
-        let unbound = ("Zoom in", "Disabled", vec![]);
-        let rows = [&new_tab, &reopen, &close, &menu, &terminal, &unbound];
-        for (typed, expected) in [
-            (
-                "",
-                vec![
-                    "New tab",
-                    "Reopen closed tab",
-                    "Close window",
-                    "Open the menu",
-                    "Terminal",
-                    "Zoom in",
-                ],
-            ),
-            ("ctrl+t", vec!["New tab", "Reopen closed tab"]),
-            ("Ctrl + T", vec!["New tab", "Reopen closed tab"]),
-            ("ctrl+shift+t", vec!["Reopen closed tab"]),
-            (
-                "ctrl+",
-                vec!["New tab", "Reopen closed tab", "Close window"],
-            ),
-            ("Super", vec!["Open the menu", "Terminal"]),
-            ("super+t", vec!["Terminal"]),
-            ("w", vec!["New tab", "Close window"]),
-            ("close", vec!["Reopen closed tab", "Close window"]),
-            ("zoom", vec!["Zoom in"]),
-            ("ctrl+q", vec![]),
-            ("paste the text", vec![]),
-        ] {
-            let search = ShortcutSearch::new(typed);
-            let found: Vec<&str> = rows
-                .iter()
-                .filter(|(title, label, keys)| search.finds(title, label, keys))
-                .map(|(title, _, _)| *title)
-                .collect();
-            assert_eq!(found, expected, "{typed:?}");
-        }
+        big_testkit::harness::require_gtk_test(|| {
+            let control = ModifierType::CONTROL_MASK;
+            let shift = ModifierType::SHIFT_MASK;
+            let logo = ModifierType::SUPER_MASK;
+            let new_tab = ("New tab", "Ctrl+T", vec![(control, "t")]);
+            let reopen = (
+                "Reopen closed tab",
+                "Shift+Ctrl+T",
+                vec![(control | shift, "t")],
+            );
+            let close = ("Close window", "Ctrl+W", vec![(control, "w")]);
+            let menu = ("Open the menu", "Super", vec![(logo, "")]);
+            let terminal = (
+                "Terminal",
+                "Super + T",
+                vec![(ModifierType::META_MASK, "t")],
+            );
+            let unbound = ("Zoom in", "Disabled", vec![]);
+            let zoom_out = ("Shrink text", "Ctrl+-", vec![(control, "minus")]);
+            let page = ("Previous page", "Ctrl+Page Up", vec![(control, "Page_Up")]);
+            let rows = [
+                &new_tab, &reopen, &close, &menu, &terminal, &unbound, &zoom_out, &page,
+            ];
+            for (typed, expected) in [
+                (
+                    "",
+                    vec![
+                        "New tab",
+                        "Reopen closed tab",
+                        "Close window",
+                        "Open the menu",
+                        "Terminal",
+                        "Zoom in",
+                        "Shrink text",
+                        "Previous page",
+                    ],
+                ),
+                ("ctrl+t", vec!["New tab", "Reopen closed tab"]),
+                ("Ctrl + T", vec!["New tab", "Reopen closed tab"]),
+                ("ctrl+shift+t", vec!["Reopen closed tab"]),
+                (
+                    "ctrl+",
+                    vec![
+                        "New tab",
+                        "Reopen closed tab",
+                        "Close window",
+                        "Shrink text",
+                        "Previous page",
+                    ],
+                ),
+                ("Super", vec!["Open the menu", "Terminal"]),
+                ("super+t", vec!["Terminal"]),
+                ("w", vec!["New tab", "Close window"]),
+                ("close", vec!["Reopen closed tab", "Close window"]),
+                ("zoom", vec!["Zoom in"]),
+                ("ctrl -", vec!["Shrink text"]),
+                ("ctrl minus", vec!["Shrink text"]),
+                ("ctrl page up", vec!["Previous page"]),
+                (
+                    "+",
+                    vec![
+                        "New tab",
+                        "Reopen closed tab",
+                        "Close window",
+                        "Terminal",
+                        "Shrink text",
+                        "Previous page",
+                    ],
+                ),
+                ("ctrl+q", vec![]),
+                ("paste the text", vec![]),
+            ] {
+                let search = ShortcutSearch::new(typed);
+                let found: Vec<&str> = rows
+                    .iter()
+                    .filter(|(title, label, keys)| search.finds(title, label, keys))
+                    .map(|(title, _, _)| *title)
+                    .collect();
+                assert_eq!(found, expected, "{typed:?}");
+            }
+        });
     }
 }

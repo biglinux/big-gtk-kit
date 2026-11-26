@@ -66,6 +66,9 @@ pub fn resize_rgba(
     // changed. Dropping this is how a Display-P3 photograph gets written back
     // as if it were sRGB.
     resized.cicp = image.cicp;
+    // The pixbuf always carries alpha, which reads back as not opaque; an
+    // opaque source scales to all-255 alpha.
+    resized.opaque = image.opaque;
     Ok(resized)
 }
 
@@ -151,6 +154,30 @@ mod tests {
         let resized = resize_rgba(&flat(40, 20), 10, 5).expect("bounded target");
         assert_eq!((resized.width, resized.height), (10, 5));
         assert_eq!(resized.rgba.len(), 10 * 5 * 4);
+    }
+
+    #[test]
+    fn resizing_keeps_an_opaque_picture_opaque() {
+        let opaque = BigRgbaImage {
+            rgba: [10, 200, 90, 255].repeat(40 * 20),
+            opaque: true,
+            ..flat(40, 20)
+        };
+        let resized = resize_rgba(&opaque, 10, 5).expect("bounded target");
+        assert!(resized.opaque);
+        assert!(
+            resized
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 255)
+        );
+        assert!(
+            !resize_rgba(&flat(40, 20), 10, 5)
+                .expect("bounded target")
+                .opaque
+        );
     }
 
     /// A 3×2 picture to 2×1: the first pixel the mean of two columns of

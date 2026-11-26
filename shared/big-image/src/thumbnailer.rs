@@ -393,7 +393,9 @@ impl Staging {
 
 impl Drop for Staging {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        // The confined command may leave folders closed to everyone or nested
+        // past the kernel's path length.
+        let _ = big_os_kit::file_io::remove_tree(&self.path);
     }
 }
 
@@ -443,6 +445,7 @@ use std::os::unix::fs::DirBuilderExt as _;
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
 
     const PAPERS: &str = "[Thumbnailer Entry]\n\
         TryExec=/usr/bin/true\n\
@@ -599,6 +602,21 @@ pub(crate) mod tests {
         let refused = receiver.recv_timeout(Duration::from_secs(5)) == Ok(false);
         let _ = std::fs::remove_dir_all(&dir);
         refused
+    }
+
+    #[test]
+    fn closed_staging_is_removed() {
+        let staging = private_staging().expect("staging");
+        let path = staging.path().to_owned();
+        let closed = path.join("closed");
+        std::fs::create_dir_all(closed.join("inner")).expect("folders");
+        std::fs::write(closed.join("inner/page.png"), b"answer").expect("file");
+        std::os::unix::fs::symlink(&closed, path.join("link")).expect("link");
+        std::fs::set_permissions(closed.join("inner"), std::fs::Permissions::from_mode(0o000))
+            .expect("closed");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).expect("closed");
+        drop(staging);
+        assert!(!path.exists());
     }
 
     #[test]

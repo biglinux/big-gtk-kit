@@ -25,11 +25,21 @@ pub fn activate_desktop_action_sync(action: &str, parameter: &str) -> Result<(),
 ///
 /// # Errors
 ///
-/// The session bus is missing, or the last name asked refused; an error
-/// matching [`gio::DBusError::ServiceUnknown`] means no desktop is running.
+/// The session bus is missing, or every name refused: a desktop that answered
+/// is reported over a name nobody holds, so an error matching
+/// [`gio::DBusError::ServiceUnknown`] means no desktop is running.
 pub async fn activate_desktop_action(action: &str, parameter: &str) -> Result<(), glib::Error> {
     let connection = gio::bus_get_future(gio::BusType::Session).await?;
-    let mut refused = None;
+    activate_on(&connection, action, parameter).await
+}
+
+/// [`activate_desktop_action`] on `connection`.
+async fn activate_on(
+    connection: &gio::DBusConnection,
+    action: &str,
+    parameter: &str,
+) -> Result<(), glib::Error> {
+    let mut refused: Option<glib::Error> = None;
     for name in DESKTOP_NAMES {
         let answer = connection
             .call_future(
@@ -45,7 +55,14 @@ pub async fn activate_desktop_action(action: &str, parameter: &str) -> Result<()
             .await;
         match answer {
             Ok(_) => return Ok(()),
-            Err(error) => refused = Some(error),
+            Err(error) => {
+                if refused
+                    .as_ref()
+                    .is_none_or(|earlier| earlier.matches(gio::DBusError::ServiceUnknown))
+                {
+                    refused = Some(error);
+                }
+            }
         }
     }
     refused.map_or(Ok(()), Err)
@@ -90,5 +107,54 @@ mod tests {
             object_path("br.com.biglinux.bighost"),
             "/br/com/biglinux/bighost"
         );
+    }
+
+    /// A standalone shell that refuses the action is the answer, not the host
+    /// that is not running beside it, which callers would read as no desktop.
+    #[test]
+    fn shell_refusal_outlives_absent_host() {
+        let dir = std::env::temp_dir().join(format!("big-desktop-action-{}", std::process::id()));
+        let (mut daemon, address) =
+            big_os_kit::test_bus::activating(&dir, "org.example.Unused").expect("dbus-daemon");
+        let answer = big_testkit::harness::on_test_context(|context| {
+            context.block_on(async {
+                let connect = || {
+                    gio::DBusConnection::for_address_future(
+                        &address,
+                        gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                            | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+                        None,
+                    )
+                };
+                // A GApplication without the action: its exported group, and
+                // its name on the bus.
+                let shell = connect().await?;
+                shell.export_action_group(
+                    &object_path(DESKTOP_NAMES[0]),
+                    &gio::SimpleActionGroup::new(),
+                )?;
+                shell
+                    .call_future(
+                        Some("org.freedesktop.DBus"),
+                        "/org/freedesktop/DBus",
+                        "org.freedesktop.DBus",
+                        "RequestName",
+                        Some(&(DESKTOP_NAMES[0], 0_u32).to_variant()),
+                        None,
+                        gio::DBusCallFlags::NONE,
+                        ANSWER_TIMEOUT_MS,
+                    )
+                    .await?;
+                let caller = connect().await?;
+                Ok::<_, glib::Error>(activate_on(&caller, "set-wallpaper", "/a.png").await)
+            })
+        });
+        let _ = daemon.kill();
+        let _ = daemon.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+        let error = answer
+            .expect("the stand-in shell")
+            .expect_err("the shell has no such action");
+        assert!(!error.matches(gio::DBusError::ServiceUnknown), "{error}");
     }
 }

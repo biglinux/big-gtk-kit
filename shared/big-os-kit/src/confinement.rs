@@ -220,9 +220,6 @@ mod tests {
     /// the home folder, the session bus nor a file beside the one bound in.
     #[test]
     fn namespace_hides_home_and_bus() {
-        if !Path::new(BWRAP).exists() {
-            return;
-        }
         let runtime = format!("/run/user/{}", crate::users::own_uid());
         assert!(Path::new(&runtime).is_dir());
         let folder = std::env::temp_dir().join(format!("big-confinement-{}", std::process::id()));
@@ -259,6 +256,78 @@ mod tests {
             .expect("an entry of the home folder");
         assert!(!probe(&elsewhere.into_os_string()));
         std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    /// The output of `command` run in the namespace.
+    fn confined_output(command: &[&str]) -> String {
+        let output = BigSubprocessSpec::builder()
+            .program(BWRAP)
+            .args(system_only_namespace())
+            .arg("--")
+            .args(command)
+            .allow_list([BWRAP])
+            .build()
+            .run()
+            .unwrap();
+        assert!(output.status.success(), "{}", output.stderr_lossy());
+        output.stdout_lossy()
+    }
+
+    /// A confined command sees no other process than bwrap's own and no
+    /// network but its own loopback.
+    #[test]
+    fn namespace_hides_processes_and_network() {
+        let listing = confined_output(&["/usr/bin/ls", "/proc"]);
+        let processes: Vec<&str> = listing
+            .lines()
+            .filter(|name| name.bytes().all(|byte| byte.is_ascii_digit()))
+            .collect();
+        assert_eq!(processes, ["1", "2"], "bwrap and the command");
+        let devices = confined_output(&["/usr/bin/cat", "/proc/net/dev"]);
+        let interfaces: Vec<&str> = devices
+            .lines()
+            .skip(2)
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, _)| name.trim())
+            .collect();
+        assert_eq!(interfaces, ["lo"]);
+    }
+
+    /// The confined command ends with the thread that started bwrap, which
+    /// the kernel's death signal counts as its parent, though it would run on.
+    #[test]
+    fn namespace_ends_with_its_parent() {
+        let mut confined = std::thread::spawn(|| {
+            let mut confined = BigSubprocessSpec::builder()
+                .program(BWRAP)
+                .args(system_only_namespace())
+                .args(["--", "/usr/bin/sh", "-c", "echo started && exec sleep 30"])
+                .allow_list([BWRAP])
+                .build()
+                .spawn()
+                .unwrap();
+            let mut started = String::new();
+            std::io::BufRead::read_line(
+                &mut std::io::BufReader::new(confined.take_stdout().unwrap()),
+                &mut started,
+            )
+            .unwrap();
+            assert_eq!(started, "started\n");
+            confined
+        })
+        .join()
+        .unwrap();
+        let start = std::time::Instant::now();
+        let mut ended = confined.try_wait().unwrap();
+        while ended.is_none() && start.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            ended = confined.try_wait().unwrap();
+        }
+        if ended.is_none() {
+            let _ = confined.kill();
+            let _ = confined.wait();
+        }
+        assert!(ended.is_some_and(|status| !status.success()), "{ended:?}");
     }
 
     /// Each folder given reads, and nothing beside them does, nor takes a

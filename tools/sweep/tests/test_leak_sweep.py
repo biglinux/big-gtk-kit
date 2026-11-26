@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """The parts of the sweep that decide, without a display."""
 
+import contextlib
+import io
 import subprocess
 import sys
 import tempfile
@@ -96,6 +98,17 @@ atspi_name = "prog"
 """
 
 
+class Steps(unittest.TestCase):
+    def test_failing_command_is_an_error(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            leak_sweep.run_step(
+                {"do": "command", "argv": ["false"], "settle": 0}, {}, "", Path(tmp), 1
+            )
+
+
 class Spec(unittest.TestCase):
     def write(self, text):
         with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as handle:
@@ -126,14 +139,14 @@ class Spec(unittest.TestCase):
         )
         self.assertEqual(spec["surface"][0]["name"], "about")
 
-    def test_a_program_without_a_command_is_refused(self):
+    def test_commandless_program_refused(self):
         with self.assertRaises(ValueError):
             leak_sweep.load_spec(self.write('[program]\natspi_name = "x"\n'))
 
     def test_string_command_is_refused(self):
         self.refused('[program]\ncommand = "prog --flag"\natspi_name = "x"\n')
 
-    def test_a_seed_outside_the_workdir_is_refused(self):
+    def test_seed_outside_workdir_refused(self):
         for name in ("/etc/passwd", "../outside"):
             self.refused(PROGRAM + f'[program.files]\n"{name}" = "x"\n')
 
@@ -151,6 +164,38 @@ class Spec(unittest.TestCase):
 
     def test_an_unknown_step_is_refused(self):
         self.refused(PROGRAM + '[[surface]]\nname = "a"\nopen = [{ do = "press" }]\n')
+
+    def test_malformed_tables_are_refused(self):
+        for text in (
+            PROGRAM + 'env = "x"\n',
+            PROGRAM + 'files = "x"\n',
+            'allow = ["x"]\n' + PROGRAM,
+            'surface = ["x"]\n' + PROGRAM,
+            PROGRAM + '[[surface]]\nname = "a"\nopen = []\nclose = "dismiss"\n',
+            PROGRAM + '[[surface]]\nname = "a"\nopen = []\nallow = ["x"]\n',
+        ):
+            with self.subTest(text=text):
+                self.refused(text)
+
+    def test_accessible_action_step_loads(self):
+        spec = leak_sweep.load_spec(
+            self.write(
+                PROGRAM
+                + '[[surface]]\nname = "a"\n'
+                + 'open = [{ do = "app-action", name = "win.open-disc" }]\n'
+            )
+        )
+        self.assertEqual(spec["surface"][0]["open"][0]["do"], "app-action")
+
+    def test_zero_cycles_is_refused(self):
+        path = self.write(PROGRAM)
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            status = leak_sweep.main(
+                [str(path), "--cycles", "0", "--library", str(path)]
+            )
+        self.assertEqual(status, 2)
+        self.assertIn("cycles", error.getvalue())
 
     def test_workdir_is_the_only_placeholder(self):
         self.assertEqual(

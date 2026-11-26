@@ -272,36 +272,64 @@ fn draw(
     let _ = context.stroke();
 
     let step = width / (state.capacity - 1) as f64;
-    // The waiting goes under the lines it explains.
-    let mut order: Vec<&(Ink, Vec<Option<f64>>)> = state.series.iter().collect();
-    order.sort_by_key(|(series_ink, _)| *series_ink != Ink::Waiting);
-    for (series_ink, samples) in order {
-        // Right-aligned: the newest sample is always at the right edge.
-        let first = state.capacity.saturating_sub(samples.len());
-        let ceiling = if *series_ink == Ink::Waiting {
-            100.0
-        } else {
-            state.ceiling
-        };
-        let point = |index: usize, value: f64| {
-            (
-                (first + index) as f64 * step,
-                height - (value / ceiling).clamp(0.0, 1.0) * (height - 2.0) - 1.0,
-            )
-        };
-        for run in runs(samples) {
-            if run.len() < 2 {
-                continue;
-            }
-            let points: Vec<(f64, f64)> = run
-                .iter()
-                .map(|(index, value)| point(*index, *value))
+    // Each series as the points of its unbroken stretches, the waiting first:
+    // it goes under the lines it explains.
+    let mut traced: Vec<(Ink, Vec<Vec<(f64, f64)>>)> = state
+        .series
+        .iter()
+        .map(|(series_ink, samples)| {
+            // Right-aligned: the newest sample is always at the right edge.
+            let first = state.capacity.saturating_sub(samples.len());
+            let ceiling = if *series_ink == Ink::Waiting {
+                100.0
+            } else {
+                state.ceiling
+            };
+            let point = |index: usize, value: f64| {
+                (
+                    (first + index) as f64 * step,
+                    height - (value / ceiling).clamp(0.0, 1.0) * (height - 2.0) - 1.0,
+                )
+            };
+            let stretches = runs(samples)
+                .into_iter()
+                .filter(|run| run.len() >= 2)
+                .map(|run| {
+                    run.iter()
+                        .map(|(index, value)| point(*index, *value))
+                        .collect()
+                })
                 .collect();
-            trace(context, &points);
-            if *series_ink == Ink::Waiting {
-                hatch_under(context, &points, (width, height), ink);
-                continue;
+            (*series_ink, stretches)
+        })
+        .collect();
+    traced.sort_by_key(|(series_ink, _)| *series_ink != Ink::Waiting);
+    let (waiting, lines) =
+        traced.split_at(traced.partition_point(|(series_ink, _)| *series_ink == Ink::Waiting));
+    for points in waiting.iter().flat_map(|(_, stretches)| stretches) {
+        trace(context, points);
+        hatch_under(context, points, (width, height), ink);
+    }
+    if !waiting.is_empty() {
+        // A gap along every line cut out of the hatching, drawn in the same
+        // text color, which would otherwise swallow a quiet line; all of them
+        // first, so no gap crosses a line already drawn.
+        for (series_ink, stretches) in lines {
+            for points in stretches {
+                let _ = context.save();
+                context.set_operator(cairo::Operator::Clear);
+                pen(context, *series_ink, ink, accent);
+                context.set_line_width(context.line_width() + 2.0);
+                context.set_dash(&[], 0.0);
+                trace(context, points);
+                let _ = context.stroke();
+                let _ = context.restore();
             }
+        }
+    }
+    for (series_ink, stretches) in lines {
+        for points in stretches {
+            trace(context, points);
             // The accent fills under its line.
             if *series_ink == Ink::Accent {
                 let path = context.copy_path();
@@ -464,7 +492,9 @@ fn key_area(ink: Ink, neutral: impl Fn() -> bool + 'static) -> gtk::DrawingArea 
             hatch(context, (f64::from(width), f64::from(height)), area.color());
             return;
         }
-        let middle = f64::from(height) / 2.0;
+        // On a pixel row's center, so the thin line covers one row whole
+        // rather than two at half strength.
+        let middle = (f64::from(height) / 2.0).floor() + 0.5;
         context.move_to(0.0, middle);
         context.line_to(f64::from(width), middle);
         let text = area.color();
@@ -578,6 +608,47 @@ mod tests {
         // 25 % of the 38 px drawn above the baseline's pixel: rows 29 and below.
         assert!(inked(32), "the bottom quarter hatched");
         assert!(!inked(20), "nothing at half height");
+    }
+
+    /// A quiet line below the waiting level runs through a gap in the
+    /// hatching: between its dashes the band it runs in is clear.
+    #[test]
+    fn quiet_line_cuts_the_hatching() {
+        let state = State {
+            series: vec![
+                (Ink::Quiet, vec![Some(17.0); 11]),
+                (Ink::Waiting, vec![Some(50.0); 11]),
+            ],
+            capacity: 11,
+            scale: Scale::Fixed(100.0),
+            ceiling: 100.0,
+            neutral: false,
+            keys: Vec::new(),
+        };
+        let (width, height) = (200, 100);
+        let mut surface =
+            cairo::ImageSurface::create(cairo::Format::ARgb32, width, height).unwrap();
+        {
+            let context = cairo::Context::new(&surface).unwrap();
+            let black = gdk::RGBA::new(0.0, 0.0, 0.0, 1.0);
+            draw(&context, (200.0, 100.0), &state, black, black);
+        }
+        let stride = usize::try_from(surface.stride()).unwrap();
+        let pixels = surface.data().unwrap();
+        // The line runs at 100 - 17 % of 98 - 1 = 82.3 and its gap 1.6 px
+        // either side, over rows 81 and 82 whole; its dashes (3 on, 2 off from
+        // the left edge) leave columns 3, 4, 8, 9, ... between them.
+        let alpha = |row: usize, column: usize| pixels[row * stride + column * 4 + 3];
+        let gaps = (0..200).filter(|column| column % 5 >= 3);
+        let inked: Vec<(usize, usize)> = gaps
+            .flat_map(|column| (81..=82).map(move |row| (row, column)))
+            .filter(|&(row, column)| alpha(row, column) > 0)
+            .collect();
+        assert!(inked.is_empty(), "hatching along the line at {inked:?}");
+        assert!(
+            (0..200).any(|column| alpha(70, column) > 0),
+            "the hatching drawn"
+        );
     }
 
     #[test]

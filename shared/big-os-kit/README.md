@@ -13,7 +13,7 @@ Do not use it as a generic dumping ground; product-only helpers stay in their pr
 
 ## Main entry points
 
-atomic/versioned JSON storage, settings streams, process specs, diagnostics, paths and Linux file helpers.
+atomic/versioned JSON storage, settings streams, process specs, paths and Linux file helpers.
 
 Use `serde_path` on persisted `PathBuf` fields (`serde_path::optional` for
 nullable fields). UTF-8 paths remain JSON strings; other paths retain their

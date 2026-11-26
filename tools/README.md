@@ -14,7 +14,8 @@ process (Rust, C, Python, Vala).
 Requirements: Python ≥ 3.11 (standard library only; the driver uses `gi` with
 Atspi), GLib/GObject and a C compiler. `make` builds both libraries;
 `make check` runs the census control test and the Python tool tests;
-`make check-gtk` runs the signal-triggered census on a real GTK program inside
+`make check-gtk` runs the signal-triggered census on a real GTK program and
+`make check-sweep` the sweep against a stub program, each inside
 `headless-gate.sh` (needs `kwin_wayland`).
 
 `headless-gate.sh [--accessible] COMMAND...` runs the command in a private
@@ -38,7 +39,8 @@ seen from a component) with its id thrown away, a repeating GLib source
 closure can return `Continue` but never `Break` when a weak reference fails to
 upgrade. `--strict` fails on warnings too, which is what a gate runs: a warning
 is fixed or waived. Reads `.rs` files only; test code is ignored and an
-unreadable file is skipped with a warning.
+unreadable file is skipped with a warning. A path that is neither a `.rs` file
+nor a directory is a usage error (exit 2), so a mistyped path fails the gate.
 
 A finding is waived with a reason; a waiver without one is an error:
 
@@ -57,9 +59,15 @@ with a per-cycle ceiling and a reason covers it (in the file or in the
 surface). The process's threads (`Threads:` in `/proc/PID/status`) and open
 file descriptors are read with each census; they are exact, so any growth the
 second round repeats is a leak (`process threads`, `process file
-descriptors`). A surface that does not really close is reported as such. Exit 0
-clean, 1 leak, 2 did not run (incomplete file, missing program or `gdbus`);
-`LEAK_SWEEP_DIR` chooses where the censuses and the program log go.
+descriptors`). A surface whose open steps bring up no new window or dialog
+(within `open_timeout`, 5 s) is reported as not opened, and one whose count of
+windows and dialogs does not come back down (within `close_timeout`, 5 s) as not
+closed; their growth is listed, not judged. A surface that changes in place,
+opening no window or dialog, says `in_place = true`. A step that fails (a
+command's exit status, a D-Bus error, nothing to click) reports the surface as
+ERROR. Exit 0 clean; 1 leak, surface not opened or not closed, or ERROR; 2 did
+not run (incomplete file, missing program or `gdbus`); `LEAK_SWEEP_DIR` chooses
+where the censuses and the program log go.
 
 `command` must execute the GTK program itself: the driver asks the process it
 started for a census by signal, and an intermediate script would receive the
@@ -95,10 +103,12 @@ open = [{ do = "action", name = "preferences", settle = 1.0 }]
 close = [{ do = "dismiss" }]
 ```
 
-Steps: `action` (org.gtk.Actions.Activate), `dbus`, `command`, `toggle` and
-`click` (by accessible name), `dismiss` (Cancel/Close in dialogs and in windows
-beyond the first), `close-new` (the same, only in the windows the cycle opened:
-for a shell that hosts the apps), `wait`.
+Steps: `action` (org.gtk.Actions.Activate), `app-action` (the accessible
+action of that name, such as `win.open-disc` on a window's frame, for a program
+that exports no actions on D-Bus), `dbus`, `command`, `toggle` and `click` (by
+accessible name), `dismiss` (Cancel/Close in dialogs and in windows beyond the
+first), `close-new` (the same, only in the windows the cycle opened: for a shell
+that hosts the apps), `wait`.
 
 The census works on any GLib process, without the driver:
 
@@ -128,9 +138,13 @@ higher.
 Each event is `N|R|S|s|U address count frames…`, with the count before the
 operation: `N` is creation (`g_object_new` called from outside libgobject),
 `s` sinks the floating reference (takes it over, adds nothing), `U 1` is the
-last release. A survivor whose traced references balance is held by something
-that never called `g_object_ref` on it: GTK's window list (a window never
-destroyed) or a Rust value never dropped.
+last release. Only calls from outside libgobject are traced: a reference
+libgobject takes itself (`g_value_dup_object`, a property, a signal emission, a
+binding) is not logged and shows only as a count higher than the event before
+it. A survivor whose traced references balance is held by such an untraced
+reference (the `GdkWaylandToplevel` leak below is one), or by something that
+never called `g_object_ref` on it: GTK's window list (a window never destroyed)
+or a Rust value never dropped.
 
 ## Known library leaks
 

@@ -73,13 +73,10 @@ impl BigBreadcrumbBar {
     /// A crumb that had the focus hands it to the new last crumb.
     pub fn set_items(&self, items: Vec<(String, gtk::Button)>) {
         self.overflow.popdown();
-        // GTK keeps a removed focused crumb's ancestors pointing at the trail
-        // when the focus moves on before it settles, and Tab then enters
-        // there, past the controls before the trail.
-        let had_focus = self
-            .bar
-            .focus_child()
-            .is_some_and(|child| child != self.overflow);
+        // GTK leaves a removed focused crumb's ancestors pointing at the trail,
+        // where Tab then enters past the controls before it; the overflow
+        // button, which `fit` may hide, counts as a crumb here.
+        let had_focus = self.bar.focus_child().is_some();
         while let Some(child) = self.overflow.next_sibling() {
             self.bar.remove(&child);
         }
@@ -230,6 +227,14 @@ mod tests {
             // `has_focus` also needs the window active, which the shared test
             // session may give another test's window at any time.
             assert!(back.is_focus(), "Tab after the listing reaches Back");
+
+            // An ancestor chosen from the overflow menu: the keyboard is on the
+            // overflow button, which a shorter trail hides.
+            trail.overflow.set_visible(true);
+            assert!(trail.overflow.grab_focus());
+            trail.set_items(crumbs(&["Home", "Folder"]));
+            let last = trail.bar.last_child().unwrap();
+            assert!(last.is_focus(), "the new last crumb has the keyboard");
             window.destroy();
         });
     }

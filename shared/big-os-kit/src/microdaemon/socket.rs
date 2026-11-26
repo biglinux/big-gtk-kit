@@ -534,6 +534,52 @@ mod tests {
         let _ = fs::remove_dir_all(path.parent().expect("parent"));
     }
 
+    /// A socket this user cannot connect to (mode 000) may still have a
+    /// listener: it is kept, and the bind refused.
+    #[test]
+    fn unreachable_socket_is_kept() {
+        let path = socket_path("unreachable-socket");
+        let listener = bind_owner_socket(&path).expect("bind first socket");
+        fs::set_permissions(&path, Permissions::from_mode(0o000)).expect("mode 000");
+
+        let error = bind_owner_socket(&path).expect_err("unreachable socket must survive");
+
+        fs::set_permissions(&path, Permissions::from_mode(0o600)).expect("mode 600");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            UnixStream::connect(&path).is_ok(),
+            "the listener still owns it"
+        );
+        drop(listener);
+        let _ = fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    /// An existing directory open to others is made private; a relative one
+    /// is refused before anything is made.
+    #[test]
+    fn owner_directory_is_absolute_and_private() {
+        let path = socket_path("open-directory");
+        let directory = path.parent().expect("parent");
+        fs::DirBuilder::new()
+            .mode(0o755)
+            .create(directory)
+            .expect("an open directory");
+        fs::set_permissions(directory, Permissions::from_mode(0o755)).expect("mode 755");
+
+        prepare_owner_directory(directory).expect("made private");
+
+        let mode = fs::metadata(directory)
+            .expect("directory")
+            .permissions()
+            .mode();
+        let _ = fs::remove_dir_all(directory);
+        assert_eq!(mode & 0o777, 0o700);
+        let relative = Path::new("big-os-kit-relative-owner-directory");
+        let error = prepare_owner_directory(relative).expect_err("relative refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(!relative.exists());
+    }
+
     #[test]
     fn owner_directory_rejects_symlink_ancestor() {
         let generated = socket_path("ancestor-symlink");

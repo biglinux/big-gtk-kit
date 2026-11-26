@@ -406,3 +406,20 @@ fn scope_ends_with_session() {
         .and_then(|value| value.get::<Vec<String>>());
     assert_eq!(part_of, Some(vec!["graphical-session.target".to_owned()]));
 }
+
+/// systemd reads PID 0 as the caller: a scope for it, or for this process,
+/// would move the whole desktop process into the program's scope.
+#[test]
+fn scope_refuses_this_process() {
+    let mut child = big_os_kit::subprocess::BigSubprocessSpec::builder()
+        .program("true")
+        .build()
+        .spawn()
+        .expect("a child process");
+    let other = child.id();
+    child.wait().expect("the child's exit");
+    assert!(scope_for(0, "x").is_none());
+    assert!(scope_for(std::process::id(), "x").is_none());
+    let (unit, _) = scope_for(other, "x").expect("a scope for another program");
+    assert_eq!(unit, format!("app-bigshell-x-{other}.scope"));
+}

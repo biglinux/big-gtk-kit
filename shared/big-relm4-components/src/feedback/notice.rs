@@ -8,7 +8,7 @@
 //! Never an `adw::Toast`: a toast
 //! floats out of Tab's reach and takes its way back away on a timer.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -44,6 +44,9 @@ struct State {
     /// followed while the strip is on screen.
     focus_before: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     focus_watch: RefCell<Option<(glib::WeakRef<gtk::Window>, glib::SignalHandlerId)>>,
+    /// Whether the strip says how far some work has got, which is spoken only
+    /// when the work starts.
+    working: Cell<bool>,
 }
 
 impl State {
@@ -144,6 +147,7 @@ impl BigNotice {
             about: RefCell::default(),
             focus_before: RefCell::default(),
             focus_watch: RefCell::default(),
+            working: Cell::new(false),
         });
         let watching = Rc::clone(&state);
         banner.connect_map(move |banner| {
@@ -173,6 +177,7 @@ impl BigNotice {
         let answered = Rc::clone(&state);
         banner.connect_button_clicked(move |banner| {
             answered.step_down.cancel();
+            answered.working.set(false);
             let offer = answered.offer.take();
             answered.about.take();
             let returned = answered.return_focus(banner);
@@ -304,7 +309,8 @@ impl BigNotice {
     /// Say how far some work has got, offering `label` to stop it. Spoken once,
     /// when it starts: every step aloud would drown the screen reader.
     pub fn working(&self, message: &str, label: &str, offer: impl Fn(&adw::Banner) + 'static) {
-        let starting = !self.banner.is_revealed() || self.state.step_down.is_pending();
+        let was_working = self.state.working.replace(true);
+        let starting = !was_working || !self.banner.is_revealed();
         self.stop_step_down();
         self.state.about.take();
         self.state.offer.replace(Some(Box::new(offer)));
@@ -321,6 +327,7 @@ impl BigNotice {
     /// Take down whatever the strip says.
     pub fn clear(&self) {
         self.stop_step_down();
+        self.state.working.set(false);
         self.state.offer.take();
         self.state.about.take();
         self.state.return_focus(&self.banner);
@@ -329,6 +336,7 @@ impl BigNotice {
 
     fn show(&self, message: &str, offer: Option<(&str, Offer)>, tone: Tone) {
         self.stop_step_down();
+        self.state.working.set(false);
         self.state.about.take();
         let label = match offer {
             Some((label, offer)) => {
@@ -644,6 +652,28 @@ mod tests {
             notice.widget().emit_by_name::<()>("button-clicked", &[]);
             wait(Duration::from_secs(1));
             assert!(!notice.widget().is_visible(), "gone once it slid away");
+            window.destroy();
+        });
+    }
+
+    /// Work starting is said once, whatever the strip said before it.
+    #[test]
+    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-relm4-components -- --ignored"]
+    fn work_start_is_announced() {
+        big_testkit::harness::require_gtk_test(|| {
+            use big_testkit::atspi::{Announcements, accessibility_bus, settle};
+            let (notice, window) = shown_notice();
+            settle();
+            let (bus, application) =
+                accessibility_bus().expect("the AT-SPI bridge (headless-gate.sh --accessible)");
+            let heard = Announcements::listen(&bus, &application);
+            for before in [BigNotice::tell, BigNotice::warn] {
+                before(&notice, "Could not write");
+                notice.working("Copying 1 of 10", "Stop", |_| {});
+                notice.working("Copying 2 of 10", "Stop", |_| {});
+                settle();
+                assert_eq!(heard.take(), ["Could not write", "Copying 1 of 10"]);
+            }
             window.destroy();
         });
     }

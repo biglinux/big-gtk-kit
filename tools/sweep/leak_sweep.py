@@ -16,15 +16,19 @@ is a leak, unless the surfaces file allows it with a per-cycle cap and a reason.
 The process's threads and open file descriptors are counted with each census;
 they are exact, so any growth that a second round of cycles repeats is a leak.
 
-A surface that does not really close is reported as such, not as a leak: windows
-stacking up look exactly like one.
+A surface whose open steps bring up no new window or dialog, or that does not
+really close, is reported as such, not as clean or as a leak: windows stacking
+up look exactly like one. A surface that changes in place says so with
+`in_place = true`.
 
-Exit status: 0 clean, 1 leaks or surfaces that did not close, 2 setup error.
+Exit status: 0 clean; 1 leaks, surfaces that did not open or close, or surfaces
+whose steps failed; 2 setup error.
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import signal
@@ -208,6 +212,20 @@ def press(node) -> bool:
     return bool(action.do_action(0))
 
 
+def activate_accessible_action(app, name: str) -> bool:
+    """Run the first accessible action called `name`; False when none is."""
+    for node in walk(app):
+        action = node.get_action_iface()
+        if action is None:
+            continue
+        for index in range(action.get_n_actions()):
+            if action.get_action_name(index) == name:
+                if not action.do_action(index):
+                    raise RuntimeError(f"the program refused the action {name!r}")
+                return True
+    return False
+
+
 def find(app, name: str, roles=(), prefix=False):
     for node in walk(app):
         text = node.get_name() or ""
@@ -269,6 +287,8 @@ def run_step(
             [
                 "dbus-send",
                 "--session",
+                # Waits for the reply, so a missing method or object is an error.
+                "--print-reply",
                 f"--dest={step['dest']}",
                 step["path"],
                 f"{step['interface']}.{step['method']}",
@@ -278,7 +298,12 @@ def run_step(
         )
     elif kind == "command":
         argv = [with_workdir(arg, workdir) for arg in step["argv"]]
-        subprocess.run(argv, check=False, capture_output=True, timeout=30)
+        subprocess.run(argv, check=True, capture_output=True, timeout=30)
+    elif kind == "app-action":
+        # GTK lists a window's actions (`win.…`) among its frame's accessible
+        # actions: the way in for a program that exports none on D-Bus.
+        if not activate_accessible_action(application(app_name), step["name"]):
+            raise RuntimeError(f"no accessible action named {step['name']!r}")
     elif kind in ("toggle", "click"):
         app = application(app_name)
         roles = ("toggle button",) if kind == "toggle" else ()
@@ -305,19 +330,33 @@ def run_step(
     time.sleep(float(step.get("settle", 1.0)))
 
 
-def cycle(surface: dict, program_spec: dict, app_name: str, workdir: Path) -> bool:
-    """Open and close once. True when the surface really closed again."""
+def reaches(app_name: str, wanted, timeout: float) -> bool:
+    """Whether the count of open surfaces satisfies `wanted` within `timeout` s."""
+    deadline = time.monotonic() + timeout
+    while not wanted(open_surfaces(application(app_name))):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+    return True
+
+
+def cycle(surface: dict, program_spec: dict, app_name: str, workdir: Path) -> str:
+    """Open and close once: "ok", "did not open" or "did not close"."""
     app = application(app_name)
     frames = app.get_child_count() if app is not None else 1
     before = open_surfaces(app)
-    for step in surface["open"] + surface.get("close", [{"do": "dismiss"}]):
+    for step in surface["open"]:
         run_step(step, program_spec, app_name, workdir, frames)
-    deadline = time.monotonic() + float(surface.get("close_timeout", 5))
-    while time.monotonic() < deadline:
-        if open_surfaces(application(app_name)) <= before:
-            return True
-        time.sleep(0.2)
-    return False
+    opened = surface.get("in_place", False) or reaches(
+        app_name, lambda count: count > before, float(surface.get("open_timeout", 5))
+    )
+    for step in surface.get("close", [{"do": "dismiss"}]):
+        run_step(step, program_spec, app_name, workdir, frames)
+    if not reaches(
+        app_name, lambda count: count <= before, float(surface.get("close_timeout", 5))
+    ):
+        return "did not close"
+    return "ok" if opened else "did not open"
 
 
 def sweep_surface(
@@ -325,14 +364,14 @@ def sweep_surface(
 ) -> dict:
     app_name = spec["atspi_name"]
     warm = int(surface.get("warm", spec.get("warm", 2)))
-    unclosed = 0
+    outcomes = collections.Counter()
     for _ in range(warm):
-        unclosed += not cycle(surface, spec, app_name, program.workdir)
+        outcomes[cycle(surface, spec, app_name, program.workdir)] += 1
     time.sleep(1)
     pid = program.process.pid
     before, process_before = program.census(), process_counts(pid)
     for _ in range(cycles):
-        unclosed += not cycle(surface, spec, app_name, program.workdir)
+        outcomes[cycle(surface, spec, app_name, program.workdir)] += 1
     time.sleep(float(surface.get("after", 1.5)))
     after, process_after = program.census(), process_counts(pid)
     local_allow = {
@@ -340,20 +379,29 @@ def sweep_surface(
         **{a["type"]: float(a["per_cycle"]) for a in surface.get("allow", [])},
     }
     leaks, tolerated = verdict(grown(before, after), cycles, local_allow)
-    if leaks or grown(process_before, process_after):
+    if outcomes["ok"] == warm + cycles and (
+        leaks or grown(process_before, process_after)
+    ):
         # Confirm: a leak grows again over a second round; a banner that happened to
         # appear, or a cache filling once, does not.
         for _ in range(cycles):
-            unclosed += not cycle(surface, spec, app_name, program.workdir)
+            outcomes[cycle(surface, spec, app_name, program.workdir)] += 1
         time.sleep(float(surface.get("after", 1.5)))
         again, _ = verdict(grown(after, program.census()), cycles, local_allow)
         leaks = {name: amount for name, amount in leaks.items() if name in again}
         leaks |= confirmed_growth(process_before, process_after, process_counts(pid))
+    unjudged = {}
+    if outcomes["did not open"] or outcomes["did not close"]:
+        # Windows left open grow like a leak, and a surface never shown says
+        # nothing about one: the growth is listed, not judged.
+        unjudged, leaks = leaks, {}
     return {
         "surface": surface["name"],
         "cycles": cycles,
-        "did_not_close": unclosed,
+        "did_not_open": outcomes["did not open"],
+        "did_not_close": outcomes["did not close"],
         "leaks": leaks,
+        "unjudged": unjudged,
         "tolerated": tolerated,
     }
 
@@ -362,7 +410,13 @@ def strings(value) -> bool:
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
 
+def tables(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, dict) for v in value)
+
+
 def check_allow(entries, where: str):
+    if not tables(entries):
+        raise TypeError(f"{where}: every [[allow]] must be a table")
     for entry in entries:
         if not (
             isinstance(entry.get("type"), str)
@@ -376,6 +430,7 @@ def check_allow(entries, where: str):
 
 STEP_KEYS = {
     "action": ("name",),
+    "app-action": ("name",),
     "dbus": ("dest", "path", "interface", "method"),
     "toggle": ("name",),
     "click": ("name",),
@@ -383,6 +438,28 @@ STEP_KEYS = {
     "close-new": (),
     "wait": (),
 }
+
+
+def check_step(step, where: str, program: dict):
+    """Refuse a step of a surface `where` names that `program` cannot run."""
+    if not isinstance(step, dict) or not isinstance(step.get("settle", 0), int | float):
+        raise TypeError(f"{where}: a step is a table whose `settle` is a number")
+    kind = step.get("do")
+    if kind == "command":
+        if not step.get("argv") or not strings(step["argv"]):
+            raise ValueError(
+                f"{where}: a `command` step needs `argv`, a list of strings"
+            )
+        return
+    if kind not in STEP_KEYS:
+        raise ValueError(f"{where}: unknown step {kind!r}")
+    missing = [key for key in STEP_KEYS[kind] if key not in step]
+    if kind == "action":
+        missing += [] if "dbus_name" in program else ["[program] dbus_name"]
+        if "path" not in step and "window_path" not in program:
+            missing.append("`path` or [program] window_path")
+    if missing:
+        raise ValueError(f"{where}: a {kind!r} step needs {', '.join(missing)}")
 
 
 def load_spec(path: Path) -> dict:
@@ -395,9 +472,12 @@ def load_spec(path: Path) -> dict:
         raise ValueError(f"{path}: [program] needs `command`, a list of strings")
     if not isinstance(program.get("atspi_name"), str):
         raise TypeError(f"{path}: [program] needs `atspi_name`")
-    if not all(isinstance(v, str) for v in program.get("env", {}).values()):
+    env, files = program.get("env", {}), program.get("files", {})
+    if not isinstance(env, dict) or not isinstance(files, dict):
+        raise TypeError(f"{path}: [program.env] and [program.files] must be tables")
+    if not all(isinstance(v, str) for v in env.values()):
         raise ValueError(f"{path}: [program.env] values must be strings")
-    for relative, content in program.get("files", {}).items():
+    for relative, content in files.items():
         # Seeds go inside the scratch directory, never over a real file.
         if Path(relative).is_absolute() or ".." in Path(relative).parts:
             raise ValueError(
@@ -406,34 +486,19 @@ def load_spec(path: Path) -> dict:
         if not isinstance(content, str):
             raise TypeError(f"{path}: [program.files] {relative!r} must be a string")
     check_allow(spec.get("allow", []), str(path))
+    if not tables(spec.get("surface", [])):
+        raise TypeError(f"{path}: every [[surface]] must be a table")
     for surface in spec.get("surface", []):
-        if "name" not in surface or not isinstance(surface.get("open"), list):
-            raise ValueError(f"{path}: every [[surface]] needs `name` and `open`")
+        if not isinstance(surface.get("name"), str) or not isinstance(
+            surface.get("open"), list
+        ):
+            raise TypeError(f"{path}: every [[surface]] needs `name` and `open`")
         where = f"{path}: surface {surface['name']!r}"
+        if not isinstance(surface.get("close", []), list):
+            raise TypeError(f"{where}: `close` must be a list of steps")
         check_allow(surface.get("allow", []), where)
         for step in surface["open"] + surface.get("close", []):
-            if not isinstance(step, dict) or not isinstance(
-                step.get("settle", 0), int | float
-            ):
-                raise TypeError(
-                    f"{where}: a step is a table whose `settle` is a number"
-                )
-            kind = step.get("do")
-            if kind == "command":
-                if not step.get("argv") or not strings(step["argv"]):
-                    raise ValueError(
-                        f"{where}: a `command` step needs `argv`, a list of strings"
-                    )
-                continue
-            if kind not in STEP_KEYS:
-                raise ValueError(f"{where}: unknown step {kind!r}")
-            missing = [key for key in STEP_KEYS[kind] if key not in step]
-            if kind == "action":
-                missing += [] if "dbus_name" in program else ["[program] dbus_name"]
-                if "path" not in step and "window_path" not in program:
-                    missing.append("`path` or [program] window_path")
-            if missing:
-                raise ValueError(f"{where}: a {kind!r} step needs {', '.join(missing)}")
+            check_step(step, where, program)
     return spec
 
 
@@ -458,7 +523,7 @@ def main(argv=None) -> int:
         print(f"leak_sweep: {options.library} not built (run `make`)", file=sys.stderr)
         return 2
     program_spec = spec["program"]
-    cycles = options.cycles or spec.get("cycles", 6)
+    cycles = options.cycles if options.cycles is not None else spec.get("cycles", 6)
     if not isinstance(cycles, int) or cycles < 1:
         print("leak_sweep: cycles must be a positive integer", file=sys.stderr)
         return 2
@@ -517,7 +582,12 @@ def main(argv=None) -> int:
     if options.json:
         options.json.write_text(json.dumps(results, indent=2))
     bad = [
-        r for r in results if r.get("error") or r.get("leaks") or r.get("did_not_close")
+        r
+        for r in results
+        if r.get("error")
+        or r.get("leaks")
+        or r.get("did_not_open")
+        or r.get("did_not_close")
     ]
     print(
         f"leak_sweep: {len(results)} surfaces, {len(bad)} with problems (logs in {workdir})"
@@ -530,13 +600,27 @@ def print_result(result: dict):
     if "error" in result:
         print(f"ERROR {name}: {result['error']}")
         return
-    state = "LEAK " if result["leaks"] else "ok   "
-    extra = (
-        f", did not close {result['did_not_close']}x" if result["did_not_close"] else ""
+    if result["did_not_open"]:
+        state = "NOT OPENED "
+    elif result["did_not_close"]:
+        state = "NOT CLOSED "
+    elif result["leaks"]:
+        state = "LEAK "
+    else:
+        state = "ok   "
+    extra = "".join(
+        f", {what} {result[key]}x"
+        for key, what in (
+            ("did_not_open", "did not open"),
+            ("did_not_close", "did not close"),
+        )
+        if result[key]
     )
     print(f"{state}{name} ({result['cycles']} cycles{extra})")
     for type_name, amount in result["leaks"].items():
         print(f"        +{amount:<5} {type_name}")
+    for type_name, amount in result["unjudged"].items():
+        print(f"        +{amount:<5} {type_name}  (not judged)")
     for type_name, amount in result["tolerated"].items():
         print(f"        +{amount:<5} {type_name}  (allowed)")
 

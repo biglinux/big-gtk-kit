@@ -238,29 +238,19 @@ fn full_width_card<T: IsA<gtk::Widget>>(
 // that wants a different density overrides it with a more specific selector.
 const DIDACTIC_CARD_BASE_CSS: &str = "
 .didactic-card {
-    /* The window's own `--card-bg-color`, falling back to the named color: a
-       named color resolves from the process-wide style manager, which an app
-       that tints its chrome per-window (the terminal) never switches, so
-       `var(--card-bg-color)` stayed dark under a light window while the rest of it
-       was light. `var(--card-bg-color)` reads the window override; the fallback
-       keeps every other consumer on the standard card color. */
-    background-color: var(--card-bg-color, var(--card-bg-color));
-    color: var(--card-fg-color, var(--card-fg-color));
+    /* Variables, not the named card colors: a named color resolves from the
+       process-wide style manager, which an app that tints its chrome per
+       window (the terminal) never switches, so the card stayed dark under a
+       light window. The variables follow the window's own values. */
+    background-color: var(--card-bg-color);
+    color: var(--card-fg-color);
     border: 1px solid alpha(currentColor, 0.08);
     border-radius: 14px;
     padding: 14px 18px;
     margin: 6px 0;
     box-shadow: 0 1px 3px alpha(black, 0.08),
                 0 1px 2px alpha(black, 0.06);
-    transition: box-shadow 200ms ease,
-                border-color 200ms ease,
-                background-color 200ms ease;
-}
-
-.didactic-card:hover {
-    box-shadow: 0 3px 10px alpha(black, 0.12),
-                0 1px 3px alpha(black, 0.08);
-    border-color: alpha(var(--accent-bg-color), 0.25);
+    transition: background-color 200ms ease;
 }
 
 .didactic-card .didactic-title {

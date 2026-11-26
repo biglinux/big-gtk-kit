@@ -59,6 +59,9 @@ pub enum NameRefused {
     Characters,
     /// Something is already shared under this name, ignoring case.
     Taken,
+    /// An account on this computer has this name ([`account_named`]); `net`
+    /// refuses it.
+    Account,
 }
 
 impl NameRefused {
@@ -72,6 +75,7 @@ impl NameRefused {
                 gettext("That name cannot be used on a network. Letters, numbers and spaces work.")
             }
             Self::Taken => gettext("Something is already shared under that name"),
+            Self::Account => gettext("An account on this computer has that name"),
         }
     }
 }
@@ -220,7 +224,8 @@ fn parse(text: &str) -> Vec<Share> {
     found
 }
 
-/// A name Samba will take next to `others`.
+/// A name Samba will take next to `others`, from the name alone: whether an
+/// account has it is [`account_named`], which reads the account database.
 ///
 /// Refused, never corrected: it is printed on other people's screens.
 ///
@@ -232,19 +237,54 @@ pub fn check_name(wanted: &str, others: &[Share]) -> Result<(), NameRefused> {
     if wanted.is_empty() {
         return Err(NameRefused::Empty);
     }
-    if wanted.contains(['/', '\\', '[', ']', ':', '"', '*', '?', '<', '>', '|', '%'])
-        || wanted.starts_with('-')
+    // Samba's `INVALID_SHARENAME_CHARS`, which `net` refuses in English, and
+    // the brackets that would end the name in the share list.
+    if wanted.contains([
+        '%', '<', '>', '*', '?', '|', '/', '\\', '+', '=', ';', ':', '"', ',', '[', ']',
+    ]) || wanted.starts_with('-')
     {
         return Err(NameRefused::Characters);
     }
-    // Samba matches names without case: a second one would replace the first.
-    if others
-        .iter()
-        .any(|share| share.name.eq_ignore_ascii_case(wanted))
-    {
+    // Samba names a share's file by the name in lower case, so a second name
+    // that differs only in case, accented letters included, replaces the first.
+    let folded = lower_case(wanted);
+    if others.iter().any(|share| lower_case(&share.name) == folded) {
         return Err(NameRefused::Taken);
     }
     Ok(())
+}
+
+/// Whether an account on this computer has `name`, ignoring case, which `net`
+/// refuses as a share name ([`NameRefused::Account`]). Reads the account
+/// database, which may ask a directory server: run it on a worker.
+#[must_use]
+pub fn account_named(name: &str) -> bool {
+    crate::users::id_of(&lower_case(name.trim())).is_some()
+}
+
+/// Share `share` in place of the share named `old`, which goes unless Samba
+/// stored `share` under it: a name that differs only in case replaces the
+/// same file, and deleting `old` then would delete `share`.
+///
+/// # Errors
+///
+/// As [`shares`]; a failed `add` leaves `old` shared as it was.
+pub fn rename(old: &str, share: &Share) -> Result<(), Error> {
+    add(share)?;
+    if old != share.name && shares()?.iter().any(|listed| listed.name == old) {
+        remove(old)
+    } else {
+        Ok(())
+    }
+}
+
+/// `name` in lower case one character at a time, with no final sigma: a
+/// superset of Samba's table, which folds no character this leaves alone and
+/// keeps a few apart (`İ`, `Ș`) that this folds.
+fn lower_case(name: &str) -> String {
+    name.chars()
+        .map(|character| character.to_lowercase().next().unwrap_or(character))
+        .collect()
 }
 
 const OTHERS_READ: u32 = 0o004;
@@ -341,8 +381,25 @@ mod tests {
         );
         assert_eq!(check_name("a\\b", &others), Err(NameRefused::Characters));
         assert_eq!(check_name("-hidden", &others), Err(NameRefused::Characters));
+        // What `net` refuses, and the share list's brackets.
+        for name in ["Fotos+Videos", "a=b", "a;b", "a,b", "[a]"] {
+            assert_eq!(
+                check_name(name, &others),
+                Err(NameRefused::Characters),
+                "{name}"
+            );
+        }
         assert_eq!(check_name("public", &others), Err(NameRefused::Taken));
         assert_eq!(check_name("Family photos", &others), Ok(()));
+        let accented = parse("[Músicas]\npath=/srv/music\n");
+        assert_eq!(check_name("MÚSICAS", &accented), Err(NameRefused::Taken));
+        assert_eq!(check_name("Musicas", &accented), Ok(()));
+    }
+
+    #[test]
+    fn account_names_are_found() {
+        assert!(account_named("ROOT"));
+        assert!(!account_named("Family photos"));
     }
 
     #[test]

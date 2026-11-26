@@ -99,7 +99,8 @@ pub(super) fn validate_header_value(value: &str) -> Result<(), HttpError> {
 }
 
 fn validate_config_value(value: &str, field: &'static str) -> Result<(), HttpError> {
-    if value.contains('\r') || value.contains('\n') || value.contains('"') || value.contains('\\') {
+    // curl's config parser ends a value at a NUL and reads the next line into it.
+    if value.contains(['\r', '\n', '"', '\\', '\0']) {
         return Err(HttpError::UnsafeValue { field });
     }
     Ok(())
@@ -197,10 +198,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_url_config_injection_characters() {
+    fn rejects_config_injection_characters() {
         assert!(render_request_config("https://example.test/path", &[]).is_ok());
         assert!(render_request_config("https://example.test/\nnext", &[]).is_err());
         assert!(render_request_config("https://example.test/\"next", &[]).is_err());
         assert!(render_request_config(r"https://example.test/\next", &[]).is_err());
+        assert!(
+            render_request_config("https://example.test/", &[("X-Api-Key", "ab\0cd")]).is_err()
+        );
+        // An API key that would end its line and write the next one.
+        let hostile = "key\"\nurl = \"file:///etc/passwd";
+        assert!(matches!(
+            render_request_config("https://example.test/", &[("X-Api-Key", hostile)]),
+            Err(HttpError::UnsafeValue {
+                field: "HTTP header"
+            })
+        ));
     }
 }

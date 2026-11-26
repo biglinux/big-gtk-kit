@@ -8,9 +8,9 @@
 //! it lives ("More Actions › Git"), so a person who finds it this way also
 //! learns where it is. Labels are matched first, then the words an item names
 //! itself by besides its label (`big-keywords`: "zip" for Compress), then the
-//! path. Enter runs the first result that destroys nothing: typing "del" must
-//! never make Delete Permanently the default. Escape, or emptying the field,
-//! goes back to the menu as it was.
+//! path. Enter runs the first result that is on and destroys nothing: typing
+//! "del" must never make Delete Permanently the default. Escape, or emptying
+//! the field, goes back to the menu as it was.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -26,6 +26,9 @@ use super::{
 };
 
 const SEARCH_PAGE: &str = "search";
+/// On a popover whose typed letters open its search, so that is wired once
+/// however often the menu is filled again.
+const SEARCHABLE_MENU_CSS_CLASS: &str = "big-searchable-menu";
 /// Results shown at once: the page is a list to pick from, not a catalog.
 const MOST_RESULTS: usize = 12;
 
@@ -119,7 +122,7 @@ pub(super) fn install(
                 .borrow()
                 .iter()
                 .copied()
-                .find(|index| !found[*index].destructive);
+                .find(|index| found[*index].row.is_sensitive() && !found[*index].destructive);
             if let Some(button) =
                 first.and_then(|index| found[index].row.downcast_ref::<gtk::Button>().cloned())
             {
@@ -137,28 +140,53 @@ pub(super) fn install(
         });
     }
     {
-        // Down from the field goes into the results, as it would in a list.
+        // Down from the field goes to the first result that is on, as it
+        // would in a list.
         let keys = gtk::EventControllerKey::new();
         let results = results.downgrade();
         keys.connect_key_pressed(move |_, keyval, _, _| {
             if !matches!(keyval, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down) {
                 return glib::Propagation::Proceed;
             }
-            if let Some(first) = results.upgrade().and_then(|results| results.first_child()) {
-                first.grab_focus();
+            let first = results.upgrade().and_then(|results| {
+                crate::layout::widget_container::children(&results)
+                    .find(|row| row.is_sensitive() && row.is_focusable())
+            });
+            match first {
+                Some(first) => {
+                    first.grab_focus();
+                    glib::Propagation::Stop
+                }
+                None => glib::Propagation::Proceed,
             }
-            glib::Propagation::Stop
         });
         entry.add_controller(keys);
     }
+    if !popover.has_css_class(SEARCHABLE_MENU_CSS_CLASS) {
+        popover.add_css_class(SEARCHABLE_MENU_CSS_CLASS);
+        open_search_on_typing(popover);
+    }
+}
 
-    // The first printable key typed on the menu starts the search with it.
+/// The search page of the menu `popover` holds now and its field, when that
+/// menu has one.
+fn search_of(popover: &gtk::Widget) -> Option<(gtk::Stack, gtk::SearchEntry)> {
+    let stack = super::structured_stack_of(popover)?;
+    let entry = stack
+        .child_by_name(SEARCH_PAGE)?
+        .first_child()
+        .and_downcast::<gtk::SearchEntry>()?;
+    Some((stack, entry))
+}
+
+/// Let the first printable key typed on `popover`'s menu start its search, and
+/// empty a search left from the last opening when the menu opens again;
+/// whichever menu the popover holds.
+fn open_search_on_typing(popover: &gtk::Popover) {
     let typed = gtk::EventControllerKey::new();
     typed.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let weak_stack = build.stack.downgrade();
-    let weak_entry = entry.downgrade();
     typed.connect_key_pressed(move |controller, keyval, _, modifiers| {
-        let (Some(stack), Some(entry)) = (weak_stack.upgrade(), weak_entry.upgrade()) else {
+        let Some((stack, entry)) = controller.widget().as_ref().and_then(search_of) else {
             return glib::Propagation::Proceed;
         };
         if stack.visible_child_name().as_deref() == Some(SEARCH_PAGE)
@@ -186,9 +214,11 @@ pub(super) fn install(
         glib::Propagation::Stop
     });
     popover.add_controller(typed);
-    let weak_entry = entry.downgrade();
-    popover.connect_closed(move |_| {
-        if let Some(entry) = weak_entry.upgrade() {
+    // Not as the menu closes: a chosen result closes it from its click handler,
+    // and GTK runs the result's action after those handlers, by which time an
+    // emptied search has taken the result out of the menu.
+    popover.connect_show(|popover| {
+        if let Some((_, entry)) = search_of(popover.upcast_ref()) {
             entry.set_text("");
         }
     });
@@ -311,7 +341,100 @@ fn fold(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
+    use big_testkit::harness::{pump, pump_until};
+
+    /// A searchable menu of Paste, which is off, and Paste as Link, open on a
+    /// window; whether Paste as Link ran.
+    fn searchable_menu() -> (gtk::Window, gtk::PopoverMenu, Rc<Cell<bool>>) {
+        let window = gtk::Window::new();
+        let actions = gio::SimpleActionGroup::new();
+        let paste = gio::SimpleAction::new("paste", None);
+        paste.set_enabled(false);
+        let ran = Rc::new(Cell::new(false));
+        let link = gio::SimpleAction::new("paste-link", None);
+        link.connect_activate({
+            let ran = Rc::clone(&ran);
+            move |_, _| ran.set(true)
+        });
+        actions.add_action(&paste);
+        actions.add_action(&link);
+        window.insert_action_group("win", Some(&actions));
+        let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        window.set_child(Some(&host));
+        window.present();
+        pump();
+        let popover = super::super::popover_menu(None);
+        popover.set_parent(&host);
+        fill(&popover);
+        (window, popover, ran)
+    }
+
+    fn fill(popover: &gtk::PopoverMenu) {
+        let menu = gio::Menu::new();
+        menu.append(Some("Paste"), Some("win.paste"));
+        menu.append(Some("Paste as Link"), Some("win.paste-link"));
+        super::super::populate_menu_model_action_popover_menu(
+            popover,
+            &menu,
+            &super::super::BigMenuModelPopoverLabels::new("File Actions")
+                .with_search("Search actions", "Nothing found"),
+            &[],
+        );
+    }
+
+    /// Enter and Down pass over a result that is off for the next one.
+    #[test]
+    fn off_results_are_passed_over() {
+        big_testkit::harness::require_gtk_test(|| {
+            let (window, popover, ran) = searchable_menu();
+            popover.popup();
+            assert!(pump_until(|| popover.is_mapped()));
+            let (stack, entry) = search_of(popover.upcast_ref()).expect("a search");
+            stack.set_visible_child_name(SEARCH_PAGE);
+            entry.set_text("paste");
+            let results = entry
+                .parent()
+                .and_then(|page| page.last_child())
+                .expect("results");
+            assert!(pump_until(|| crate::layout::widget_container::children(
+                &results
+            )
+            .count()
+                == 2));
+            let link = results.last_child().expect("Paste as Link");
+            assert!(entry.grab_focus());
+            let moved = big_testkit::harness::press_key(
+                &entry,
+                None,
+                gtk::gdk::Key::Down,
+                gtk::gdk::ModifierType::empty(),
+            );
+            assert!(moved, "Down is taken");
+            assert!(link.is_focus(), "Down goes to Paste as Link");
+            entry.emit_activate();
+            assert!(pump_until(|| ran.get()), "Enter runs Paste as Link");
+            popover.unparent();
+            window.destroy();
+        });
+    }
+
+    /// Filling the menu again adds no second search to the popover.
+    #[test]
+    fn refilled_menu_searches_once() {
+        big_testkit::harness::require_gtk_test(|| {
+            let (window, popover, _) = searchable_menu();
+            let controllers = popover.observe_controllers().n_items();
+            fill(&popover);
+            fill(&popover);
+            assert_eq!(popover.observe_controllers().n_items(), controllers);
+            assert!(search_of(popover.upcast_ref()).is_some());
+            popover.unparent();
+            window.destroy();
+        });
+    }
 
     fn found(label: &str, keywords: &str, path: &str, destructive: bool) -> Found {
         Found {

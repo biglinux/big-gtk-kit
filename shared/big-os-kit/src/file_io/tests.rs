@@ -7,9 +7,9 @@
 
 use super::*;
 
-/// The kernel's answer, not the owner's bit: a file only its owner may
-/// run is refused to everybody else, and `/dev/shm`-style `noexec`
-/// mounts refuse every file whatever its bits.
+/// The kernel's answer, not the owner's bit: a file without an execute bit
+/// is refused, and `noexec` mounts such as `/proc` refuse every file
+/// whatever its bits.
 #[cfg(unix)]
 #[test]
 fn run_verdict_asks_the_kernel() {
@@ -17,16 +17,22 @@ fn run_verdict_asks_the_kernel() {
     let path = std::env::temp_dir().join(format!("big-os-kit-run-{}", std::process::id()));
     fs::write(&path, b"#!/bin/sh\n").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(may_run(&path).unwrap(), RunVerdict::NotPermitted);
+    let unmarked = may_run(&path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-    // The temporary folder may itself be `noexec`; either answer is the
-    // kernel's.
-    assert!(matches!(
-        may_run(&path).unwrap(),
-        RunVerdict::Runs | RunVerdict::NoExecMount
-    ));
+    let marked = may_run(&path).unwrap();
     fs::remove_file(&path).unwrap();
+    // The temporary folder may itself be `noexec`, which outranks the bits.
+    let expected = if marked == RunVerdict::NoExecMount {
+        (RunVerdict::NoExecMount, RunVerdict::NoExecMount)
+    } else {
+        (RunVerdict::NotPermitted, RunVerdict::Runs)
+    };
+    assert_eq!((unmarked, marked), expected);
     assert!(may_run(&path).is_err());
+    assert_eq!(
+        may_run(Path::new("/proc/self/status")).unwrap(),
+        RunVerdict::NoExecMount
+    );
 }
 use std::error::Error as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -233,6 +239,35 @@ fn abandoned_staging_is_cleared() {
     assert!(recent.exists());
     assert!(lookalikes.iter().all(|lookalike| lookalike.exists()));
     drop(staged);
+    let _ = fs::remove_dir_all(parent);
+}
+
+/// On a network share the process id may be another machine's, so a dead
+/// owner's staging directory there stays; off the share, it goes.
+#[test]
+fn abandoned_staging_on_share_stays() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let parent = file_io_test_dir("private-abandoned-share");
+    let staging = parent.join(".stage-999999999-0");
+    create_dir_all(&staging).unwrap();
+    let left = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+    fs::File::open(&staging)
+        .unwrap()
+        .set_modified(left)
+        .unwrap();
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+    let point = fs::canonicalize(&parent)
+        .unwrap()
+        .to_string_lossy()
+        .replace(' ', "\\040");
+    let share = format!("36 25 0:53 / {point} rw,relatime - nfs4 server:/export rw\n");
+
+    remove_abandoned(&parent, ".stage", &share);
+    let kept = staging.exists();
+    remove_abandoned(&parent, ".stage", "");
+
+    assert!(kept);
+    assert!(!staging.exists());
     let _ = fs::remove_dir_all(parent);
 }
 
@@ -512,6 +547,53 @@ fn link_rename_keeps_taken_name() {
     let _ = fs::remove_dir_all(dir);
 }
 
+/// A source that cannot leave its folder (not writable here) stays under its
+/// one name: the link just made under the new name goes again.
+#[test]
+fn link_rename_undoes_its_link() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = file_io_test_dir("rename-by-link-stuck");
+    let closed = dir.join("closed");
+    create_dir_all(&closed).unwrap();
+    let source = closed.join("source");
+    fs::write(&source, "kept").unwrap();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o500)).unwrap();
+    let target = dir.join("target");
+
+    let moved = rename_by_link(&source, &target);
+
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        moved.map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::PermissionDenied)
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "kept");
+    assert!(!target.exists());
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Where `renameat2` takes no flag, a folder is refused with the kernel's
+/// `EINVAL` and stays: a folder cannot be linked.
+#[test]
+fn folder_rename_without_renameat2_is_refused() {
+    let dir = file_io_test_dir("rename-folder-no-flag");
+    let folder = dir.join("folder");
+    create_dir_all(&folder).unwrap();
+    let target = dir.join("target");
+    let moved = std::thread::spawn({
+        let (folder, target) = (folder.clone(), target.clone());
+        move || {
+            crate::storage::tests::refuse_on_this_thread(libc::SYS_renameat2, libc::EINVAL);
+            rename_no_replace(&folder, &target).map_err(|error| error.raw_os_error())
+        }
+    })
+    .join()
+    .unwrap();
+    assert_eq!(moved, Err(Some(libc::EINVAL)));
+    assert!(folder.is_dir() && !target.exists());
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// A lock file is made private, and a second name for it is refused: a
 /// lock reached through a hard link may be some other file of the user's.
 #[test]
@@ -531,4 +613,77 @@ fn lock_file_private_and_singly_linked() {
         Err(std::io::ErrorKind::PermissionDenied)
     );
     fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A tree a confined program left: folders closed to everyone, a chain nested
+/// past the kernel's 4096-byte path, and a link to a folder outside, which
+/// keeps its own mode and content.
+#[test]
+fn remove_tree_takes_hostile_folders() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = file_io_test_dir("remove-tree");
+    let outside = file_io_test_dir("remove-tree-outside");
+    fs::write(outside.join("kept"), b"kept").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o500)).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+    let long = "d".repeat(200);
+    let mut deep = std::fs::File::open(&root).unwrap();
+    for _ in 0..25 {
+        rustix::fs::mkdirat(&deep, long.as_str(), Mode::RWXU).unwrap();
+        deep = rustix::fs::openat(
+            &deep,
+            long.as_str(),
+            OFlags::RDONLY | OFlags::DIRECTORY,
+            Mode::empty(),
+        )
+        .unwrap()
+        .into();
+    }
+    rustix::fs::mkdirat(&deep, "closed", Mode::RWXU).unwrap();
+    rustix::fs::chmodat(&deep, "closed", Mode::empty(), AtFlags::empty()).unwrap();
+    drop(deep);
+    fs::create_dir(root.join("shut")).unwrap();
+    fs::write(root.join("shut/page.png"), b"page").unwrap();
+    fs::set_permissions(root.join("shut"), fs::Permissions::from_mode(0o000)).unwrap();
+
+    let removed = remove_tree(&root);
+    let left = root.exists();
+    let outside_mode = fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+    let kept = fs::read(outside.join("kept")).unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::remove_dir_all(&outside).unwrap();
+    removed.unwrap();
+    assert!(!left);
+    assert_eq!((outside_mode, kept.as_slice()), (0o500, b"kept".as_slice()));
+}
+
+/// A folder moved out from under the walk while it empties it stops the
+/// removal there; it never climbs out of the tree into a sibling's files.
+#[test]
+fn remove_tree_stays_inside() {
+    let parent = file_io_test_dir("remove-tree-moved");
+    let root = parent.join("root");
+    // Listed in creation order on the usual filesystems, and the walk takes
+    // the last folder first: `o` waits while `a` is emptied.
+    fs::create_dir_all(root.join("o")).unwrap();
+    fs::create_dir_all(root.join("a/b")).unwrap();
+    fs::create_dir_all(parent.join("o")).unwrap();
+    fs::create_dir(parent.join("a")).unwrap();
+    fs::write(parent.join("o/victim"), b"kept").unwrap();
+    for index in 0..20_000 {
+        fs::write(root.join(format!("a/b/{index}")), b"").unwrap();
+    }
+    // Move `b` once the walk is inside it, emptying it.
+    let mover = {
+        let root = root.clone();
+        std::thread::spawn(move || {
+            while fs::read_dir(root.join("a/b")).is_ok_and(|entries| entries.count() > 19_000) {}
+            let _ = fs::rename(root.join("a/b"), root.join("b"));
+        })
+    };
+    let _ = remove_tree(&root);
+    mover.join().unwrap();
+    let kept = parent.join("o/victim").exists();
+    let _ = remove_tree(&parent);
+    assert!(kept, "the walk deleted a file outside its tree");
 }

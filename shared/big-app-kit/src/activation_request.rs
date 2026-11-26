@@ -355,7 +355,13 @@ impl DeferredActivationTarget for GioCommandLineTarget {
 }
 
 pub(crate) fn print_command_line_error(command_line: &gio::ApplicationCommandLine, message: &str) {
-    command_line.printerr_literal(&format!("{}\n", message.replace('\0', "�")));
+    command_line.printerr_literal(&error_line(message));
+}
+
+/// `message` as a line GLib takes: its string conversion panics on a NUL in
+/// debug builds, inside the command-line signal where a panic aborts.
+fn error_line(message: &str) -> String {
+    format!("{}\n", message.replace('\0', "�"))
 }
 
 fn dropped_activation_error() -> AppShellActivationError {
@@ -558,5 +564,12 @@ mod tests {
             activation.file_arguments(),
             ["/tmp/a.txt", "smb://server/share/file.txt"]
         );
+    }
+
+    #[test]
+    fn error_with_nul_is_printed() {
+        assert_eq!(error_line("a\0b"), "a�b\n");
+        let command_line = glib::Object::new::<gio::ApplicationCommandLine>();
+        print_command_line_error(&command_line, "a\0b");
     }
 }

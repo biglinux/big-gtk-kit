@@ -474,7 +474,7 @@ fn link_private_decode_path(source_path: &Path, file: File) -> std::io::Result<S
     })
 }
 
-pub(super) fn create_private_directory() -> std::io::Result<std::path::PathBuf> {
+fn create_private_directory() -> std::io::Result<std::path::PathBuf> {
     let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
     let mut last_error = None;
     for base in runtime_dir.into_iter().chain([std::env::temp_dir()]) {
@@ -733,16 +733,7 @@ impl SandboxedAnimation {
 
 /// Stage `spec` for an animated decode; blocking, so it belongs on a worker.
 pub(super) fn stage_animation(spec: &BigImageSpec) -> Result<StagedRequest, BigImageError> {
-    let mechanism = glib::MainContext::new().block_on(glycin::SandboxMechanism::detect());
-    if mechanism == glycin::SandboxMechanism::NotSandboxed {
-        return Err(BigImageError::SandboxUnavailable);
-    }
     stage_request(spec)
-}
-
-/// The sandbox mechanism an animation must run under.
-pub(super) fn detect_mechanism() -> glycin::SandboxMechanism {
-    glib::MainContext::new().block_on(glycin::SandboxMechanism::detect())
 }
 
 /// Stage a source for a persistent region decoder (blocking; run on a worker).

@@ -75,6 +75,17 @@ fn spec_rejects_empty_gettext_domain() {
 }
 
 #[test]
+fn spec_rejects_empty_gettext_locale_dir() {
+    let gettext = GettextInit::new("bigdemo", bind_ok).with_locale_dir(" ");
+    assert_eq!(
+        AppShellSpec::new("br.com.biglinux.Demo")
+            .gettext(gettext)
+            .validate(),
+        Err(AppShellSpecError::EmptyGettextLocaleDir)
+    );
+}
+
+#[test]
 fn activation_error_always_returns_nonzero_status() {
     let error = AppShellActivationError::new("missing argument", 0);
     assert_eq!(error.message(), "missing argument");

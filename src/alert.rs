@@ -30,28 +30,49 @@ use gtk::{gio, glib};
 
 use crate::dialog::Opening;
 
-/// Present `dialog` on `parent` and call `callback` once with the response.
-/// An [`Alert`] asks with [`Alert::choose`], on the parent it was made for.
+/// Present `dialog` on `parent` and call `callback` once with the response,
+/// or with the close response when the dialog goes unanswered (its window
+/// destroyed and let go). An [`Alert`] asks with [`Alert::choose`], on the
+/// parent it was made for.
 pub fn choose(
     dialog: &adw::AlertDialog,
     parent: Option<&impl IsA<gtk::Widget>>,
     callback: impl FnOnce(glib::GString) + 'static,
 ) {
     // Taken on the first answer, so what the callback holds is let go as soon as
-    // it has run rather than when the dialog is finalized; and the handler goes
+    // it has run rather than when the dialog is finalized; and the handlers go
     // too, as an [`Alert`] asks again.
     let callback = Cell::new(Some(callback));
-    let handler = Rc::new(Cell::new(None));
-    let connected = Rc::clone(&handler);
-    let id = dialog.connect_response(None, move |dialog, response| {
-        if let Some(handler) = connected.take() {
+    let handlers = Rc::new(Cell::new(Vec::new()));
+    let connected = Rc::clone(&handlers);
+    let answer = Rc::new(move |dialog: &adw::AlertDialog, response: glib::GString| {
+        for handler in connected.take() {
             dialog.disconnect(handler);
         }
         if let Some(callback) = callback.take() {
-            callback(response.into());
+            callback(response);
         }
     });
-    handler.set(Some(id));
+    let responded = Rc::clone(&answer);
+    let response = dialog.connect_response(None, move |dialog, response| {
+        responded(dialog, response.into());
+    });
+    // libadwaita emits `response` from `closed`, which neither `force_close` on
+    // a dialog in a window of its own nor destroying a sheet's window emits.
+    let left = dialog.connect_notify_local(Some("parent"), move |dialog, _| {
+        if WidgetExt::parent(dialog).is_some() {
+            return;
+        }
+        let (dialog, answer) = (dialog.clone(), Rc::clone(&answer));
+        // In an idle: a dialog closing without animation leaves its parent
+        // before the `response` that closed it.
+        glib::idle_add_local_once(move || {
+            if WidgetExt::parent(&dialog).is_none() {
+                answer(&dialog, dialog.close_response());
+            }
+        });
+    });
+    handlers.set(vec![response, left]);
     dialog.present(parent);
 }
 
@@ -1039,6 +1060,75 @@ mod tests {
         alert.force_close();
         window.destroy();
         pump();
+    }
+
+    /// The close response answers a question whose dialog went without
+    /// `closed`, and only such a one: a button that closes it without
+    /// animation answers itself.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "choose and choose_future take a plain dialog"
+    )]
+    fn unanswered_dialog_answers_its_close_response() {
+        init();
+        crate::dialog::install();
+        let settings = gtk::Settings::default().expect("settings");
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let question = || {
+            let dialog = adw::AlertDialog::new(Some("Delete?"), None);
+            dialog.add_responses(&[("cancel", "_Cancel"), ("delete", "_Delete")]);
+            dialog.set_close_response("cancel");
+            dialog
+        };
+
+        settings.set_gtk_enable_animations(false);
+        let window = adw::Window::new();
+        window.present();
+        let clicked = question();
+        let answers = Rc::clone(&heard);
+        choose(&clicked, Some(&window), move |response| {
+            answers.borrow_mut().push(format!("clicked {response}"));
+        });
+        pump();
+        buttons(clicked.upcast_ref())
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("_Delete"))
+            .expect("the response's button")
+            .emit_clicked();
+        pump();
+        settings.set_gtk_enable_animations(true);
+
+        let sheet = question();
+        let answers = Rc::clone(&heard);
+        choose(&sheet, Some(&window), move |response| {
+            answers.borrow_mut().push(format!("sheet {response}"));
+        });
+        pump();
+        window.destroy();
+        drop(window);
+        pump();
+
+        let windowed = question();
+        let answers = Rc::clone(&heard);
+        let answered = choose_future(&windowed, gtk::Widget::NONE);
+        glib::MainContext::default().spawn_local(async move {
+            let response = answered.await;
+            answers.borrow_mut().push(format!("windowed {response}"));
+        });
+        pump();
+        assert!(
+            windowed.parent().is_some(),
+            "presented in a window of its own"
+        );
+        windowed.force_close();
+        pump();
+
+        assert_eq!(
+            *heard.borrow(),
+            ["clicked delete", "sheet cancel", "windowed cancel"]
+        );
     }
 
     fn buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {

@@ -18,7 +18,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rustix::fs::{Advice, fadvise, listxattr_query};
+use rustix::fs::{Advice, AtFlags, Mode, OFlags, fadvise, listxattr_query};
 
 /// Open a regular file for verification without following a final symlink.
 ///
@@ -96,8 +96,8 @@ static PRIVATE_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 ///
 /// The name carries the owner's process id. A process killed before its drop
 /// leaves its directory behind, and the next creation with the same prefix in
-/// the same parent removes it ([`remove_abandoned`]).
-struct OwnedPrivateDirectory {
+/// the same parent removes it once it has gone an hour unchanged.
+pub struct OwnedPrivateDirectory {
     path: PathBuf,
 }
 
@@ -108,7 +108,7 @@ impl OwnedPrivateDirectory {
     ///
     /// Returns the underlying filesystem error or `AlreadyExists` after the
     /// bounded collision budget is exhausted.
-    fn create(parent: &Path, prefix: &str) -> std::io::Result<Self> {
+    pub fn create(parent: &Path, prefix: &str) -> std::io::Result<Self> {
         // A NUL is refused by the path syscall itself, with InvalidInput.
         if prefix.is_empty() || prefix.contains('/') || prefix.contains('\\') {
             return Err(std::io::Error::new(
@@ -116,7 +116,7 @@ impl OwnedPrivateDirectory {
                 "private directory prefix is invalid",
             ));
         }
-        remove_abandoned(parent, prefix);
+        remove_abandoned(parent, prefix, &crate::mount_table::mountinfo());
         for _ in 0..128 {
             let sequence = PRIVATE_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = parent.join(format!("{prefix}-{}-{sequence}", std::process::id()));
@@ -136,15 +136,127 @@ impl OwnedPrivateDirectory {
 
     /// Absolute or caller-relative path created and owned by this guard.
     #[must_use]
-    fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 }
 
 impl Drop for OwnedPrivateDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        let _ = remove_tree(&self.path);
     }
+}
+
+/// Remove the folder `path` and everything in it, for a folder a confined
+/// program wrote: each folder is opened from its parent's descriptor without
+/// following a link and given mode `0700` first, so a folder it closed to
+/// everyone, or nested past the kernel's path length, still goes. The walk
+/// climbs back through `..` and stops where that is not the folder it left,
+/// or where a folder is on another filesystem: one moved during the walk
+/// stops the removal, never moves it outside `path`.
+///
+/// # Errors
+///
+/// The first folder that cannot be opened, made the owner's or removed, an
+/// entry that cannot be unlinked, or a folder moved during the walk.
+pub fn remove_tree(path: &Path) -> std::io::Result<()> {
+    /// A folder being emptied: its name in its parent, its device and inode,
+    /// and the folders in it still to remove.
+    struct Level {
+        name: Option<CString>,
+        identity: (u64, u64),
+        folders: Vec<CString>,
+    }
+    let identity = |folder: &std::os::fd::OwnedFd| {
+        rustix::fs::fstat(folder).map(|stat| (stat.st_dev, stat.st_ino))
+    };
+    let moved = || std::io::Error::other("a folder moved while its tree was removed");
+    let mut current = open_owned_folder(rustix::fs::CWD, path)?;
+    let root = identity(&current)?;
+    let mut levels = vec![Level {
+        name: None,
+        identity: root,
+        folders: clear_files(&current)?,
+    }];
+    while let Some(level) = levels.last_mut() {
+        if let Some(child) = level.folders.pop() {
+            current = open_owned_folder(&current, child.as_c_str())?;
+            let child_identity = identity(&current)?;
+            if child_identity.0 != root.0 {
+                return Err(moved());
+            }
+            let folders = clear_files(&current)?;
+            levels.push(Level {
+                name: Some(child),
+                identity: child_identity,
+                folders,
+            });
+        } else if let Some(Level {
+            name: Some(name), ..
+        }) = levels.pop()
+        {
+            current = rustix::fs::openat(
+                &current,
+                c"..",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            if levels.last().map(|parent| parent.identity) != Some(identity(&current)?) {
+                return Err(moved());
+            }
+            rustix::fs::unlinkat(&current, name.as_c_str(), AtFlags::REMOVEDIR)?;
+        }
+    }
+    drop(current);
+    fs::remove_dir(path)
+}
+
+/// Open the folder `name` under `parent` for listing, as its owner's with
+/// mode `0700`; a link is refused.
+fn open_owned_folder<Fd: std::os::fd::AsFd, P: rustix::path::Arg + Copy>(
+    parent: Fd,
+    name: P,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    let parent = parent.as_fd();
+    let place = rustix::fs::openat(
+        parent,
+        name,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let named = format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&place));
+    rustix::fs::chmod(named.as_str(), Mode::RWXU)?;
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?)
+}
+
+/// Unlink every entry of `folder` that is not a folder, links included, and
+/// return the names of the folders in it.
+fn clear_files(folder: &std::os::fd::OwnedFd) -> std::io::Result<Vec<CString>> {
+    let mut folders = Vec::new();
+    for entry in rustix::fs::Dir::read_from(folder)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if matches!(name.to_bytes(), b"." | b"..") {
+            continue;
+        }
+        let kind = match entry.file_type() {
+            rustix::fs::FileType::Unknown => rustix::fs::FileType::from_raw_mode(
+                rustix::fs::statat(folder, name, AtFlags::SYMLINK_NOFOLLOW)?.st_mode,
+            ),
+            known => known,
+        };
+        if kind == rustix::fs::FileType::Directory {
+            folders.push(name.to_owned());
+        } else {
+            rustix::fs::unlinkat(folder, name, AtFlags::empty())?;
+        }
+    }
+    Ok(folders)
 }
 
 /// Remove the directories `{prefix}-{pid}-{sequence}` in `parent` whose process
@@ -153,12 +265,13 @@ impl Drop for OwnedPrivateDirectory {
 /// nothing is removed on a network filesystem, where the owner may be running
 /// on another one; the hour covers an owner in another PID namespace, whose
 /// id names no process here. A live process that took a dead owner's id
-/// keeps the directory, which costs only space.
-fn remove_abandoned(parent: &Path, prefix: &str) {
+/// keeps the directory, which costs only space. `mount_table` is the text of
+/// `/proc/self/mountinfo`.
+fn remove_abandoned(parent: &Path, prefix: &str, mount_table: &str) {
     const ABANDONED_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     let on_network = fs::canonicalize(parent).is_ok_and(|parent| {
-        crate::mount_table::mount_holding(&crate::mount_table::mountinfo(), &parent)
+        crate::mount_table::mount_holding(mount_table, &parent)
             .is_some_and(|(_, filesystem)| crate::mount_table::is_network(&filesystem))
     });
     let Ok(entries) = fs::read_dir(parent) else {

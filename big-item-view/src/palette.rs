@@ -132,8 +132,8 @@ itemview > probe.placeholder-fill { color: alpha(currentColor, 0.08); }
 itemview > probe.accent { color: var(--accent-color); }
 itemview > probe.caption { font-size: smaller; }
 itemheader > button { background-color: transparent; padding: 3px 6px; border-radius: 0; box-shadow: none; min-height: 0; }
-itemheader > button > box { color: color-mix(in srgb, currentColor 40%, transparent); border-spacing: 6px; }
-itemheader > button:hover > box { color: color-mix(in srgb, currentColor 70%, transparent); }
+itemheader > button > box { color: color-mix(in srgb, currentColor 70%, transparent); border-spacing: 6px; }
+itemheader > button:hover > box { color: currentColor; }
 itemheader > button:active > box { color: currentColor; }
 ";
 

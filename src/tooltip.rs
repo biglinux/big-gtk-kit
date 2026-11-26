@@ -550,6 +550,11 @@ impl Engine {
 /// tooltip text or a tip there, as GTK picks it (insensitive widgets explain
 /// themselves too).
 fn tip_owner(native: &gtk::Widget, x: f64, y: f64) -> Option<(gtk::Widget, Area)> {
+    // GTK 4.24 enters a popover that maps under its grab at (-1, -1), where
+    // `pick` finds its first button.
+    if !native.contains(x, y) {
+        return None;
+    }
     let point = graphene::Point::new(x as f32, y as f32);
     let mut widget = native.pick(x, y, gtk::PickFlags::INSENSITIVE);
     while let Some(candidate) = widget {
@@ -700,9 +705,14 @@ fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
 
 /// Give `widget` one name: the tooltip a person reads and the label a screen
 /// reader announces.
+///
+/// A button built with a label is labeled by that label, which outranks a
+/// label property, so the relation goes; a label set on the button after this
+/// call relates it again.
 pub fn name_control(widget: &impl IsA<gtk::Widget>, label: &str) {
     let widget = widget.upcast_ref::<gtk::Widget>();
     widget.set_tooltip_text(Some(label));
+    widget.reset_relation(gtk::AccessibleRelation::LabelledBy);
     widget.update_property(&[gtk::accessible::Property::Label(label)]);
 }
 
@@ -1043,6 +1053,74 @@ mod tests {
         set_show_when_inactive(false);
         window.destroy();
         pump();
+    }
+
+    /// GTK 4.24 enters a popover that maps under its grab at (-1, -1), before
+    /// its first allocation, where `pick` finds its first button: no card is
+    /// armed for it, and one is for the row under the pointer afterwards.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn popover_entered_outside_arms_no_card() {
+        gtk::init().expect("a display");
+        install();
+        let host = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let window = gtk::Window::builder().child(&host).build();
+        window.present();
+        pump();
+        let row = gtk::Button::with_label("Open");
+        row.set_tooltip_text(Some("A row of the menu"));
+        let menu = gtk::Popover::builder().child(&row).build();
+        menu.set_parent(&host);
+        let entered = Rc::new(RefCell::new(None));
+        let seen = Rc::clone(&entered);
+        menu.connect_map(move |menu| {
+            let engine = engine(menu.upcast_ref()).expect("attached at realize");
+            engine.hovered(-1.0, -1.0);
+            seen.replace(Some(engine.owner()));
+        });
+        menu.popup();
+        pump();
+        assert_eq!(entered.take(), Some(None), "no owner outside the popover");
+
+        let engine = engine(menu.upcast_ref()).expect("attached at realize");
+        let center = graphene::Point::new(row.width() as f32 / 2.0, row.height() as f32 / 2.0);
+        let inside = row
+            .compute_point(&menu, &center)
+            .expect("the row in its popover");
+        engine.hovered(f64::from(inside.x()), f64::from(inside.y()));
+        assert_eq!(
+            engine.owner().as_ref(),
+            Some(row.upcast_ref()),
+            "the row inside it"
+        );
+        engine.popdown();
+        menu.popdown();
+        menu.unparent();
+        window.destroy();
+        pump();
+    }
+
+    /// GTK relates a labeled button to its label, which a screen reader reads
+    /// over the label property.
+    #[test]
+    fn named_labeled_button_reads_its_name() {
+        big_testkit::harness::require_gtk_test(|| {
+            let toggle = gtk::ToggleButton::with_label("Read");
+            name_control(&toggle, "Owner can read");
+            let window = gtk::Window::builder().child(&toggle).build();
+            window.present();
+            big_testkit::harness::pump();
+            assert!(!gtk::test_accessible_has_relation(
+                &toggle,
+                gtk::AccessibleRelation::LabelledBy
+            ));
+            assert!(big_testkit::harness::has_named_descendant(
+                &toggle,
+                gtk::AccessibleRole::ToggleButton,
+                "Owner can read"
+            ));
+            window.destroy();
+        });
     }
 
     #[test]

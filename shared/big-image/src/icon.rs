@@ -9,6 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -46,6 +47,14 @@ const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// On-disk entry layout version. Bump when the header or pixel format changes.
 const DISK_FORMAT: &str = "rgba-premul-1";
+/// Entries unchanged this long are removed: a key names its source's size and
+/// time, so one whose source changed is never read again, and a read marks an
+/// entry older than half of this again.
+const DISK_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// How often the programs sharing the cache prune it, between them.
+const DISK_PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// The file in the cache folder whose modification time is the last pruning.
+const DISK_PRUNE_STAMP: &str = "pruned";
 
 /// What to do with a texture once it exists.
 pub type Deliver = Box<dyn FnOnce(gdk::Texture)>;
@@ -640,8 +649,22 @@ const HEADER_LEN: usize = 8;
 /// premultiplied RGBA pixels)`. Holds no GTK object, so it is safe to run on a
 /// worker thread; the texture is built from the result on the main thread.
 fn read_disk_rgba(key: &str) -> Option<(i32, i32, usize, Vec<u8>)> {
-    let path = disk_path(key)?;
-    let bytes = std::fs::read(&path).ok()?;
+    read_disk_entry(&disk_path(key)?)
+}
+
+fn read_disk_entry(path: &Path) -> Option<(i32, i32, usize, Vec<u8>)> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
+    // A read leaves the time alone on a `noatime` home, so an entry in use
+    // is marked again before the prune would take it.
+    let written = file.metadata().and_then(|metadata| metadata.modified());
+    if written.is_ok_and(|written| written.elapsed().is_ok_and(|age| age >= DISK_MAX_AGE / 2)) {
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.set_modified(SystemTime::now()));
+    }
     let (header, pixels) = bytes.split_at_checked(HEADER_LEN)?;
     let width = u32::from_le_bytes(header[0..4].try_into().ok()?);
     let height = u32::from_le_bytes(header[4..8].try_into().ok()?);
@@ -649,7 +672,7 @@ fn read_disk_rgba(key: &str) -> Option<(i32, i32, usize, Vec<u8>)> {
     let expected = stride.checked_mul(usize::try_from(height).ok()?)?;
     if width == 0 || height == 0 || pixels.len() != expected {
         // Damaged or truncated: throw it away and let the caller render again.
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path);
         return None;
     }
     let (width, height) = (i32::try_from(width).ok()?, i32::try_from(height).ok()?);
@@ -701,13 +724,115 @@ fn disk_put(key: &str, texture: &gdk::Texture) {
     // home is not the icon's problem. A reader never sees a partial entry, and a
     // failed write only costs the next start a decode.
     gio::spawn_blocking(move || {
-        let _ = big_os_kit::storage::atomic_write(&path, &out);
+        if big_os_kit::storage::atomic_write(&path, &out).is_ok()
+            && let Some(directory) = path.parent()
+        {
+            prune_disk_cache(directory, SystemTime::now());
+        }
     });
+}
+
+/// Remove the entries of `directory` older than [`DISK_MAX_AGE`], unless one
+/// of the programs sharing it did within [`DISK_PRUNE_INTERVAL`] of `now`.
+fn prune_disk_cache(directory: &Path, now: SystemTime) {
+    // A time ahead of `now` (the clock was set back) is no age at all, so it
+    // neither keeps an entry stale nor holds the next pruning off.
+    let age = |modified: SystemTime| now.duration_since(modified).ok();
+    let stamp = directory.join(DISK_PRUNE_STAMP);
+    let pruned = std::fs::metadata(&stamp).and_then(|metadata| metadata.modified());
+    if pruned.is_ok_and(|pruned| age(pruned).is_some_and(|age| age < DISK_PRUNE_INTERVAL)) {
+        return;
+    }
+    if std::fs::File::create(&stamp)
+        .and_then(|file| file.set_modified(now))
+        .is_err()
+    {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry.file_name() != DISK_PRUNE_STAMP
+            && entry.metadata().is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata
+                        .modified()
+                        .is_ok_and(|modified| age(modified).is_some_and(|age| age >= DISK_MAX_AGE))
+            });
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_disk_entries_are_pruned() {
+        let dir = std::env::temp_dir().join(format!("big-icon-prune-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now();
+        let entry = |name: &str, age: Duration| {
+            let path = dir.join(name);
+            std::fs::File::create(&path)
+                .unwrap()
+                .set_modified(now - age)
+                .unwrap();
+            path
+        };
+        let day = Duration::from_secs(24 * 60 * 60);
+        let old = entry("old.rgba", 31 * day);
+        let fresh = entry("fresh.rgba", day);
+        prune_disk_cache(&dir, now);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+
+        let old = entry("old.rgba", 31 * day);
+        prune_disk_cache(&dir, now + day / 2);
+        assert!(old.exists(), "pruned less than a day ago");
+        prune_disk_cache(&dir, now + day);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An entry read after half its life is marked again; a younger one keeps
+    /// its time, so a read costs no write.
+    #[test]
+    fn read_entry_stays_fresh() {
+        let dir = std::env::temp_dir().join(format!("big-icon-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut bytes = [1u8, 0, 0, 0, 1, 0, 0, 0].to_vec();
+        bytes.extend([0, 0, 0, 255]);
+        let day = Duration::from_secs(24 * 60 * 60);
+        let written = |name: &str, age: Duration| {
+            let path = dir.join(name);
+            std::fs::write(&path, &bytes).unwrap();
+            let when = SystemTime::now() - age;
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+            (path, when)
+        };
+        let (old, _) = written("old.rgba", 20 * day);
+        let (young, young_time) = written("young.rgba", day);
+        let modified = |path: &Path| std::fs::metadata(path).unwrap().modified().unwrap();
+        let read = (
+            read_disk_entry(&old).is_some(),
+            read_disk_entry(&young).is_some(),
+        );
+        let (old_age, young_after) = (modified(&old).elapsed().unwrap(), modified(&young));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(read, (true, true));
+        assert!(old_age < day, "marked again: {old_age:?}");
+        assert_eq!(young_after, young_time);
+    }
 
     #[test]
     fn source_key_tracks_size_variant_stamp() {
