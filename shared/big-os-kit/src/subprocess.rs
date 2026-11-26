@@ -1218,14 +1218,20 @@ fn run_validated(
     // cancel flag could fire.
     //
     // On its own thread, so a child that never reads its stdin cannot block the
-    // deadline loop either; the writer ends when the child does.
+    // deadline loop either. It ends when every reader of the pipe has gone,
+    // which a grandchild outside a process group may put off past the deadline.
     let stdin_writer = match (spec.stdin.clone(), child.stdin.take()) {
-        (Some(bytes), Some(mut stdin)) => Some(std::thread::spawn(move || {
-            // A child that exits without reading gives EPIPE, which is its
-            // answer, not our failure.
-            let _ = stdin.write_all(&bytes);
-            drop(stdin);
-        })),
+        (Some(bytes), Some(mut stdin)) => {
+            let (sent, received) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                // A child that exits without reading gives EPIPE, which is its
+                // answer, not our failure.
+                let _ = stdin.write_all(&bytes);
+                drop(stdin);
+                let _ = sent.send(());
+            });
+            Some(received)
+        }
         _ => None,
     };
 
@@ -1273,12 +1279,6 @@ fn run_validated(
         }
     };
 
-    // The child is finished either way by here, so the writer is unblocked: it
-    // either wrote everything or took EPIPE. Joining keeps the thread from
-    // outliving the call.
-    if let Some(writer) = stdin_writer {
-        let _ = writer.join();
-    }
     // The readers end when every write end of their pipes closes, which a
     // grandchild outside a process group may hold long after the child: the
     // output waits until the deadline, a refusal only a moment.
@@ -1288,6 +1288,9 @@ fn run_validated(
         WaitOutcome::Cancelled => return Err(BigSubprocessError::Cancelled),
         WaitOutcome::Failed(error) => return Err(BigSubprocessError::Io(error)),
     };
+    // The writer is waited for only until the deadline, as the readers are; past
+    // it, or when the call fails, the thread ends when the pipe's last reader does.
+    let _ = collect(stdin_writer, deadline);
     let (Some((stdout_buf, stdout_truncated)), Some(stderr_buf)) = (
         collect(stdout_reader, deadline),
         collect(stderr_reader, deadline),

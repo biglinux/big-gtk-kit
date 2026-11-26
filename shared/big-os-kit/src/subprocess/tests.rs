@@ -989,6 +989,28 @@ fn unread_large_stdin_never_hangs() {
     );
 }
 
+/// A grandchild outside a process group that keeps the child's stdin open,
+/// reading none of it, holds the call only until its deadline.
+#[test]
+fn grandchild_stdin_ends_at_deadline() {
+    let hand_on = "exec 3<&0; sleep 8 <&3 >/dev/null 2>&1 & exit 0";
+    let started = std::time::Instant::now();
+    let _ = BigSubprocessSpec::builder()
+        .program("sh")
+        .args(["-c", hand_on])
+        .stdin(vec![b'x'; 256 * 1024])
+        .allow_list(["sh"])
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+        .run();
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "returned after {:?}",
+        started.elapsed()
+    );
+}
+
 /// A detached helper leaves no zombie behind.
 ///
 /// `spawn_detached` returns `()`, so the caller cannot wait. Nothing in this
