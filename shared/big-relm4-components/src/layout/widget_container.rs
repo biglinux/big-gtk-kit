@@ -32,12 +32,15 @@ pub fn clear_grid_children(grid: &gtk::Grid) {
 /// open by a global shortcut.
 ///
 /// `grab_focus` on the descendant itself works in both situations, so the walk
-/// is done here. It passes over what is hidden: `grab_focus` takes a control
-/// inside a hidden row, which then swallows every key. Returns whether anything
-/// took the focus.
+/// is done here. It passes over what is hidden, a stack's other pages and a
+/// collapsed revealer included: `grab_focus` takes a control inside a hidden
+/// row, which then swallows every key. Returns whether anything took the
+/// focus.
 pub fn focus_first_control(container: &impl IsA<gtk::Widget>) -> bool {
     fn walk(widget: &gtk::Widget) -> bool {
-        if !widget.is_visible() {
+        // Child-visible rather than mapped: a popover about to open is not
+        // mapped yet.
+        if !widget.is_visible() || !widget.is_child_visible() {
             return false;
         }
         if widget.is_focusable() && widget.is_sensitive() && widget.grab_focus() {
@@ -61,4 +64,34 @@ pub fn focus_first_control(container: &impl IsA<gtk::Widget>) -> bool {
         child = current.next_sibling();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stack's other page and a collapsed revealer hold nothing to focus.
+    #[test]
+    fn hidden_pages_take_no_focus() {
+        big_testkit::harness::require_gtk_test(|| {
+            let stack = gtk::Stack::new();
+            stack.add_named(&gtk::Button::with_label("hidden page"), Some("a"));
+            let revealer = gtk::Revealer::builder()
+                .reveal_child(false)
+                .child(&gtk::Button::with_label("collapsed"))
+                .build();
+            let shown = gtk::Button::with_label("shown");
+            let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            page.append(&revealer);
+            page.append(&shown);
+            stack.add_named(&page, Some("b"));
+            stack.set_visible_child_name("b");
+            let window = gtk::Window::builder().child(&stack).build();
+            window.present();
+            big_testkit::harness::pump();
+            assert!(focus_first_control(&stack));
+            assert!(shown.is_focus());
+            window.destroy();
+        });
+    }
 }
