@@ -137,11 +137,13 @@ pub fn mount_of<'a>(table: &'a str, path: &Path) -> Option<Mount<'a>> {
 
 /// Whether `folder` is on a mount of `table` that is not a network share: a
 /// process id found there is this machine's. A folder the table holds no mount
-/// for, as when it could not be read, is not.
+/// for, as when it could not be read, is not, nor is any folder while a mount
+/// point the table holds is not UTF-8: a share may sit there.
 pub(crate) fn is_local(table: &str, folder: &Path) -> bool {
-    std::fs::canonicalize(folder).is_ok_and(|folder| {
-        mount_holding(table, &folder).is_some_and(|(_, filesystem)| !is_network(&filesystem))
-    })
+    !table.contains(char::REPLACEMENT_CHARACTER)
+        && std::fs::canonicalize(folder).is_ok_and(|folder| {
+            mount_holding(table, &folder).is_some_and(|(_, filesystem)| !is_network(&filesystem))
+        })
 }
 
 /// The source and the filesystem type of the mount [`mount_of`] finds.
@@ -230,7 +232,8 @@ fn dm_crypt_below(name: &str, depth: u8) -> bool {
 }
 
 /// The kernel escapes only space, tab, newline and backslash, so a mount point
-/// may hold any other byte: one that is not UTF-8 spoils that line alone.
+/// may hold any other byte: one that is not UTF-8 reads as U+FFFD, and that
+/// mount's point matches no path.
 fn read(file: &mut File) -> Option<Arc<str>> {
     file.rewind().ok()?;
     let mut bytes = Vec::new();
@@ -240,7 +243,8 @@ fn read(file: &mut File) -> Option<Arc<str>> {
 
 #[cfg(test)]
 mod tests {
-    /// A mount point that is not UTF-8 leaves the other mounts readable.
+    /// A mount point that is not UTF-8 leaves the other mounts readable, and
+    /// no folder local.
     #[test]
     fn foreign_bytes_spoil_one_line() {
         let path = std::env::temp_dir().join(format!("mountinfo-{}", std::process::id()));
@@ -255,6 +259,12 @@ mod tests {
             super::mount_holding(&table, std::path::Path::new("/home")),
             Some(("/dev/sda2".to_owned(), "btrfs".to_owned()))
         );
+        // The share may hold any folder: none counts as local.
+        assert!(!super::is_local(&table, std::path::Path::new("/")));
+        assert!(super::is_local(
+            "22 1 0:21 / / rw - btrfs /dev/sda2 rw\n",
+            std::path::Path::new("/")
+        ));
     }
 
     #[test]
