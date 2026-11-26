@@ -199,6 +199,10 @@ pub fn may_stall(filesystem: &str) -> bool {
 /// volume, directly or through the layers stacked on one (LVM on LUKS).
 #[must_use]
 pub fn on_dm_crypt(source: &str) -> bool {
+    // A name such as `tmpfs` is no device, and would resolve in the working folder.
+    if !source.starts_with('/') {
+        return false;
+    }
     std::fs::canonicalize(source)
         .ok()
         .and_then(|device| {
