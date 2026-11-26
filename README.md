@@ -180,9 +180,9 @@ window's overlay, joined to the row by a bridge. Two ways to open one:
   the pointer may travel into it; a click or Enter opens it for the keyboard,
   which the pointer then never replaces. A short sidebar of options uses it.
 
-Both place the card on the row's end side, or the other side when only that
-has room, and report what happens as events the owner passes back, so no
-handler holds a widget.
+Both place the card on the row's end side, the other side when only that has
+room, or below the row when neither has, and report what happens as events
+the owner passes back, so no handler holds a widget.
 
 ## Checks
 
