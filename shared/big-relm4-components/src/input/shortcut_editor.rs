@@ -1021,15 +1021,23 @@ mod tests {
     #[test]
     fn accels_compare_like_gtk() {
         big_testkit::harness::require_gtk_test(|| {
-            assert!(same_accel("<Ctrl><Shift>plus", "<Primary>plus"));
-            assert!(same_accel("<Shift>question", "question"));
             assert!(same_accel("<Shift>Tab", "<Shift>ISO_Left_Tab"));
             assert!(!same_accel("<Ctrl><Shift>z", "<Ctrl>z"));
             assert!(!same_accel("<Shift>space", "space"));
             assert!(!same_accel("<Shift>F5", "F5"));
-            // Reached without Shift on the session's layout (US, ABNT2).
-            assert!(!same_accel("<Ctrl><Shift>bracketleft", "<Ctrl>bracketleft"));
             assert!(!same_accel("<Shift>KP_Subtract", "KP_Subtract"));
+            // Which characters need Shift is the layout's: these rows hold on
+            // US and ABNT2, the layout tools/headless-gate.sh runs with.
+            let level = |key: gdk::Key| {
+                gdk::Display::default()
+                    .and_then(|display| display.map_keyval(key))
+                    .and_then(|places| places.first().map(gdk::KeymapKey::level))
+            };
+            if level(gdk::Key::plus) == Some(1) && level(gdk::Key::bracketleft) == Some(0) {
+                assert!(same_accel("<Ctrl><Shift>plus", "<Primary>plus"));
+                assert!(same_accel("<Shift>question", "question"));
+                assert!(!same_accel("<Ctrl><Shift>bracketleft", "<Ctrl>bracketleft"));
+            }
             assert!(same_accel("", " "));
             assert!(!same_accel("", "n"));
         });
