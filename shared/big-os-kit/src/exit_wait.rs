@@ -28,8 +28,8 @@ extern "C" fn stop_drawing() {
 #[must_use]
 pub fn drawing() -> Option<RwLockReadGuard<'static, ()>> {
     static REGISTERED: OnceLock<bool> = OnceLock::new();
-    // SAFETY: `stop_drawing` stays loaded until exit, as the host never unloads
-    // a module, and touches only a static.
+    // SAFETY: `stop_drawing` touches only a static, and stays loaded until exit:
+    // a module library holding this crate is never unloaded.
     let registered = *REGISTERED.get_or_init(|| unsafe { libc::atexit(stop_drawing) } == 0);
     registered.then(|| DRAWING.read().unwrap_or_else(PoisonError::into_inner))
 }

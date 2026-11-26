@@ -135,6 +135,15 @@ pub fn mount_of<'a>(table: &'a str, path: &Path) -> Option<Mount<'a>> {
         .max_by_key(|mount| mount.point.as_os_str().len())
 }
 
+/// Whether `folder` is on a mount of `table` that is not a network share: a
+/// process id found there is this machine's. A folder the table holds no mount
+/// for, as when it could not be read, is not.
+pub(crate) fn is_local(table: &str, folder: &Path) -> bool {
+    std::fs::canonicalize(folder).is_ok_and(|folder| {
+        mount_holding(table, &folder).is_some_and(|(_, filesystem)| !is_network(&filesystem))
+    })
+}
+
 /// The source and the filesystem type of the mount [`mount_of`] finds.
 #[must_use]
 pub fn mount_holding(table: &str, path: &Path) -> Option<(String, String)> {
@@ -190,6 +199,10 @@ pub fn may_stall(filesystem: &str) -> bool {
 /// volume, directly or through the layers stacked on one (LVM on LUKS).
 #[must_use]
 pub fn on_dm_crypt(source: &str) -> bool {
+    // A name such as `tmpfs` is no device, and would resolve in the working folder.
+    if !source.starts_with('/') {
+        return false;
+    }
     std::fs::canonicalize(source)
         .ok()
         .and_then(|device| {
@@ -216,15 +229,34 @@ fn dm_crypt_below(name: &str, depth: u8) -> bool {
         })
 }
 
+/// The kernel escapes only space, tab, newline and backslash, so a mount point
+/// may hold any other byte: one that is not UTF-8 spoils that line alone.
 fn read(file: &mut File) -> Option<Arc<str>> {
     file.rewind().ok()?;
-    let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
-    Some(Arc::from(text))
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(Arc::from(String::from_utf8_lossy(&bytes)))
 }
 
 #[cfg(test)]
 mod tests {
+    /// A mount point that is not UTF-8 leaves the other mounts readable.
+    #[test]
+    fn foreign_bytes_spoil_one_line() {
+        let path = std::env::temp_dir().join(format!("mountinfo-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            b"22 1 0:21 / / rw - btrfs /dev/sda2 rw\n90 22 0:60 / /media/\xff rw - nfs4 server:/x rw\n",
+        )
+        .unwrap();
+        let table = super::read(&mut std::fs::File::open(&path).unwrap()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            super::mount_holding(&table, std::path::Path::new("/home")),
+            Some(("/dev/sda2".to_owned(), "btrfs".to_owned()))
+        );
+    }
+
     #[test]
     fn holding_mount_is_the_longest() {
         let table = "\

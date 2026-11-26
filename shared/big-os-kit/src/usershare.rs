@@ -326,7 +326,7 @@ mod tests {
     use super::*;
 
     /// What `net usershare info` printed on a real machine.
-    const REAL: &str = "[bigshellprobe]\n\
+    const REAL: &str = "[shareprobe]\n\
                         path=/home/user/.cache/ushare-probe\n\
                         comment=probe\n\
                         usershare_acl=Everyone:R,\n\
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(
             parse(REAL),
             vec![Share {
-                name: String::from("bigshellprobe"),
+                name: String::from("shareprobe"),
                 path: PathBuf::from("/home/user/.cache/ushare-probe"),
                 comment: String::from("probe"),
                 writable: false,

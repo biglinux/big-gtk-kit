@@ -81,7 +81,8 @@ pub struct HoverCards {
 }
 
 impl HoverCards {
-    /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`.
+    /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`; a row or an
+    /// index without a card opens nothing.
     pub fn new(
         layer: &gtk::Overlay,
         rows: Vec<gtk::Widget>,
@@ -254,7 +255,9 @@ impl HoverCards {
         if self.open.map(|(open, _)| open) != Some(index) {
             self.close();
         }
-        let (row, card) = (&self.rows[index], &self.cards[index]);
+        let (Some(row), Some(card)) = (self.rows.get(index), self.cards.get(index)) else {
+            return false;
+        };
         if !place_beside(&self.layer, row, card, &self.bridge) {
             return false;
         }

@@ -90,10 +90,8 @@ pub fn persist_durable_job_journal(
     records: &[DurableJobJournalRecord],
 ) -> io::Result<()> {
     let encoded = encode_journal(journal_path, version, records)?;
-    // The shared owner retries create-new collisions and only removes the
-    // temporary that this write actually created. Durable: recovery replays
-    // what this says, and a move whose source is already gone must not be
-    // replayed from an older entry.
+    // Durable: recovery replays what this says, and a move whose source is
+    // already gone must not be replayed from an older entry.
     crate::storage::atomic_write_private_durable(journal_path, &encoded)
 }
 

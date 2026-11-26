@@ -7,7 +7,8 @@ decoding under big-image), with these changes:
   `usize::MAX` reads the same constant.
 - `PoolConfig::nice` gives a pool the nice value its loader and editor
   processes start with (`src/pool.rs`), set in the forked process before it
-  runs bubblewrap (`src/dbus.rs`), so the loader inside inherits it. Upstream
+  runs bubblewrap (`src/dbus.rs`), so the loader inside inherits it; inside
+  Flatpak the portal starts the loader, which does not inherit it. Upstream
   starts every loader at the priority of the thread that asked for it, and
   glycin asks from the thread that polls the load, the GTK main thread for most
   callers: a folder of thumbnails then decodes at the same priority as the
@@ -48,7 +49,9 @@ decoding under big-image), with these changes:
   devices, the image's folder for a loader that reads beside it, and
   fontconfig's files and cache; and keep it from signaling another process.
   Landlock does not govern `stat`: the loader can still see which paths exist
-  and their metadata. A kernel without Landlock ABI 6 (before Linux 6.12)
+  and their metadata. A Flatpak development build, which upstream also runs
+  without bubblewrap, keeps its loaders under `/app`, which these rules leave
+  out: it loads no image. A kernel without Landlock ABI 6 (before Linux 6.12)
   starts no loader: the load fails with `Error::SandboxUnavailable`. Upstream
   runs that loader with nothing but a cleared environment. `sandbox::tests`
   and `landlock::tests` check it.

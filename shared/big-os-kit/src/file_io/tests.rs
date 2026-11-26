@@ -248,7 +248,8 @@ fn abandoned_staging_is_cleared() {
 }
 
 /// On a network share the process id may be another machine's, so a dead
-/// owner's staging directory there stays; off the share, it goes.
+/// owner's staging directory there stays, as it does when the mount table could
+/// not be read; off the share, it goes.
 #[test]
 fn abandoned_staging_on_share_stays() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -270,8 +271,14 @@ fn abandoned_staging_on_share_stays() {
     remove_abandoned(&parent, ".stage", &share);
     let kept = staging.exists();
     remove_abandoned(&parent, ".stage", "");
+    let kept_unread = staging.exists();
+    remove_abandoned(&parent, ".stage", "22 1 0:21 / / rw - btrfs /dev/sda2 rw\n");
 
     assert!(kept);
+    assert!(
+        kept_unread,
+        "a table that could not be read may hide a share"
+    );
     assert!(!staging.exists());
     let _ = fs::remove_dir_all(parent);
 }

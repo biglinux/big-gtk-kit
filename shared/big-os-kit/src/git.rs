@@ -5,7 +5,7 @@
 //! folder from a download or a USB stick can carry a `.git/config` that names
 //! commands.
 
-/// The `git` this suite runs.
+/// The `git` this crate runs.
 pub const GIT: &str = "/usr/bin/git";
 
 /// Options before the subcommand that keep the repository's configuration

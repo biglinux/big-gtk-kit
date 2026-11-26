@@ -50,6 +50,9 @@ pub enum HttpError {
     /// The URL holds a NUL byte, which no argv carries.
     #[error("URL contains a NUL byte")]
     NulInUrl,
+    /// The URL does not start with `http://` or `https://`.
+    #[error("URL is not http or https")]
+    UnsupportedUrl,
     /// The anonymous file the headers travel in could not be made.
     #[error("{step} curl request config: {error}")]
     RequestConfig {
@@ -239,15 +242,21 @@ impl<'a> RequestHeaders<'a> {
     }
 }
 
-/// GET with caller-provided headers.
+/// GET with caller-provided headers. Redirects as [`http_get_bytes_capped`].
 #[must_use]
 pub fn http_get_with_headers(url: &str, headers: &RequestHeaders<'_>) -> Option<String> {
-    http_get_text_with_headers(url, headers, &[], Duration::from_secs(TIMEOUT_SECS), true)
+    http_get_text_with_headers(
+        url,
+        headers,
+        &[],
+        Duration::from_secs(TIMEOUT_SECS),
+        headers.referer.is_empty(),
+    )
 }
 
 /// GET text as [`http_get_with_headers`] does, trying once more after 500 ms
-/// when the server answers 5xx or the request fails before an answer, but not
-/// when the host name does not resolve. `extra_headers`, such as `("Accept",
+/// when the server answers 5xx or curl fails before an answer, but not when
+/// the host name does not resolve. `extra_headers`, such as `("Accept",
 /// "application/json")`, go to every redirect target.
 #[must_use]
 pub fn http_get_with_retry(url: &str, extra_headers: &[(&str, &str)]) -> Option<String> {
@@ -267,7 +276,9 @@ pub fn http_get_with_retry(url: &str, extra_headers: &[(&str, &str)]) -> Option<
         ) {
             Ok(response) if response.status < 500 => return text_body(response),
             Err(HttpError::CurlExited(CURL_COULDNT_RESOLVE_HOST)) => return None,
-            Ok(_) | Err(_) => {}
+            Ok(_) | Err(HttpError::CurlExited(_)) => {}
+            // Refused before curl ran, or a body past its cap: the same again.
+            Err(_) => return None,
         }
     }
     None
@@ -501,7 +512,7 @@ fn spawn_curl(
     follow_redirects: bool,
 ) -> Result<CurlProcess, HttpError> {
     validate_url(url)?;
-    let mut command = base_curl(deadline, headers.user_agent);
+    let mut command = base_curl(deadline, headers.user_agent)?;
     restrict_protocols(&mut command, url);
     // Brackets and braces in a URL are its own characters, not curl's ranges.
     command.arg("--globoff");
@@ -551,8 +562,16 @@ fn restrict_protocols(command: &mut Command, url: &str) {
         .arg(if secure { "=https" } else { "=http,https" });
 }
 
-fn base_curl(deadline: Deadline, user_agent: &str) -> Command {
-    let mut command = Command::new(CURL);
+/// `curl` by its absolute path: a relative `PATH` entry would hand the request
+/// headers to whatever `curl` sits in the working folder.
+fn base_curl(deadline: Deadline, user_agent: &str) -> Result<Command, HttpError> {
+    let curl = crate::subprocess::find_program(CURL).ok_or_else(|| {
+        HttpError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "curl is not in any absolute PATH entry",
+        ))
+    })?;
+    let mut command = Command::new(curl);
     // First, or curl reads ~/.curlrc, whose `location` or `output` would
     // follow redirects with the caller's credentials or empty the pipe.
     command
@@ -566,10 +585,14 @@ fn base_curl(deadline: Deadline, user_agent: &str) -> Command {
         .arg("--connect-timeout")
         .arg(FAST_TIMEOUT_SECS.to_string());
     match deadline {
+        // curl reads 0 as no limit.
         Deadline::Total(timeout) => {
-            command
-                .arg("--max-time")
-                .arg(timeout.as_secs_f64().to_string());
+            command.arg("--max-time").arg(
+                timeout
+                    .max(Duration::from_millis(1))
+                    .as_secs_f64()
+                    .to_string(),
+            );
         }
         // Below one byte a second for that long, curl gives up.
         Deadline::Stall(stall) => {
@@ -589,12 +612,20 @@ fn base_curl(deadline: Deadline, user_agent: &str) -> Command {
         })
         .stdin(Stdio::null())
         .stderr(Stdio::null());
-    command
+    Ok(command)
 }
 
 fn validate_url(url: &str) -> Result<(), HttpError> {
     if url.contains('\0') {
         return Err(HttpError::NulInUrl);
+    }
+    // Whether a redirect may leave https is read from these first bytes.
+    let scheme = |prefix: &str| {
+        url.get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    };
+    if !scheme("http://") && !scheme("https://") {
+        return Err(HttpError::UnsupportedUrl);
     }
     Ok(())
 }

@@ -105,7 +105,9 @@ impl PoolConfig {
 
     /// The nice value the pool's processes start with, from 0 (the caller's
     /// own) to 19. Set in the process before it runs the sandbox, inherited by
-    /// the loader inside it, and never below the caller's own.
+    /// the loader inside it, and never below the caller's own. Inside Flatpak,
+    /// where `flatpak-spawn` asks the portal to start the loader, it does not
+    /// reach the loader.
     pub fn nice(&mut self, nice: i32) -> &mut Self {
         self.nice = nice.clamp(0, 19);
         self

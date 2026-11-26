@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-//! The decimal mark under the shared host's locale, in a process of its own:
+//! The decimal mark under the process's locale, in a process of its own:
 //! the environment is process-global and the mark is read once.
 
 #[test]

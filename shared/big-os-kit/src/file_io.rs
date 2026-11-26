@@ -268,23 +268,19 @@ fn clear_files(folder: &std::os::fd::OwnedFd) -> std::io::Result<Vec<CString>> {
 /// has exited: mode `0700` and this user's, as [`OwnedPrivateDirectory`] makes
 /// them, and unchanged for an hour. A process id is this machine's, so
 /// nothing is removed on a network filesystem, where the owner may be running
-/// on another one; the hour covers an owner in another PID namespace, whose
+/// on another one, or where `mount_table` holds no mount for `parent`; the hour covers an owner in another PID namespace, whose
 /// id names no process here. A live process that took a dead owner's id
 /// keeps the directory, which costs only space. `mount_table` is the text of
 /// `/proc/self/mountinfo`.
 fn remove_abandoned(parent: &Path, prefix: &str, mount_table: &str) {
     const ABANDONED_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    let on_network = fs::canonicalize(parent).is_ok_and(|parent| {
-        crate::mount_table::mount_holding(mount_table, &parent)
-            .is_some_and(|(_, filesystem)| crate::mount_table::is_network(&filesystem))
-    });
+    if !crate::mount_table::is_local(mount_table, parent) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(parent) else {
         return;
     };
-    if on_network {
-        return;
-    }
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(pid) = name
