@@ -407,6 +407,9 @@ impl AppShell {
     /// Boot a Relm4 root component and retain its controller until the GTK
     /// application loop returns.
     ///
+    /// Call it from `main` before starting any thread: it sets the process
+    /// environment and locale, which no other thread may read meanwhile.
+    ///
     /// This registers the preconfigured application through
     /// `RelmApp::from_app`, but drives GTK through a native-argument
     /// `GApplication` bridge rather than `RelmApp::run`.

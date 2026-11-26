@@ -13,10 +13,6 @@ ignore = [
     # through glycin-common, glycin-utils and gufo. Drop with the glycin that
     # leaves it.
     { id = "RUSTSEC-2024-0436", reason = "glycin 3.1 needs paste; revisit 2027-01-19" },
-    # gettext-rs 0.7 `setlocale` and `TextDomain::init` read the environment
-    # unsynchronized. big-app-kit calls them once on the main thread before any
-    # other thread starts. 0.8.0 marks both `unsafe`: drop with that upgrade.
-    { id = "RUSTSEC-2026-0244", reason = "called before any thread starts; revisit 2027-01-19" },
     # zvariant, zvariant_derive and zbus_names moved into zbus 6. glycin 3.1
     # still builds on zbus 5, so moving our own crates alone would keep all
     # three in the graph. Drop with the glycin on zbus 6.
