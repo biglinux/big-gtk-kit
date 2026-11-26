@@ -728,7 +728,8 @@ impl BigShortcutEditor {
 fn show_capture_error(widgets: &BigShortcutEditorWidgets, message: &str) {
     widgets.conflict_label.set_label(message);
     widgets.conflict_label.set_visible(true);
-    crate::feedback::announce::announce(
+    // From the window: the line was hidden, a widget no screen reader has met.
+    crate::feedback::announce::announce_from_window(
         &widgets.conflict_label,
         message,
         gtk::AccessibleAnnouncementPriority::High,
@@ -1360,6 +1361,26 @@ mod tests {
                 next.row.subtitle().as_deref(),
                 Some("“Play” already uses this shortcut.")
             );
+            window.destroy();
+        });
+    }
+
+    /// The first refusal is said aloud, though its line was hidden until then.
+    #[test]
+    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-relm4-components -- --ignored"]
+    fn capture_refusal_is_announced() {
+        big_testkit::harness::require_gtk_test(|| {
+            use big_testkit::atspi::{Announcements, accessibility_bus, settle};
+            use relm4::ComponentController;
+            let (editor, window, _) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            settle();
+            let (bus, application) =
+                accessibility_bus().expect("the AT-SPI bridge (headless-gate.sh --accessible)");
+            let heard = Announcements::listen(&bus, &application);
+            editor.emit(BigShortcutEditorInput::CommitCapture("space".to_owned()));
+            settle();
+            assert_eq!(heard.take(), ["“Play” already uses this shortcut."]);
             window.destroy();
         });
     }

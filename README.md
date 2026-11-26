@@ -192,9 +192,9 @@ cargo clippy --workspace --all-targets --config 'build.warnings="deny"'
 tools/headless-gate.sh cargo nextest run --workspace
 cargo nextest run -p glycin --lib
 tools/headless-gate.sh cargo nextest run --workspace --run-ignored only -j 1 \
-    -E 'not test(/::(mount_change_is_seen|closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|work_start_is_announced)$/)'
+    -E 'not test(/::(mount_change_is_seen|closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|work_start_is_announced|capture_refusal_is_announced)$/)'
 tools/headless-gate.sh --accessible cargo nextest run --workspace --run-ignored only \
-    -E 'test(/::(closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|work_start_is_announced)$/)'
+    -E 'test(/::(closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|work_start_is_announced|capture_refusal_is_announced)$/)'
 tools/headless-gate.sh cargo test --workspace --doc
 ast-grep scan
 cargo deny --workspace check
@@ -207,7 +207,7 @@ they check).
 
 `tools/headless-gate.sh` runs the tests in a private KWin session with a home
 of its own. The ignored tests take the activation, so they run one at a time;
-four read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
+five read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
 namespace. rustdoc runs the doc tests from `TMPDIR`, which must allow
 execution.
 
