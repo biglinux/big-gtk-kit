@@ -152,17 +152,19 @@ pub struct DirectoryListingEntry {
 }
 
 impl DirectoryListingEntry {
+    /// The child's `lstat`, asked relative to the open folder: the same call
+    /// [`fs::symlink_metadata`] makes, without walking the whole path again.
     fn from_dir_entry(dir_entry: fs::DirEntry) -> std::io::Result<Self> {
-        Self::capture(dir_entry.path(), dir_entry.file_name())
+        let metadata = dir_entry.metadata()?;
+        Self::capture(dir_entry.path(), dir_entry.file_name(), &metadata)
     }
 
-    /// The no-follow snapshot every listed entry carries.
+    /// The no-follow snapshot every listed entry carries, from its `lstat`.
     ///
     /// `is_symlink` comes from the same `lstat` as the rest of the metadata
     /// rather than from a directory iterator's cached type, so one child read on
     /// its own answers exactly what the same child answers inside a full scan.
-    fn capture(path: PathBuf, name: OsString) -> std::io::Result<Self> {
-        let metadata = fs::symlink_metadata(&path)?;
+    fn capture(path: PathBuf, name: OsString, metadata: &fs::Metadata) -> std::io::Result<Self> {
         let is_symlink = metadata.is_symlink();
         let followed = is_symlink.then(|| fs::metadata(&path));
         let targets_directory = metadata.is_dir()
@@ -193,7 +195,7 @@ impl DirectoryListingEntry {
                 .and_then(|created| created.duration_since(UNIX_EPOCH).ok())
                 .and_then(|since| i64::try_from(since.as_secs()).ok()),
             accessed_seconds: metadata.atime(),
-            identity: LocalEntryIdentity::from_metadata(&metadata),
+            identity: LocalEntryIdentity::from_metadata(metadata),
             uid: metadata.uid(),
             gid: metadata.gid(),
         })
@@ -217,7 +219,8 @@ pub fn read_listing_entry(path: &Path) -> std::io::Result<DirectoryListingEntry>
             "listing entry path has no file name",
         )
     })?;
-    DirectoryListingEntry::capture(path.to_path_buf(), name.to_os_string())
+    let metadata = fs::symlink_metadata(path)?;
+    DirectoryListingEntry::capture(path.to_path_buf(), name.to_os_string(), &metadata)
 }
 
 /// Read one directory and return child metadata without filtering or sorting.
