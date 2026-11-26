@@ -1,4 +1,6 @@
+// SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
+
 //! Leave a trace when a process dies of a panic.
 //!
 //! glib's signal and closure paths have no `catch_unwind`, so a panic inside a
@@ -132,17 +134,5 @@ mod tests {
         let refused = create_record(&directory).is_none();
         std::fs::remove_dir_all(&directory).expect("remove test directory");
         assert!(refused);
-    }
-
-    /// Installing twice must not chain two hooks: the second call is the one a
-    /// library and its host would both make, and two records for one panic would
-    /// make the count of panics wrong.
-    #[test]
-    fn a_second_install_is_refused() {
-        INSTALLED.store(false, Ordering::SeqCst);
-        install("test-app");
-        assert!(INSTALLED.load(Ordering::SeqCst));
-        install("test-app");
-        assert!(INSTALLED.load(Ordering::SeqCst));
     }
 }

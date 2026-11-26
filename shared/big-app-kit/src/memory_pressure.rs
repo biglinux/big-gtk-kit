@@ -621,11 +621,84 @@ mod tests {
     }
 
     #[test]
-    fn allocator_release_works_with_any_allocator() {
-        // The example binaries link glibc and the shipped ones link jemalloc;
-        // this must be a no-op rather than a crash on either.
-        release_allocator_memory();
+    fn stopped_watch_skips_dispatching_release() {
+        let context = big_testkit::harness::test_context();
+        let state = Arc::new(DeliveryState::default());
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        schedule_release(&state, &context, move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+        });
+        // A stop on another thread that lands after the source began to run
+        // has only cleared `active` by the time the callback reads it.
+        state.active.store(false, Ordering::Release);
+        assert!(context.iteration(false));
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
+
+    /// Set in the child [`run_alone`] starts.
+    const CHILD_RUN: &str = "BIG_APP_KIT_CHILD_PRESSURE";
+
+    /// Run `test` again in a child process with `variables`, for a test of
+    /// state the whole process shares: the environment, the default application.
+    fn run_alone(test: &str, variables: &[(&str, &str)]) {
+        let mut child = big_os_kit::subprocess::BigSubprocessSpec::builder()
+            .program(std::env::current_exe().expect("test binary"))
+            .args(["--exact", test, "--quiet"])
+            .env_inherit(false)
+            .env(CHILD_RUN, "1");
+        for (name, value) in variables {
+            child = child.env(name, value);
+        }
+        let out = child
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .run()
+            .expect("child run");
+        assert!(out.status.success(), "{}", out.stdout_lossy());
+    }
+
+    /// A module's copy of the crate starts no second watcher thread on the
+    /// pressure file the process's watcher already polls.
+    #[test]
+    fn module_copy_starts_no_watcher() {
+        if std::env::var_os(CHILD_RUN).is_none() {
+            // A file that does not exist: a watcher that started would fail to open it.
+            run_alone(
+                "memory_pressure::tests::module_copy_starts_no_watcher",
+                &[("MEMORY_PRESSURE_WATCH", "/nonexistent/big-pressure")],
+            );
+            return;
+        }
+        // SAFETY: the child runs this one test, on the only thread that
+        // touches the environment.
+        unsafe { std::env::set_var(PROCESS_WATCHER, std::process::id().to_string()) };
+        let resources = big_os_kit::session_resources::SessionResources::new(
+            big_os_kit::session_resources::ResourceLimits::for_capacity(None, 2),
+        );
+        assert!(matches!(watch_scoped_for(resources, || {}), Ok(None)));
+    }
+
+    /// The process actions run the hooks of the one thread that joined them:
+    /// a second thread gets no application to run them twice through.
+    #[test]
+    fn second_thread_joins_no_application() {
+        if std::env::var_os(CHILD_RUN).is_none() {
+            run_alone(
+                "memory_pressure::tests::second_thread_joins_no_application",
+                &[],
+            );
+            return;
+        }
+        let application = gio::Application::new(None, gio::ApplicationFlags::NON_UNIQUE);
+        application.set_default();
+        assert!(process_application().is_some());
+        let joined_elsewhere = std::thread::spawn(|| process_application().is_some())
+            .join()
+            .expect("the second thread");
+        assert!(!joined_elsewhere);
+    }
+
     #[test]
     fn pressure_reaches_owner_before_ui() {
         use big_os_kit::session_resources::{

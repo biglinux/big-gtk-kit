@@ -559,4 +559,12 @@ mod tests {
             ["/tmp/a.txt", "smb://server/share/file.txt"]
         );
     }
+
+    /// glib's string conversion panics on a NUL in debug builds, inside the
+    /// command-line signal where a panic aborts.
+    #[test]
+    fn error_with_nul_is_printed() {
+        let command_line = glib::Object::new::<gio::ApplicationCommandLine>();
+        print_command_line_error(&command_line, "a\0b");
+    }
 }
