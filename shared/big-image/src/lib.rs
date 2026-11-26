@@ -42,7 +42,7 @@ pub use save::{
     BIG_IMAGE_SAVE_FORMATS, BigCarriedMetadata, BigImageSaveFormat, BigSaveTurn, encode_rgba,
     png_bytes, save_pixel_ceiling, save_rgba, save_rgba_carrying,
 };
-pub use save_animation::{BigAnimationFormat, BigAnimationWriter};
+pub use save_animation::{BigAnimationFormat, BigAnimationRefusal, BigAnimationWriter};
 
 /// Decoded image as tightly packed RGBA8 plus dimensions. `Send`: decode on
 /// a worker, wrap into a texture on the GTK thread ([`rgba_to_texture`]).
@@ -170,6 +170,10 @@ pub enum BigImageError {
         /// Encoder or filesystem error text.
         reason: String,
     },
+    /// The animation is past what this build writes; a caller shows
+    /// [`BigAnimationRefusal::words`].
+    #[error("{}", .0.words(str::to_owned))]
+    AnimationRefused(BigAnimationRefusal),
     /// The animation has no frame after the last one.
     #[error("the animation has no more frames")]
     AnimationEnded,

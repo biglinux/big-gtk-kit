@@ -244,11 +244,14 @@ pub fn save_rgba_carrying(
     if let Some(exif) = format.camera_data(carried) {
         bytes = with_exif(bytes, format, &exif);
     }
-    big_os_kit::storage::atomic_save_document(path, &bytes).map_err(|error| {
-        BigImageError::SaveFailed {
-            reason: big_os_kit::file_io::system_words(&error),
-        }
-    })
+    big_os_kit::storage::atomic_save_document(path, &bytes).map_err(unwritten)
+}
+
+/// A save the file system refused, in the system's words.
+pub(crate) fn unwritten(error: std::io::Error) -> BigImageError {
+    BigImageError::SaveFailed {
+        reason: big_os_kit::file_io::system_words(&error),
+    }
 }
 
 /// The most EXIF one JPEG APP1 segment holds after its length and marker.

@@ -65,6 +65,32 @@ impl BigAnimationFormat {
     }
 }
 
+/// Why [`BigAnimationWriter::push`] refuses a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BigAnimationRefusal {
+    /// More frames than this build writes.
+    TooManyFrames,
+    /// More RGBA bytes of frames than this build stages.
+    TooLarge,
+    /// The cache folder cannot hold the frames and the encoder's work on them.
+    NoRoom,
+}
+
+impl BigAnimationRefusal {
+    /// The refusal in words, read through the caller's catalog, which lists
+    /// this file in its `POTFILES`.
+    #[must_use]
+    pub fn words(self, gettext: impl Fn(&str) -> String) -> String {
+        match self {
+            Self::TooManyFrames => gettext("The animation has too many frames to save."),
+            Self::TooLarge => gettext("The animation is too large to save. Choose a smaller size."),
+            Self::NoRoom => gettext(
+                "There is not enough free space to prepare the animation. Free some space and try again.",
+            ),
+        }
+    }
+}
+
 /// Collects transformed frames on disk and encodes them in one pass.
 pub struct BigAnimationWriter {
     directory: OwnedPrivateDirectory,
@@ -86,9 +112,7 @@ impl BigAnimationWriter {
             .mode(0o700)
             .create(&parent)
             .and_then(|()| OwnedPrivateDirectory::create(&parent, "animation"))
-            .map_err(|_| BigImageError::SaveFailed {
-                reason: "a private frame buffer could not be created".to_owned(),
-            })?;
+            .map_err(crate::save::unwritten)?;
         Ok(Self {
             directory,
             arguments: Vec::new(),
@@ -101,14 +125,15 @@ impl BigAnimationWriter {
     ///
     /// # Errors
     ///
-    /// Fails when the frame is malformed, cannot be written, the animation is
-    /// longer than this build accepts, or the frames and the encoder's work
-    /// would not fit the free space of the cache folder.
+    /// Fails when the frame is malformed or cannot be written, and with
+    /// [`BigImageError::AnimationRefused`] when the animation is larger than
+    /// this build accepts, or the frames and the encoder's work would not fit
+    /// the free space of the cache folder.
     pub fn push(&mut self, image: &BigRgbaImage, delay: Duration) -> Result<(), BigImageError> {
         if self.frames >= MAX_FRAMES {
-            return Err(BigImageError::SaveFailed {
-                reason: format!("an animation of more than {MAX_FRAMES} frames is refused"),
-            });
+            return Err(BigImageError::AnimationRefused(
+                BigAnimationRefusal::TooManyFrames,
+            ));
         }
         let expected = usize::try_from(image.width)
             .ok()
@@ -122,32 +147,22 @@ impl BigAnimationWriter {
         let frame_bytes = image.rgba.len() as u64;
         let staged = self.frame_bytes + frame_bytes;
         if staged > MAX_FRAME_BYTES {
-            return Err(BigImageError::SaveFailed {
-                reason: format!(
-                    "an animation of more than {} MiB of frames is refused",
-                    MAX_FRAME_BYTES >> 20
-                ),
-            });
+            return Err(BigImageError::AnimationRefused(
+                BigAnimationRefusal::TooLarge,
+            ));
         }
         let available = big_os_kit::filesystem_capacity::filesystem_capacity(self.directory.path())
-            .map_err(|error| BigImageError::SaveFailed {
-                reason: error.to_string(),
-            })?
+            .map_err(crate::save::unwritten)?
             .available_bytes;
         if available < frame_bytes + ENCODER_CACHE_FACTOR * staged {
-            return Err(BigImageError::SaveFailed {
-                reason: "the cache folder has no room for the animation's frames".to_owned(),
-            });
+            return Err(BigImageError::AnimationRefused(BigAnimationRefusal::NoRoom));
         }
         let frame_path = self
             .directory
             .path()
             .join(format!("{:05}.rgba", self.frames));
-        big_os_kit::storage::atomic_write_private(&frame_path, &image.rgba).map_err(|error| {
-            BigImageError::SaveFailed {
-                reason: error.to_string(),
-            }
-        })?;
+        big_os_kit::storage::atomic_write_private(&frame_path, &image.rgba)
+            .map_err(crate::save::unwritten)?;
 
         // Both the size and the delay apply to the file that follows them, so
         // every frame carries its own even when they all happen to match.
@@ -188,9 +203,7 @@ impl BigAnimationWriter {
         self.run_encoder(format, &staged)?;
         std::fs::read(&staged)
             .and_then(|bytes| big_os_kit::storage::atomic_save_document(destination, &bytes))
-            .map_err(|error| BigImageError::SaveFailed {
-                reason: error.to_string(),
-            })
+            .map_err(crate::save::unwritten)
     }
 
     fn run_encoder(&self, format: BigAnimationFormat, staged: &Path) -> Result<(), BigImageError> {
@@ -313,8 +326,35 @@ mod tests {
             cicp: None,
             opaque: false,
         };
-        assert!(writer.push(&pixel, Duration::from_millis(50)).is_err());
+        assert!(matches!(
+            writer.push(&pixel, Duration::from_millis(50)),
+            Err(BigImageError::AnimationRefused(
+                BigAnimationRefusal::TooLarge
+            ))
+        ));
         assert_eq!(writer.frames, 0, "nothing was written");
+        writer.frame_bytes = 0;
+        writer.frames = MAX_FRAMES;
+        assert!(matches!(
+            writer.push(&pixel, Duration::from_millis(50)),
+            Err(BigImageError::AnimationRefused(
+                BigAnimationRefusal::TooManyFrames
+            ))
+        ));
+    }
+
+    /// A refusal reaches the person through the caller's catalog.
+    #[test]
+    fn refusal_words_are_translated() {
+        let catalog = |text: &str| format!("[{text}]");
+        assert_eq!(
+            BigAnimationRefusal::NoRoom.words(catalog),
+            "[There is not enough free space to prepare the animation. Free some space and try again.]"
+        );
+        assert_eq!(
+            BigImageError::AnimationRefused(BigAnimationRefusal::TooLarge).to_string(),
+            "The animation is too large to save. Choose a smaller size."
+        );
     }
 
     #[test]
