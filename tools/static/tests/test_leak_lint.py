@@ -386,6 +386,52 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
+    def test_arms_found_past_braced_scrutinee(self):
+        # The first `{` after `match` may be a block scrutinee or a closure's body.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match SCRUTINEE {
+                    Some(widget) => {
+                        widget.grab_focus();
+                        Stop
+                    }
+                    None => Proceed,
+                });
+                widget.add_controller(keys);
+            }
+        """
+        for scrutinee in (
+            "{ controller.widget() }",
+            "controller.widget().filter(|w| { w.is_visible() })",
+        ):
+            with self.subTest(scrutinee=scrutinee):
+                self.assertEqual(lint(case.replace("SCRUTINEE", scrutinee)), [])
+
+    def test_arm_binding_ends_with_its_arm(self):
+        # The second arm reads the function's `widget`: it is captured.
+        self.assertIn(
+            ("handler-holds-owner", "warning"),
+            lint("""
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match controller.widget() {
+                    Some(widget) => {
+                        widget.grab_focus();
+                        Stop
+                    }
+                    None => {
+                        widget.grab_focus();
+                        Proceed
+                    }
+                });
+                widget.add_controller(keys);
+            }
+        """),
+        )
+
     def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
             ("lazy-followers", "warning"),
@@ -582,6 +628,35 @@ class RepeatingSources(unittest.TestCase):
         """),
         )
 
+    def test_typed_local_callback_warns(self):
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: gtk::Label) {
+                let tick: Box<dyn FnMut() -> glib::ControlFlow> = Box::new(move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                });
+                glib::idle_add_local(tick);
+            }
+        """),
+        )
+
+    def test_break_on_upgrade_success_warns(self):
+        # A failed upgrade continues: the source outlives its target.
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: &gtk::Label) {
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(_) => glib::ControlFlow::Break,
+                    None => glib::ControlFlow::Continue,
+                });
+            }
+        """),
+        )
+
     def test_bounded_sources_are_fine(self):
         self.assertEqual(
             lint("""
@@ -607,6 +682,43 @@ class RepeatingSources(unittest.TestCase):
                     label.set_text("x");
                     glib::ControlFlow::Continue
                 })
+            }
+            fn worded(button: gtk::Button) {
+                glib::idle_add_local(move || {
+                    button.set_label("Continue");
+                    glib::ControlFlow::Break
+                });
+            }
+            fn weak_exits(label: &gtk::Label) {
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => {
+                        label.set_text("x");
+                        glib::ControlFlow::Continue
+                    }
+                    None => glib::ControlFlow::Break,
+                });
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || {
+                    let Some(label) = weak.upgrade() else {
+                        return glib::ControlFlow::Break;
+                    };
+                    label.set_text("x");
+                    glib::ControlFlow::Continue
+                });
+                glib::timeout_add_local(
+                    SECOND,
+                    glib::clone!(
+                        #[weak]
+                        label,
+                        #[upgrade_or]
+                        glib::ControlFlow::Break,
+                        move || {
+                            label.set_text("x");
+                            glib::ControlFlow::Continue
+                        }
+                    ),
+                );
             }
             fn once(label: gtk::Label) {
                 glib::timeout_add_local_once(SECOND, move || label.set_text("x"));

@@ -448,19 +448,42 @@ def top_level_index(text: str, start: int, stop: int, token: str) -> int:
     return -1
 
 
-def match_arm_patterns(body: str) -> list[tuple[int, int]]:
-    """(start, end) of the pattern of each `match` arm in `body`, its guard left out:
-    the guard reads names, it binds none."""
+def match_arms_brace(body: str, start: int) -> int:
+    """Where the `{` that opens the arms of the `match` whose scrutinee starts at
+    `start` is, or -1: past a block scrutinee and past braces inside brackets."""
+    i = start
+    while i < len(body) and body[i].isspace():
+        i += 1
+    if body.startswith("{", i):  # a block as the scrutinee
+        i += len(call_argument(body, i)) + 2
+    depth = 0
+    for j in range(i, len(body)):
+        c = body[j]
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+        elif depth == 0 and c == "{":
+            return j
+        if depth < 0 or (depth == 0 and c in ";}"):
+            return -1
+    return -1
+
+
+def match_arm_patterns(body: str) -> list[tuple[int, int, int]]:
+    """(start, end) of the pattern of each `match` arm in `body`, its guard left out
+    (the guard reads names, it binds none), and where the arm ends."""
     spans = []
     for m in re.finditer(r"\bmatch\b", body):
-        brace = body.find("{", m.end())
+        brace = match_arms_brace(body, m.end())
         if brace < 0:
             continue
         close = brace + len(call_argument(body, brace)) + 1
         start = brace + 1
+        arms = []
         while (arrow := top_level_index(body, start, close, "=>")) >= 0:
             guard = re.search(r"\bif\b", body[start:arrow])
-            spans.append((start, start + guard.start() if guard else arrow))
+            arms.append((start, start + guard.start() if guard else arrow))
             arm = arrow + 2
             while arm < close and body[arm].isspace():
                 arm += 1
@@ -473,6 +496,8 @@ def match_arm_patterns(body: str) -> list[tuple[int, int]]:
                 if comma < 0:
                     break  # the last arm
                 start = comma + 1
+        ends = [lo for lo, _ in arms[1:]] + [close]
+        spans += [(lo, hi, end) for (lo, hi), end in zip(arms, ends, strict=True)]
     return spans
 
 
@@ -497,8 +522,8 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     body = re.sub(r'"(?:\\.|[^"\\])*"', '""', body)  # words in strings are not names
     params = set(re.findall(r"\b([a-z_]\w*)\b", closure.group(2)))
     # Each pattern inside the body (let, for, inner closure, match arm) as
-    # (start, end, where its names start to shadow the outer ones).
-    patterns = [(lo, hi, lo) for lo, hi in match_arm_patterns(body)]
+    # (start, end, where its names start and stop shadowing the outer ones).
+    patterns = [(lo, hi, lo, end) for lo, hi, end in match_arm_patterns(body)]
     binders = [
         r"\blet\s+([^=;]+?)\s*(?::[^=;]*)?=(?!=)",
         r"\bfor\s+(.+?)\s+in\b",
@@ -522,12 +547,12 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
                 else:
                     end = body.find(";", m.end())
                 where = end if end >= 0 else len(body)
-            patterns.append((m.start(1), m.end(1), where))
-    bound_at: dict[str, int] = {}
-    for lo, hi, where in patterns:
+            patterns.append((m.start(1), m.end(1), where, len(body)))
+    shadowed: dict[str, list[tuple[int, int]]] = {}
+    for lo, hi, where, until in patterns:
         for name in re.findall(r"\b([a-z_]\w*)\b", body[lo:hi]):
-            bound_at[name] = min(bound_at.get(name, len(body)), where)
-    pattern_spans = [(lo, hi) for lo, hi, _ in patterns]
+            shadowed.setdefault(name, []).append((where, until))
+    pattern_spans = [(lo, hi) for lo, hi, _, _ in patterns]
     used = set()
     # variables only: not a field or method (`.x`), a path (`x::`, `::x`), a call, a macro,
     # or a field name in a struct literal (`x: value`)
@@ -535,8 +560,8 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
         name = m.group(1)
         if any(lo <= m.start() < hi for lo, hi in pattern_spans):
             continue  # the binding itself
-        if m.start() < bound_at.get(name, len(body)):
-            used.add(name)  # used before any inner binding: the outer one, captured
+        if not any(lo <= m.start() < hi for lo, hi in shadowed.get(name, ())):
+            used.add(name)  # outside every inner binding: the outer one, captured
     # a local closure is used by calling it
     calls = set(re.findall(r"(?<![.\w:])([a-z_]\w*)\s*\(", body)) - params
     used -= params
@@ -742,6 +767,10 @@ REPEATING_SOURCE = re.compile(
 )
 
 
+# A failed upgrade that keeps the source: `None => Continue` beside an upgrade.
+WEAK_FAILS_ON = re.compile(r"\bNone\s*=>\s*(?:return\s+)?(?:[\w:]+::)?Continue\b")
+
+
 def rule_repeating_source_without_weak_exit(src: Source):
     """A repeating source whose id is dropped stops only when its closure returns Break."""
     for m in REPEATING_SOURCE.finditer(src.text):
@@ -751,14 +780,22 @@ def rule_repeating_source_without_weak_exit(src: Source):
         closure = top_level_arguments(arg)[-1].strip()
         if re.fullmatch(r"\w+", closure):
             local = list(
-                re.finditer(rf"\blet\s+(?:mut\s+)?{closure}\s*=", src.text[: m.start()])
+                re.finditer(
+                    rf"\blet\s+(?:mut\s+)?{re.escape(closure)}\s*(?::[^=;]*)?=(?!=)",
+                    src.text[: m.start()],
+                )
             )
             if not local:
                 continue  # a fn item captures nothing
             closure = statement_after(src.text, local[-1].end())
+        closure = re.sub(r'"(?:\\.|[^"\\])*"', '""', closure)  # words in strings
         if "Continue" not in closure:
             continue  # returns Break every time: it runs once
-        if "Break" in closure and re.search(r"\.upgrade\(\)|#\[upgrade_or", closure):
+        if (
+            "Break" in closure
+            and re.search(r"\.upgrade\(\)|#\[upgrade_or", closure)
+            and not WEAK_FAILS_ON.search(closure)
+        ):
             continue
         yield (
             src.line_of(m.start()),
