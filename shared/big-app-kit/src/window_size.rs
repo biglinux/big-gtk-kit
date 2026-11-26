@@ -98,10 +98,15 @@ pub fn keep_window_size(window: &impl IsA<gtk::Window>, path: PathBuf) {
             };
             let path = PathBuf::clone(&path);
             gio::spawn_blocking(move || {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                let written = path
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| {
+                        big_os_kit::storage::atomic_write_private(&path, size.to_line().as_bytes())
+                    });
+                if let Err(error) = written {
+                    log::warn!("window size not kept at {}: {error}", path.display());
                 }
-                let _ = big_os_kit::storage::atomic_write_private(&path, size.to_line().as_bytes());
             });
         });
     });
