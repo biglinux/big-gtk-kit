@@ -138,6 +138,11 @@ class Program:
     def census(self, timeout: float = 30) -> dict[str, int]:
         self.serial += 1
         path = Path(f"{self.prefix}.{self.process.pid}.{self.serial}")
+        # Once reaped, its id may name another process.
+        if self.process.poll() is not None:
+            raise RuntimeError(
+                f"the program exited ({self.process.returncode}) before a census"
+            )
         os.kill(self.process.pid, signal.SIGUSR2)
         deadline = time.monotonic() + timeout
         while not path.exists():
@@ -360,10 +365,10 @@ def cycle(surface: dict, program_spec: dict, app_name: str, workdir: Path) -> st
 
 
 def sweep_surface(
-    program: Program, spec: dict, surface: dict, cycles: int, allow: dict
+    program: Program, spec: dict, surface: dict, cycles: int, warm: int, allow: dict
 ) -> dict:
     app_name = spec["atspi_name"]
-    warm = int(surface.get("warm", spec.get("warm", 2)))
+    warm = int(surface.get("warm", warm))
     outcomes = collections.Counter()
     for _ in range(warm):
         outcomes[cycle(surface, spec, app_name, program.workdir)] += 1
@@ -527,6 +532,7 @@ def main(argv=None) -> int:
     if not isinstance(cycles, int) or cycles < 1:
         print("leak_sweep: cycles must be a positive integer", file=sys.stderr)
         return 2
+    warm = spec.get("warm", 2)
     allow = {a["type"]: float(a["per_cycle"]) for a in spec.get("allow", [])}
     surfaces = [
         s
@@ -560,7 +566,9 @@ def main(argv=None) -> int:
         time.sleep(float(program_spec.get("settle", 3)))
         for surface in surfaces:
             try:
-                result = sweep_surface(program, program_spec, surface, cycles, allow)
+                result = sweep_surface(
+                    program, program_spec, surface, cycles, warm, allow
+                )
             except (
                 RuntimeError,
                 subprocess.CalledProcessError,

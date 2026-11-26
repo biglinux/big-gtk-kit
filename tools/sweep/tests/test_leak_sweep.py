@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -107,6 +108,17 @@ class Steps(unittest.TestCase):
             leak_sweep.run_step(
                 {"do": "command", "argv": ["false"], "settle": 0}, {}, "", Path(tmp), 1
             )
+
+
+class ExitedProgram(unittest.TestCase):
+    def test_census_refused_without_signal(self):
+        program = leak_sweep.Program.__new__(leak_sweep.Program)
+        program.process = subprocess.Popen(["true"])
+        program.process.wait()
+        program.prefix, program.serial = Path("unused"), 0
+        with unittest.mock.patch("os.kill") as kill, self.assertRaises(RuntimeError):
+            program.census()
+        kill.assert_not_called()
 
 
 class Spec(unittest.TestCase):
