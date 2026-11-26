@@ -26,7 +26,7 @@ use super::{
 };
 
 const SEARCH_PAGE: &str = "search";
-/// Results shown at once: the page is a list to pick from, not a catalogue.
+/// Results shown at once: the page is a list to pick from, not a catalog.
 const MOST_RESULTS: usize = 12;
 
 struct Found {

@@ -3,8 +3,9 @@
 GTK4 building blocks shared by the BigLinux Rust programs, the crates those
 programs are built on (`shared/`), and the tools that check them. A piece of
 the `big-gtk-kit` crate enters only when it is GTK-generic, used by more than
-one program or backed by a measurement, and it depends on nothing but GTK and
-libadwaita: no code of any application.
+one program or backed by a measurement, and it depends on GTK, libadwaita and
+a few small crates (gdk4-wayland, futures-channel, log), never on code of any
+application.
 
 When GTK or libadwaita gets something wrong, the kit works around it with a
 different way of doing the same thing; its code never relies on a patched

@@ -126,7 +126,7 @@ mod payload_tests {
     use super::MicrodaemonStreamFrame;
 
     #[test]
-    fn payloads_read_as_base64_or_array() {
+    fn payloads_travel_as_base64() {
         let frame = MicrodaemonStreamFrame::new(3, b"\x1b[0m ol\xc3\xa1\n".to_vec());
         let json = serde_json::to_string(&frame).expect("serialize frame");
         assert!(

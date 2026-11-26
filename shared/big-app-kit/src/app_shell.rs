@@ -440,10 +440,9 @@ where
     // Before GTK is touched, and before any thread exists: the input-method
     // module is read during toolkit initialization and cannot be changed after.
     configure_wayland_input_method();
-    // Before anything can panic: every app in the suite gets the same record, so a
-    // crash leaves a trace without each app having to remember to ask for one. See
-    // `crash_marker` for why a panic in a GTK callback is fatal rather than
-    // recoverable, and why the daemons already wrap their work and no GUI did.
+    // Before anything can panic: every program gets the same record, so a crash
+    // leaves a trace without each one asking for it. A panic in a GTK callback
+    // aborts the process (`crash_marker`).
     crate::crash_marker::install(spec.application_id());
     // Before the early answers, which print in the product's language.
     if let Some(gettext) = &spec.gettext

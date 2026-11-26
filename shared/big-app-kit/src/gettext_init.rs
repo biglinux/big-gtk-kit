@@ -35,8 +35,8 @@ pub struct GettextInit {
 impl GettextInit {
     /// Create a gettext hook for `domain`.
     ///
-    /// The `bind` function is called during AppShell boot, after GTK/libadwaita
-    /// initialization and before display CSS or the first window.
+    /// The `bind` function is called during AppShell boot on the main thread,
+    /// before GTK starts and before any other thread does.
     #[must_use]
     pub const fn new(domain: &'static str, bind: fn(&GettextInit) -> Result<(), String>) -> Self {
         Self {

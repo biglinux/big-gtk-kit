@@ -555,9 +555,8 @@ pub fn move_to_own_scope_now(pid: u32, name: &str) -> Result<(), glib::Error> {
 /// The scope unit for `pid` and the `StartTransientUnit` call that makes it;
 /// nothing for a pid that is not another program.
 fn scope_for(pid: u32, name: &str) -> Option<(String, glib::Variant)> {
-    // systemd reads PID 0 as "the caller": a launch that reported pid 0 moved the
-    // whole desktop into `app-bigshell-org.gnome.Calendar-0.scope`. Our own pid
-    // would do the same by name.
+    // systemd reads PID 0 as "the caller", which would move this whole
+    // process into the program's scope; our own pid would do the same.
     if pid == 0 || pid == std::process::id() {
         return None;
     }

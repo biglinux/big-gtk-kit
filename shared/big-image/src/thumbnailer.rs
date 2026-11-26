@@ -23,11 +23,10 @@ const DEADLINE: Duration = Duration::from_secs(20);
 /// Ceiling on any one file the command writes, as `RLIMIT_FSIZE`.
 ///
 /// Not only the PNG: glycin's loader hands the decoded frame to the
-/// thumbnailer through a memfd, and the limit applies to that too. At 16 MiB a
-/// 4K AVIF's frame was cut short, the loader died with "zbus i/o error", and no
-/// AVIF or HEIC larger than about 2K ever got a thumbnail. 512 MiB carries an
-/// 11K-square RGBA frame; the PNG that comes back is still checked against the
-/// size asked for before it is read.
+/// thumbnailer through a memfd, and the limit applies to that too, so it
+/// carries an 11K-square RGBA frame (a 4K AVIF's needs far more than 16 MiB).
+/// The PNG that comes back is still checked against the size asked for before
+/// it is read.
 const MAX_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
 /// Ceiling on the address space the command may claim.
 const MAX_ADDRESS_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;

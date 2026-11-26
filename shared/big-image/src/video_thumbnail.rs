@@ -214,8 +214,7 @@ fn extract_frame(
         |staging| -> Result<BigRgbaImage, FrameFailure> {
             let frame = staging.join("frame.png");
             // A video shorter than the seek ends before it: `ffmpeg` then
-            // succeeds and writes nothing, and a clip of 0.4 s was marked as
-            // having no picture. Its first frame is the picture instead.
+            // succeeds and writes nothing, so its first frame is the picture.
             let attempts: &[bool] = if seek { &[true, false] } else { &[false] };
             for &seek in attempts {
                 let command = crate::thumbnailer::sandboxed_command(

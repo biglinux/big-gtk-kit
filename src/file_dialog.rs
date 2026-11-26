@@ -529,74 +529,6 @@ fn dismissed(error: &glib::Error) -> bool {
     error.matches(gtk::DialogError::Dismissed) || error.matches(gtk::DialogError::Cancelled)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Two copies of the crate in one process, each counting from zero,
-    /// never ask the portal with the same token.
-    #[test]
-    fn fresh_counters_give_distinct_tokens() {
-        let (first, second) = (portal::Tokens::new(), portal::Tokens::new());
-        assert_ne!(first.next(), second.next());
-        assert_ne!(first.next(), first.next(), "and one copy never repeats");
-    }
-
-    #[test]
-    fn dismissing_is_no_file() {
-        for code in [gtk::DialogError::Dismissed, gtk::DialogError::Cancelled] {
-            let answer = one(Err(glib::Error::new(code, "closed")));
-            assert!(answer.is_ok_and(|files| files.is_empty()));
-        }
-        let failed = one(Err(glib::Error::new(gtk::DialogError::Failed, "broken")));
-        assert_eq!(
-            failed.map_err(|error| error.message().to_owned()),
-            Err("broken".to_owned())
-        );
-        let remote = gio::File::for_uri("sftp://example.invalid/a.txt");
-        let kept = one(Ok(remote.clone())).expect("a chosen file");
-        assert_eq!(kept.first().map(gio::File::uri), Some(remote.uri()));
-    }
-
-    #[test]
-    fn local_paths_keep_local_files() {
-        let local = gio::File::for_path("/srv/a b.txt");
-        let remote = gio::File::for_uri("sftp://example.invalid/a.txt");
-        assert_eq!(
-            local_paths(Ok(vec![local, remote])),
-            [PathBuf::from("/srv/a b.txt")]
-        );
-        assert!(local_paths(Ok(Vec::new())).is_empty());
-        let failed = glib::Error::new(gtk::DialogError::Failed, "broken");
-        assert!(local_paths(Err(failed)).is_empty());
-    }
-
-    /// GTK's own suffix filter matches the same names: an oracle for the glob.
-    #[test]
-    fn suffix_globs_match_any_case() {
-        assert_eq!(suffix_glob("mp3"), "*.[mM][pP]3");
-        assert_eq!(suffix_glob("tar.gz"), "*.[tT][aA][rR].[gG][zZ]");
-        assert_eq!(suffix_glob("a*b"), "*.[aA][*][bB]");
-        let request = FileRequest::open_files().offering_suffixes("Audio", &["mp3", "ogg"]);
-        assert_eq!(request.types[0].patterns, ["*.[mM][pP]3", "*.[oO][gG][gG]"]);
-    }
-
-    #[test]
-    fn portal_filters_keep_rule_kinds() {
-        // The rule kind is a bare number on the wire, and getting it wrong
-        // gives a dialog that silently matches nothing.
-        let types = [FileType {
-            label: "Text Files".to_owned(),
-            patterns: vec!["*.txt".to_owned()],
-            mime_types: vec!["text/plain".to_owned()],
-        }];
-        assert_eq!(
-            portal_filters(&types).to_string(),
-            "[('Text Files', [(uint32 0, '*.txt'), (1, 'text/plain')])]"
-        );
-    }
-}
-
 /// Speaking `org.freedesktop.portal.FileChooser` directly.
 ///
 /// GTK only reaches the portal for sandboxed applications, so an unsandboxed
@@ -754,5 +686,73 @@ mod portal {
             .iter()
             .map(|uri| gio::File::for_uri(uri))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two copies of the crate in one process, each counting from zero,
+    /// never ask the portal with the same token.
+    #[test]
+    fn fresh_counters_give_distinct_tokens() {
+        let (first, second) = (portal::Tokens::new(), portal::Tokens::new());
+        assert_ne!(first.next(), second.next());
+        assert_ne!(first.next(), first.next(), "and one copy never repeats");
+    }
+
+    #[test]
+    fn dismissing_is_no_file() {
+        for code in [gtk::DialogError::Dismissed, gtk::DialogError::Cancelled] {
+            let answer = one(Err(glib::Error::new(code, "closed")));
+            assert!(answer.is_ok_and(|files| files.is_empty()));
+        }
+        let failed = one(Err(glib::Error::new(gtk::DialogError::Failed, "broken")));
+        assert_eq!(
+            failed.map_err(|error| error.message().to_owned()),
+            Err("broken".to_owned())
+        );
+        let remote = gio::File::for_uri("sftp://example.invalid/a.txt");
+        let kept = one(Ok(remote.clone())).expect("a chosen file");
+        assert_eq!(kept.first().map(gio::File::uri), Some(remote.uri()));
+    }
+
+    #[test]
+    fn local_paths_keep_local_files() {
+        let local = gio::File::for_path("/srv/a b.txt");
+        let remote = gio::File::for_uri("sftp://example.invalid/a.txt");
+        assert_eq!(
+            local_paths(Ok(vec![local, remote])),
+            [PathBuf::from("/srv/a b.txt")]
+        );
+        assert!(local_paths(Ok(Vec::new())).is_empty());
+        let failed = glib::Error::new(gtk::DialogError::Failed, "broken");
+        assert!(local_paths(Err(failed)).is_empty());
+    }
+
+    /// GTK's own suffix filter matches the same names: an oracle for the glob.
+    #[test]
+    fn suffix_globs_match_any_case() {
+        assert_eq!(suffix_glob("mp3"), "*.[mM][pP]3");
+        assert_eq!(suffix_glob("tar.gz"), "*.[tT][aA][rR].[gG][zZ]");
+        assert_eq!(suffix_glob("a*b"), "*.[aA][*][bB]");
+        let request = FileRequest::open_files().offering_suffixes("Audio", &["mp3", "ogg"]);
+        assert_eq!(request.types[0].patterns, ["*.[mM][pP]3", "*.[oO][gG][gG]"]);
+    }
+
+    #[test]
+    fn portal_filters_keep_rule_kinds() {
+        // The rule kind is a bare number on the wire, and getting it wrong
+        // gives a dialog that silently matches nothing.
+        let types = [FileType {
+            label: "Text Files".to_owned(),
+            patterns: vec!["*.txt".to_owned()],
+            mime_types: vec!["text/plain".to_owned()],
+        }];
+        assert_eq!(
+            portal_filters(&types).to_string(),
+            "[('Text Files', [(uint32 0, '*.txt'), (1, 'text/plain')])]"
+        );
     }
 }

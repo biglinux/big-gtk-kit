@@ -24,7 +24,7 @@ const PNG_SIDE: i32 = 512;
 /// A widget drawing `text` as a QR code, or nothing when it cannot be encoded.
 ///
 /// `None` rather than a broken picture: the only way this fails is a payload
-/// longer than the largest QR version holds, and a grey square a camera cannot
+/// longer than the largest QR version holds, and a gray square a camera cannot
 /// read is worse than a sentence saying so.
 ///
 /// `accessible_label` is what a screen reader says. A code is not decoration,

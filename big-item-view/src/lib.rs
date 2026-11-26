@@ -145,7 +145,7 @@ pub struct ItemContent {
     pub badges: Vec<Badge>,
     /// The item's own check, in [`TickMode::Check`].
     pub checked: Option<bool>,
-    /// Drawn faded and grey, e.g. a file marked to be moved.
+    /// Drawn faded and gray, e.g. a file marked to be moved.
     pub dimmed: bool,
     /// What assistive technology reads as the item's name; the title when unset.
     pub accessible_label: Option<String>,

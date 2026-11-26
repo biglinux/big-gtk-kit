@@ -329,10 +329,9 @@ fn encode(
     jpeg_quality: u8,
 ) -> Result<Vec<u8>, BigImageError> {
     let image = &in_srgb(image)?;
-    // A JPEG has no alpha channel, and the encoder says so by refusing the
-    // buffer rather than by flattening it: every save as .jpg failed with
-    // "does not support the color type Rgba8" until the flattening happened
-    // here, where the color to show through is a decision and not a default.
+    // A JPEG has no alpha channel, and the encoder refuses an RGBA buffer
+    // rather than flattening it: the flattening is here, where the color to
+    // show through is a decision and not a default.
     // An opaque picture is written without the alpha channel too: every byte
     // of it would be 255, and a PNG carrying them is a third larger.
     let pixbuf = if format.keeps_alpha() && !image.opaque {
