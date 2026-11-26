@@ -564,10 +564,14 @@ fn capture_dialog(
             let _ = input.send(BigShortcutEditorInput::CancelCapture);
             return glib::Propagation::Stop;
         }
-        // A bare Tab is the keyboard's way to Replace while a conflict shows it.
+        // Tab and Shift+Tab are the keyboard's way to Replace and back while a
+        // conflict shows it.
         let replace_shown = replace.upgrade().is_some_and(|button| button.is_visible());
         let held = gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK;
-        if replace_shown && key == gdk::Key::Tab && !modifiers.intersects(held) {
+        if replace_shown
+            && matches!(key, gdk::Key::Tab | gdk::Key::ISO_Left_Tab)
+            && !modifiers.intersects(held)
+        {
             return glib::Propagation::Proceed;
         }
         let Some(event) = controller
@@ -873,10 +877,21 @@ fn parse_accel(accel: &str) -> Option<(gdk::Key, gdk::ModifierType)> {
     gtk::accelerator_parse(&written).or_else(|| gtk::accelerator_parse(written.to_lowercase()))
 }
 
-/// Whether `key` is a character without case, other than a space, so a Shift
-/// held for it chose the character (`plus`, `question`, `exclam`) and is no
-/// part of the shortcut. A letter keeps its Shift, as Ctrl+Shift+Z does.
+/// Whether a Shift held for `key` chose it, so GTK sets it aside: a
+/// [`caseless_character`] the keyboard's layout types only with Shift (`plus`,
+/// `question`). A key reached without Shift keeps it (`bracketleft` on US and
+/// ABNT2, the keypad's).
 fn shift_types(key: gdk::Key) -> bool {
+    caseless_character(key)
+        && gdk::Display::default()
+            .and_then(|display| display.map_keyval(key))
+            .is_some_and(|places| places.iter().all(|place| place.level() > 0))
+}
+
+/// Whether `key` is a character without case, other than a space: a Shift
+/// that chose it is no part of a shortcut, while a letter keeps its Shift, as
+/// Ctrl+Shift+Z does.
+fn caseless_character(key: gdk::Key) -> bool {
     key.to_lower() == key.to_upper()
         && key
             .to_unicode()
@@ -921,7 +936,8 @@ fn key_accel(
     if modifiers.contains(gdk::ModifierType::ALT_MASK) {
         accel.push_str("<Alt>");
     }
-    let shift_chose_key = consumed.contains(gdk::ModifierType::SHIFT_MASK) && shift_types(key);
+    let shift_chose_key =
+        consumed.contains(gdk::ModifierType::SHIFT_MASK) && caseless_character(key);
     if modifiers.contains(gdk::ModifierType::SHIFT_MASK) && !shift_chose_key {
         accel.push_str("<Shift>");
     }
@@ -1011,6 +1027,9 @@ mod tests {
             assert!(!same_accel("<Ctrl><Shift>z", "<Ctrl>z"));
             assert!(!same_accel("<Shift>space", "space"));
             assert!(!same_accel("<Shift>F5", "F5"));
+            // Reached without Shift on the session's layout (US, ABNT2).
+            assert!(!same_accel("<Ctrl><Shift>bracketleft", "<Ctrl>bracketleft"));
+            assert!(!same_accel("<Shift>KP_Subtract", "KP_Subtract"));
             assert!(same_accel("", " "));
             assert!(!same_accel("", "n"));
         });
