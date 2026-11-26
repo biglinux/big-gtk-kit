@@ -278,7 +278,8 @@ impl Sandbox {
             });
         }
 
-        // Last: the seccomp filter refuses the calls made before it.
+        // After the descriptors: the seccomp filter refuses the calls made
+        // before them. A nice value set later changes this process alone.
         if let Some(confinement) = confinement {
             // SAFETY: setrlimit, prctl, landlock_restrict_self and seccomp
             // are plain system calls on values built before the fork.
