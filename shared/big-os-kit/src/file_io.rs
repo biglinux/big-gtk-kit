@@ -149,10 +149,13 @@ impl Drop for OwnedPrivateDirectory {
 
 /// Remove the directories `{prefix}-{pid}-{sequence}` in `parent` whose process
 /// has exited: mode `0700` and this user's, as [`OwnedPrivateDirectory`] makes
-/// them. A process id is this machine's, so nothing is removed on a network
-/// filesystem, where the owner may be running on another one. A live process
-/// that took a dead owner's id keeps the directory, which costs only space.
+/// them, and unchanged for an hour. A process id is this machine's, so
+/// nothing is removed on a network filesystem, where the owner may be running
+/// on another one; the hour covers an owner in another PID namespace, whose
+/// id names no process here. A live process that took a dead owner's id
+/// keeps the directory, which costs only space.
 fn remove_abandoned(parent: &Path, prefix: &str) {
+    const ABANDONED_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     let on_network = fs::canonicalize(parent).is_ok_and(|parent| {
         crate::mount_table::mount_holding(&crate::mount_table::mountinfo(), &parent)
@@ -186,8 +189,14 @@ fn remove_abandoned(parent: &Path, prefix: &str) {
         let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
             continue;
         };
+        let unchanged = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= ABANDONED_AGE);
         if metadata.is_dir()
-            && metadata.uid() == crate::users::own_uid()
+            && unchanged
+            && metadata.uid() == crate::microdaemon::current_effective_user_id()
             && metadata.permissions().mode() & 0o7777 == 0o700
         {
             let _ = fs::remove_dir_all(entry.path());

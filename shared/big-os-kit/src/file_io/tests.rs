@@ -197,6 +197,12 @@ fn abandoned_staging_is_cleared() {
         let staging = parent.join(name);
         fs::create_dir_all(&staging).unwrap();
         fs::write(staging.join("archive.zip"), b"half").unwrap();
+        // Left two hours ago.
+        let left = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+        fs::File::open(&staging)
+            .unwrap()
+            .set_modified(left)
+            .unwrap();
         fs::set_permissions(&staging, fs::Permissions::from_mode(mode)).unwrap();
         staging
     };
@@ -214,12 +220,17 @@ fn abandoned_staging_is_cleared() {
     .map(|name| private(name, 0o700));
     // init never exits.
     let live = private(".stage-1-0", 0o700);
+    // An owner in another PID namespace looks dead here but still writes.
+    let recent = parent.join(".stage-999999998-0");
+    fs::create_dir_all(&recent).unwrap();
+    fs::set_permissions(&recent, fs::Permissions::from_mode(0o700)).unwrap();
     let other = private(".other-999999999-0", 0o700);
 
     let staged = OwnedPrivateDirectory::create(&parent, ".stage").unwrap();
 
     assert!(!dead.exists());
     assert!(mine.exists() && shared.exists() && live.exists() && other.exists());
+    assert!(recent.exists());
     assert!(lookalikes.iter().all(|lookalike| lookalike.exists()));
     drop(staged);
     let _ = fs::remove_dir_all(parent);
