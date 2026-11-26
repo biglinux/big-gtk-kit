@@ -59,6 +59,9 @@ pub enum NameRefused {
     Characters,
     /// Something is already shared under this name, ignoring case.
     Taken,
+    /// An account on this computer has this name, ignoring case; `net`
+    /// refuses it.
+    Account,
 }
 
 impl NameRefused {
@@ -72,6 +75,7 @@ impl NameRefused {
                 gettext("That name cannot be used on a network. Letters, numbers and spaces work.")
             }
             Self::Taken => gettext("Something is already shared under that name"),
+            Self::Account => gettext("An account on this computer has that name"),
         }
     }
 }
@@ -240,18 +244,26 @@ pub fn check_name(wanted: &str, others: &[Share]) -> Result<(), NameRefused> {
     {
         return Err(NameRefused::Characters);
     }
-    // Samba names a share's file by the name in lower case, so a second name
-    // that differs only in case, accented letters included, replaces the first.
-    let folded = lower_case(wanted);
-    if others.iter().any(|share| lower_case(&share.name) == folded) {
+    if crate::users::id_of(&lower_case(wanted)).is_some() {
+        return Err(NameRefused::Account);
+    }
+    if others.iter().any(|share| same_name(&share.name, wanted)) {
         return Err(NameRefused::Taken);
     }
     Ok(())
 }
 
-/// `name` in lower case one character at a time, as Samba's `strlower_m`
-/// does: no final sigma, and `İ` becomes `i`, the first of the two
-/// characters Rust gives it.
+/// Whether `a` and `b` name one share: Samba names a share's file by the name
+/// in lower case, so adding one of them replaces the other and deleting one
+/// deletes the other. A rename to a name that is the same skips the delete.
+#[must_use]
+pub fn same_name(a: &str, b: &str) -> bool {
+    lower_case(a) == lower_case(b)
+}
+
+/// `name` in lower case one character at a time, with no final sigma: a
+/// superset of Samba's table, which folds no character this leaves alone and
+/// keeps a few apart (`İ`, `Ș`) that this folds.
 fn lower_case(name: &str) -> String {
     name.chars()
         .map(|character| character.to_lowercase().next().unwrap_or(character))
@@ -365,6 +377,9 @@ mod tests {
         let accented = parse("[Músicas]\npath=/srv/music\n");
         assert_eq!(check_name("MÚSICAS", &accented), Err(NameRefused::Taken));
         assert_eq!(check_name("Musicas", &accented), Ok(()));
+        assert_eq!(check_name("ROOT", &others), Err(NameRefused::Account));
+        assert!(same_name("Músicas", "MÚSICAS"));
+        assert!(!same_name("Músicas", "Musicas"));
     }
 
     #[test]
