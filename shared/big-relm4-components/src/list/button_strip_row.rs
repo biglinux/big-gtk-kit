@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! BigLinux action row with a compact suffix button strip.
+//! An action row with a strip of buttons at its end.
 
 use adw::prelude::*;
 use relm4::gtk;
@@ -12,22 +12,22 @@ use super::row_core::row_text;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BigButtonStripRowSpec {
-    /// Title.
+    /// The row's title, shown as plain text unless `allow_markup`.
     pub title: String,
-    /// Subtitle.
+    /// The line under the title, shown as `title` is.
     pub subtitle: Option<String>,
-    /// Prefix icon name.
+    /// The themed icon before the title.
     pub prefix_icon_name: Option<String>,
-    /// Spacing.
+    /// Pixels between the buttons; a negative value is 0.
     pub spacing: i32,
-    /// Activatable.
+    /// Whether the row itself answers a click.
     pub activatable: bool,
-    /// Allow markup.
+    /// Whether `title` and `subtitle` are Pango markup rather than plain text.
     pub allow_markup: bool,
 }
 
 impl BigButtonStripRowSpec {
-    /// Creates a new instance.
+    /// A row titled `title` in plain text, with no subtitle or icon.
     #[must_use]
     pub fn new(title: impl Into<String>) -> Self {
         Self {
@@ -40,47 +40,35 @@ impl BigButtonStripRowSpec {
         }
     }
 
-    /// Configure the `subtitle` setting and return the updated builder.
-    ///
-    /// The supplied `subtitle` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigButtonStripRowSpec`].
+    /// Show `subtitle` under the title.
     #[must_use]
     pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
         self.subtitle = Some(subtitle.into());
         self
     }
 
-    /// Configure the `prefix_icon_name` setting and return the updated builder.
-    ///
-    /// The supplied `icon_name` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigButtonStripRowSpec`].
+    /// Show the themed icon `icon_name` before the title.
     #[must_use]
     pub fn prefix_icon_name(mut self, icon_name: impl Into<String>) -> Self {
         self.prefix_icon_name = Some(icon_name.into());
         self
     }
 
-    /// Configure the `spacing` setting and return the updated builder.
-    ///
-    /// The supplied `spacing` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigButtonStripRowSpec`].
+    /// Put `spacing` pixels between the buttons; a negative value is 0.
     #[must_use]
     pub fn spacing(mut self, spacing: i32) -> Self {
         self.spacing = spacing.max(0);
         self
     }
 
-    /// Configure the `activatable` setting and return the updated builder.
-    ///
-    /// The supplied `activatable` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigButtonStripRowSpec`].
+    /// Let the row itself answer a click.
     #[must_use]
     pub fn activatable(mut self, activatable: bool) -> Self {
         self.activatable = activatable;
         self
     }
 
-    /// Resolve the spec into its display-free runtime form.
+    /// What the row is built with: the text as GTK reads it, the spacing clamped.
     #[must_use]
     pub fn resolved(&self) -> BigButtonStripRowResolved {
         BigButtonStripRowResolved {
@@ -96,19 +84,20 @@ impl BigButtonStripRowSpec {
     }
 }
 
-/// Pure resolved row contract. Safe to test without GTK/display.
+/// What a [`BigButtonStripRowSpec`] builds its row with, computed without a
+/// display.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BigButtonStripRowResolved {
-    /// Title.
+    /// The title as Pango markup.
     pub title: String,
-    /// Subtitle.
+    /// The subtitle as Pango markup.
     pub subtitle: Option<String>,
-    /// Prefix icon name.
+    /// The themed icon before the title.
     pub prefix_icon_name: Option<String>,
-    /// Spacing.
+    /// Pixels between the buttons, never negative.
     pub spacing: i32,
-    /// Activatable.
+    /// Whether the row itself answers a click.
     pub activatable: bool,
 }
 
@@ -120,7 +109,7 @@ pub struct BigButtonStripRow {
 }
 
 impl BigButtonStripRow {
-    /// Creates a new instance.
+    /// Build the row `spec` describes, with an empty strip.
     #[must_use]
     pub fn new(spec: BigButtonStripRowSpec) -> Self {
         let resolved = spec.resolved();
@@ -153,25 +142,19 @@ impl BigButtonStripRow {
         self.strip.append(widget);
     }
 
-    /// Return a reference to the `root` exposed by this [`BigButtonStripRow`].
-    ///
-    /// Useful when callers need to bind signals, query state, or compose the
-    /// widget into a larger surface without taking ownership.
+    /// The row, to place in a list.
     #[must_use]
     pub fn root(&self) -> &adw::ActionRow {
         &self.root
     }
 
-    /// Return a reference to the `strip` exposed by this [`BigButtonStripRow`].
-    ///
-    /// Useful when callers need to bind signals, query state, or compose the
-    /// widget into a larger surface without taking ownership.
+    /// The horizontal box holding the buttons.
     #[must_use]
     pub fn strip(&self) -> &gtk::Box {
         &self.strip
     }
 
-    /// Consume `self` and yield the underlying root.
+    /// The row, to place in a list, giving up the wrapper.
     #[must_use]
     pub fn into_root(self) -> adw::ActionRow {
         self.root

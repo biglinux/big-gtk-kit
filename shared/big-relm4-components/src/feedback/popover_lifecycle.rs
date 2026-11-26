@@ -31,7 +31,7 @@ use relm4::gtk::prelude::*;
 /// put back (a tab moved or brought back, a window hidden and shown again)
 /// unrealizes and realizes again, and the popover it lost is attached again
 /// then. Without that the next `popup()` realizes a popover with no window
-/// under it, and GTK aborts the whole desktop.
+/// under it, and GTK aborts the process.
 pub fn unparent_popover_on_parent_teardown(parent: &gtk::Widget, popover: &impl IsA<gtk::Popover>) {
     let popover: &gtk::Popover = popover.upcast_ref();
     let popover_weak = popover.downgrade();

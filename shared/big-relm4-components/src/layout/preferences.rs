@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! Preferences page group helpers.
+//! The group of rows on a preferences page.
 
 use adw::prelude::*;
 
-/// Display-free specification describing big preferences group behavior.
+/// A preferences group's heading and visibility, built without a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BigPreferencesGroupSpec {
-    /// Title.
+    /// The heading over the rows; empty shows none.
     pub title: String,
-    /// Description.
+    /// The line under the heading.
     pub description: Option<String>,
-    /// Visible.
+    /// Whether the group starts shown.
     pub visible: bool,
 }
 
 impl BigPreferencesGroupSpec {
-    /// Creates a new instance.
+    /// A shown group headed `title`, with no description.
     #[must_use]
     pub fn new(title: impl Into<String>) -> Self {
         Self {
@@ -27,33 +27,27 @@ impl BigPreferencesGroupSpec {
         }
     }
 
-    /// Creates a group without a title for button strips or compact controls.
+    /// A group without a heading, for a button strip or compact controls.
     #[must_use]
     pub fn untitled() -> Self {
         Self::new("")
     }
 
-    /// Configure the `description` setting and return the updated builder.
-    ///
-    /// The supplied `description` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigPreferencesGroupSpec`].
+    /// Show `description` under the heading.
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
-    /// Configure the `visible` setting and return the updated builder.
-    ///
-    /// The supplied `visible` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigPreferencesGroupSpec`].
+    /// Start the group shown or hidden.
     #[must_use]
     pub fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
-    /// Finalize the builder and produce the configured value.
+    /// Build the group this describes.
     #[must_use]
     pub fn build(&self) -> adw::PreferencesGroup {
         let mut builder = adw::PreferencesGroup::builder().title(&self.title);

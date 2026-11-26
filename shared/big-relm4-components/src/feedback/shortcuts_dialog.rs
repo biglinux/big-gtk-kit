@@ -3,10 +3,8 @@
 
 //! Rows and sections of the keyboard-shortcuts dialog.
 //!
-//! An app describes the keys it lists; `big_workspace::keymap_dialog` turns
-//! them into rows of its searchable dialog. Callers pass already-translated
-//! section titles and row labels; i18n stays application side per crate
-//! convention.
+//! A program describes in these types the keys its shortcuts dialog lists, with
+//! section titles and row labels already translated.
 
 /// One shortcut row inside a section.
 ///
@@ -51,9 +49,6 @@ impl BigShortcutRow {
 }
 
 /// One titled section of shortcut rows.
-///
-/// `title` and each row label are already translated by the caller; i18n stays
-/// application side per crate convention.
 pub struct BigShortcutsSection {
     /// Translated section heading, e.g. "Tabs" or "Files".
     pub title: String,

@@ -584,21 +584,23 @@ pub(super) fn text_column(item: &BigMenuActionItem) -> (gtk::Box, gtk::Label) {
 }
 
 pub(super) fn leading_icon(icon_name: &str, destructive: bool) -> gtk::Image {
-    // Menus other programs install (service menus, Nemo actions) may name an
-    // icon by its file.
-    let icon = if icon_name.starts_with('/') {
-        gtk::Image::from_gicon(&gio::FileIcon::new(&gio::File::for_path(icon_name)))
+    let icon = gtk::Image::new();
+    // Before the file below: the sandbox decodes it at the image's pixel size.
+    icon.set_pixel_size(LEADING_SIZE);
+    if icon_name.starts_with('/') {
+        // Menus other programs install (service menus, file manager actions)
+        // may name an icon by its file, which the image sandbox decodes.
+        big_image::icon::set_icon_file(&icon, std::path::Path::new(icon_name));
     } else if icon_name.starts_with(". ") {
         // An application's icon as `g_icon_to_string` writes a themed icon
         // with fallbacks (". GThemedIcon org.app org.app-symbolic").
-        gio::Icon::for_string(icon_name).map_or_else(
-            |_| gtk::Image::from_icon_name("application-x-executable"),
-            |icon| gtk::Image::from_gicon(&icon),
-        )
+        match gio::Icon::for_string(icon_name) {
+            Ok(gicon) => icon.set_from_gicon(&gicon),
+            Err(_) => icon.set_icon_name(Some("application-x-executable")),
+        }
     } else {
-        gtk::Image::from_icon_name(icon_name)
-    };
-    icon.set_pixel_size(LEADING_SIZE);
+        icon.set_icon_name(Some(icon_name));
+    }
     icon.set_valign(gtk::Align::Center);
     if destructive {
         icon.add_css_class("error");

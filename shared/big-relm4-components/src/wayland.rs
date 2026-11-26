@@ -5,8 +5,9 @@
 //! that belongs to the module asking.
 //!
 //! gdk4-wayland keeps the `Connection` it makes in the `GdkDisplay`, under a
-//! fixed name (`gtk-rs-wayland-display-connection-quark`). In `big-host` each
-//! module carries its own copy of wayland-client, so a module handed another's
+//! fixed name (`gtk-rs-wayland-display-connection-quark`). In a process that
+//! loads modules as shared libraries, each module carries its own copy of
+//! wayland-client, so a module handed another's
 //! `Connection` dispatches its objects with the wrong dispatcher and panics
 //! where unwinding is impossible. Here each module keeps its own connection,
 //! in a static of its own copy of this crate.
@@ -36,7 +37,7 @@ pub fn connection(display: &WaylandDisplay) -> Option<Connection> {
             return Some(connection.clone());
         }
         // SAFETY: `raw` is GTK's live `wl_display`, which outlives every
-        // window of the desktop and so every object made through this.
+        // window of the process and so every object made through this.
         let backend =
             unsafe { wayland_backend::sys::client::Backend::from_foreign_display(raw.cast()) };
         let connection = Connection::from_backend(backend);

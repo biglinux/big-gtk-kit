@@ -2,7 +2,7 @@ id: rgb-hex
 language: Rust
 severity: error
 message: Write a GDK color as #rrggbb with big_relm4_components::css::rgb_hex
-note: Seven programs wrote the same channel rounding and format by hand; the owner clamps and rounds each channel once.
+note: The owner clamps and rounds each channel in one place, so every program writes a color the same way.
 # The owners live in the shared crates; the kit's own crates sit below them.
 files:
   - shared/**

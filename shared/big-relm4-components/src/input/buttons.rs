@@ -43,10 +43,10 @@ pub fn flat_icon_toggle(icon: &str, label: &str, action: &str) -> gtk::ToggleBut
 
 /// Flat icon menu button with tooltip and accessible label.
 ///
-/// Unlike the action variants this takes no action name: menu buttons carry a
-/// menu model or popover, which the caller attaches afterwards (for example via
-/// [`gtk::MenuButton::set_menu_model`] or
-/// [`gtk::MenuButton::set_popover`]).
+/// Unlike the action variants this takes no action name: the caller attaches
+/// the menu afterwards, with
+/// [`set_menu_model_action_popover`](crate::layout::hamburger_menu::set_menu_model_action_popover)
+/// or [`gtk::MenuButton::set_popover`].
 pub fn flat_icon_menu_button(icon: &str, label: &str) -> gtk::MenuButton {
     let button = gtk::MenuButton::builder()
         .icon_name(icon)

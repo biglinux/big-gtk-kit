@@ -1667,3 +1667,24 @@ fn native_items_are_named() {
         window.destroy();
     });
 }
+
+/// A row icon another program names by its file reaches the row as a texture
+/// the image sandbox decoded, never through GTK's in-process loader.
+#[test]
+fn file_icon_loads_sandboxed() {
+    big_testkit::harness::require_gtk_test(|| {
+        let dir = glib::mkdtemp(std::env::temp_dir().join("big-menu-icon-XXXXXX"))
+            .expect("temporary directory");
+        let path = dir.join("icon.png");
+        let surface = gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, 32, 32)
+            .expect("a surface");
+        surface
+            .write_to_png(&mut std::fs::File::create(&path).expect("icon file"))
+            .expect("a PNG");
+        let icon = action_row::leading_icon(path.to_str().expect("a UTF-8 path"), false);
+        let decoded =
+            big_testkit::harness::pump_until(|| icon.storage_type() == gtk::ImageType::Paintable);
+        std::fs::remove_dir_all(dir).expect("temporary directory removed");
+        assert!(decoded, "the icon is held as {:?}", icon.storage_type());
+    });
+}

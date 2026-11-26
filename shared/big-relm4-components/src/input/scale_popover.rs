@@ -11,31 +11,36 @@ const DEFAULT_MARGIN_VERTICAL: i32 = 6;
 const DEFAULT_SPACING: i32 = 6;
 const DEFAULT_HEIGHT: i32 = 160;
 
-/// Display-free specification describing big vertical scale popover behavior.
+/// The scale in a [`vertical_scale_popover`], built without a display.
+///
+/// What a scale cannot take is corrected as the popover is built: the initial
+/// value is clamped into the range, and a value that is not finite, a maximum
+/// not above the minimum, and a step, height or spacing out of range take a
+/// default.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BigVerticalScalePopoverSpec {
-    /// Title.
+    /// The caption over the scale.
     pub title: String,
-    /// Accessible label.
+    /// The scale's name for a screen reader.
     pub accessible_label: String,
-    /// Minimum.
+    /// The lowest value.
     pub minimum: f64,
-    /// Maximum.
+    /// The highest value.
     pub maximum: f64,
-    /// Step.
+    /// What an arrow or page key moves the value by.
     pub step: f64,
-    /// Initial.
+    /// The value the scale opens at.
     pub initial: f64,
-    /// Height request.
+    /// The scale's height, in pixels.
     pub height_request: i32,
-    /// Inverted.
+    /// Whether the maximum is at the top.
     pub inverted: bool,
-    /// Spacing.
+    /// Pixels between the caption and the scale.
     pub spacing: i32,
 }
 
 impl BigVerticalScalePopoverSpec {
-    /// Creates a new instance.
+    /// A scale from 0 to 1 in steps of 0.1, at 0, with its maximum at the top.
     #[must_use]
     pub fn new(title: impl Into<String>, accessible_label: impl Into<String>) -> Self {
         Self {
@@ -51,10 +56,7 @@ impl BigVerticalScalePopoverSpec {
         }
     }
 
-    /// Configure the `range` setting and return the updated builder.
-    ///
-    /// The supplied `minimum` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigVerticalScalePopoverSpec`].
+    /// Range the scale from `minimum` to `maximum`, moving by `step`.
     #[must_use]
     pub fn range(mut self, minimum: f64, maximum: f64, step: f64) -> Self {
         self.minimum = minimum;
@@ -63,20 +65,14 @@ impl BigVerticalScalePopoverSpec {
         self
     }
 
-    /// Configure the `initial` setting and return the updated builder.
-    ///
-    /// The supplied `initial` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigVerticalScalePopoverSpec`].
+    /// Open the scale at `initial`.
     #[must_use]
     pub fn initial(mut self, initial: f64) -> Self {
         self.initial = initial;
         self
     }
 
-    /// Configure the `height_request` setting and return the updated builder.
-    ///
-    /// The supplied `height_request` replaces any stored value; chain
-    /// further `with_*` / setter calls to compose the full [`BigVerticalScalePopoverSpec`].
+    /// Make the scale `height_request` pixels tall.
     #[must_use]
     pub fn height_request(mut self, height_request: i32) -> Self {
         self.height_request = height_request;
@@ -86,7 +82,8 @@ impl BigVerticalScalePopoverSpec {
 
 /// Build a popover containing a vertical [`gtk::Scale`] anchored to
 /// `parent`. The returned pair is `(popover, scale)`; the caller
-/// owns connecting `value-changed` and showing/hiding the popover.
+/// owns connecting `value-changed` and showing and hiding the popover, which
+/// a click outside it does not close.
 pub fn vertical_scale_popover(
     parent: &impl IsA<gtk::Widget>,
     spec: BigVerticalScalePopoverSpec,
@@ -99,10 +96,8 @@ pub fn vertical_scale_popover(
         &popover,
     );
     popover.set_position(gtk::PositionType::Top);
-    // Non-grabbing, like `build_vertical_popover_shell`: an autohide popover takes
-    // a Wayland grab that anchors it to the window origin (top-left) instead of
-    // the control. Every caller drives this through a hover group that pops it
-    // down on leave, so no grab is needed.
+    // Non-grabbing: an autohide popover takes a Wayland grab that anchors it to
+    // the window origin (top-left) instead of the control.
     popover.set_autohide(false);
 
     let content = gtk::Box::builder()
