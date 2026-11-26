@@ -40,8 +40,8 @@ type GtkTestJob = Box<dyn FnOnce() + Send + 'static>;
 
 /// Run a GTK test, and fail if the harness was enabled but did not run it.
 ///
-/// Outside a display the body is skipped. Under `BIG_RUN_UI_SMOKE` a harness
-/// that did not start would otherwise turn every widget test into a silent
+/// Without `BIG_RUN_UI_SMOKE` the body is skipped. With it, a harness that
+/// did not start would otherwise turn every widget test into a silent
 /// pass. [`run_gtk_test`] is for a body whose skipping does not matter.
 ///
 /// # Panics
@@ -135,31 +135,6 @@ fn gtk_test_runner() -> Option<mpsc::Sender<GtkTestJob>> {
                 .expect("initialize dedicated GTK test thread")
         })
         .clone()
-}
-
-/// The example module's library, `libbigexample_module.so`, beside this test
-/// binary in Cargo's target directory.
-///
-/// # Panics
-///
-/// Panics when it is not built: a module test that returned early instead would
-/// pass without loading anything. Build it first.
-#[must_use]
-#[expect(
-    clippy::expect_used,
-    reason = "a test harness: its panics are the failures it reports"
-)]
-pub fn example_module_library() -> std::path::PathBuf {
-    let exe = std::env::current_exe().expect("the test binary has a path");
-    exe.ancestors()
-        .flat_map(|ancestor| {
-            [
-                ancestor.join("libbigexample_module.so"),
-                ancestor.join("deps/libbigexample_module.so"),
-            ]
-        })
-        .find(|candidate| candidate.is_file())
-        .expect("libbigexample_module.so is built (cargo build -p bigexample-module)")
 }
 
 /// Resident set size (KiB) of this process from `/proc/self/status` `VmRSS`.
@@ -694,7 +669,7 @@ fn announce_ui_skip() {
         return;
     }
     announce_skip(
-        "UI tests were SKIPPED (no display). They pass vacuously here.\n      \
+        "UI tests were SKIPPED (BIG_RUN_UI_SMOKE is unset). They pass vacuously here.\n      \
          Run them with the repository's headless-gate.sh: headless-gate.sh cargo test <args>",
     );
 }
