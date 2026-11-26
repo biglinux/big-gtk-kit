@@ -92,7 +92,12 @@ mod tests {
             Some("Documento de texto & notas")
         );
         assert_eq!(translated_comment("text/plain", &["C"], &dirs), None);
-        assert_eq!(translated_comment("text/../plain", &languages, &dirs), None);
+        // Files a climbing name would reach: `mime/x.xml` and `x.xml`.
+        let stray = "<comment xml:lang=\"pt\">fora</comment>\n";
+        std::fs::write(root.join("mime/x.xml"), stray).unwrap();
+        std::fs::write(root.join("x.xml"), stray).unwrap();
+        assert_eq!(translated_comment("text/../x", &languages, &dirs), None);
+        assert_eq!(translated_comment("../x", &languages, &dirs), None);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
