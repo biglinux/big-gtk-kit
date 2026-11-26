@@ -10,10 +10,21 @@ pub fn apply_transformation(
     transform(icc_profile, memory_format, mmap).map_err(Into::into)
 }
 
-fn transformation<P: lcms2::Pod>(
+/// Pixels each thread transforms, at least: about 1.3 ms of lcms2 work, well
+/// above what spawning the thread costs. A thumbnail stays on the calling
+/// thread instead of paying one transform build per core.
+const PIXELS_PER_THREAD: usize = 131_072;
+
+/// The transform from `icc_profile` to sRGB (gray for one- and two-channel
+/// formats). Built without lcms2's last-pixel cache, which makes it `Sync`, so
+/// one build serves every thread.
+fn transformation(
     icc_profile: &[u8],
     memory_format: MemoryFormat,
-) -> std::result::Result<lcms2::Transform<P, P>, lcms2::Error> {
+) -> std::result::Result<
+    lcms2::Transform<u8, u8, lcms2::GlobalContext, lcms2::DisallowCache>,
+    lcms2::Error,
+> {
     tracing::debug!("Converting to sRGB via ICC profile");
 
     let icc_pixel_format = lcms_pixel_format(memory_format);
@@ -28,12 +39,14 @@ fn transformation<P: lcms2::Pod>(
             lcms2::Profile::new_gray(lcms2_sys::ffi::CIExyY::d50(), &lcms2::ToneCurve::new(2.2))?;
     };
 
-    lcms2::Transform::new(
+    lcms2::Transform::new_flags_context(
+        lcms2::GlobalContext::new(),
         &src_profile,
         icc_pixel_format,
         &target_profile,
         icc_pixel_format,
         lcms2::Intent::Perceptual,
+        lcms2::Flags::NO_CACHE,
     )
 }
 
@@ -42,21 +55,25 @@ fn transform(
     memory_format: MemoryFormat,
     buf: &mut [u8],
 ) -> std::result::Result<ColorState, lcms2::Error> {
-    let multiple = std::thread::available_parallelism().map_or(2, |x| x.get());
-    tracing::trace!("Applying ICC profiles while using {multiple} threads");
+    let transform = transformation(icc_profile, memory_format)?;
+    let pixel = memory_format.n_bytes().usize();
+    let pixels = buf.len() / pixel;
+    let threads = (pixels / PIXELS_PER_THREAD).clamp(
+        1,
+        std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+    );
+    tracing::trace!("Applying ICC profiles while using {threads} threads");
 
-    let chunk_size = (buf.len() / memory_format.n_bytes().usize()).div_ceil(multiple)
-        * memory_format.n_bytes().usize();
-
-    std::thread::scope(|s| {
-        for chunk in buf.chunks_mut(chunk_size) {
-            s.spawn(move || {
-                let transform = transformation(icc_profile, memory_format)?;
-                transform.transform_in_place(chunk);
-                Ok::<(), lcms2::Error>(())
-            });
-        }
-    });
+    if threads == 1 {
+        transform.transform_in_place(buf);
+    } else {
+        let transform = &transform;
+        std::thread::scope(|s| {
+            for chunk in buf.chunks_mut(pixels.div_ceil(threads) * pixel) {
+                s.spawn(move || transform.transform_in_place(chunk));
+            }
+        });
+    }
 
     Ok(ColorState::Srgb)
 }
@@ -99,4 +116,37 @@ const fn premul(format: lcms2::PixelFormat) -> lcms2::PixelFormat {
 fn premul_test() {
     assert!(!lcms2::PixelFormat::RGBA_8.premultiplied());
     assert!(premul(lcms2::PixelFormat::RGBA_8).premultiplied());
+}
+
+/// A frame split across threads comes out as transformed whole: every chunk
+/// starts on a pixel and the last one takes the remainder.
+#[test]
+fn chunked_matches_whole() {
+    use lcms2_sys::ffi::{CIExyY, CIExyYTRIPLE};
+
+    let primary = |x, y| CIExyY { x, y, Y: 1.0 };
+    let gamma = lcms2::ToneCurve::new(2.2);
+    let wide = lcms2::Profile::new_rgb(
+        &primary(0.3127, 0.3290),
+        &CIExyYTRIPLE {
+            Red: primary(0.64, 0.33),
+            Green: primary(0.21, 0.71),
+            Blue: primary(0.15, 0.06),
+        },
+        &[&gamma, &gamma, &gamma],
+    )
+    .and_then(|profile| profile.icc())
+    .unwrap();
+    let pixels = 2 * PIXELS_PER_THREAD + 7;
+    let source: Vec<u8> = (0..pixels * 4).map(|i| (i * 7 % 251) as u8).collect();
+
+    let mut chunked = source.clone();
+    transform(&wide, MemoryFormat::R8g8b8a8, &mut chunked).unwrap();
+    let mut whole = source.clone();
+    transformation(&wide, MemoryFormat::R8g8b8a8)
+        .unwrap()
+        .transform_in_place(&mut whole);
+
+    assert_ne!(whole, source, "the profile changes the pixels");
+    assert!(chunked == whole, "chunked and whole transforms differ");
 }
