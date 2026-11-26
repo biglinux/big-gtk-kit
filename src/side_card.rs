@@ -153,7 +153,8 @@ pub struct SideCards {
 }
 
 impl SideCards {
-    /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`. A row reports
+    /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`; a row or an
+    /// index without a card opens nothing. A row reports
     /// [`CardEvent::Activated`] itself: a [`ValueRow`] in a `gtk::ListBox`
     /// does through `activated`.
     pub fn new(
@@ -306,7 +307,9 @@ impl SideCards {
     /// on its current choice.
     fn show(&mut self, index: usize) {
         self.close();
-        let (row, card) = (&self.rows[index], &self.cards[index]);
+        let (Some(row), Some(card)) = (self.rows.get(index), self.cards.get(index)) else {
+            return;
+        };
         // A card taller than the overlay scrolls.
         card.set_max_content_height((self.layer.height() - 2 * GAP).max(0));
         if !place_beside(&self.layer, row, card.upcast_ref(), &self.bridge) {
