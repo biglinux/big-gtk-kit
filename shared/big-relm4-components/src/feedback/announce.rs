@@ -77,9 +77,8 @@ pub fn announce_from_window(
 mod tests {
     use super::*;
 
-    /// This test is the guard: without it the call below is a `SIGSEGV`, and a
-    /// test process that dies takes its whole binary with it. It passes by
-    /// returning at all.
+    /// Without the guard the call below is a `SIGSEGV`, and a test process that
+    /// dies takes its whole binary with it.
     #[test]
     fn announce_survives_missing_bridge() {
         big_testkit::harness::require_gtk_test(|| {
@@ -87,6 +86,11 @@ mod tests {
             // context yet and `announce` on one is a no-op that proves nothing.
             let window = gtk::Window::new();
             window.present();
+            assert_eq!(
+                window.at_context().type_().name(),
+                NO_BRIDGE_CONTEXT,
+                "the test reaches the context the guard refuses"
+            );
             announce(
                 &window,
                 "there is nobody listening",
