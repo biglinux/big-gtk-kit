@@ -13,6 +13,10 @@
 //!
 //! The widgets' handlers only report [`CardEvent`]s; the owner passes them back
 //! to [`HoverCards::handle`], so no handler holds a widget.
+//!
+//! The row of the open card carries `card-open` and the overlay `cards-open`;
+//! how a row under the pointer looks, and that none lights up while a card is
+//! open, is the program's stylesheet.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -250,7 +254,6 @@ impl HoverCards {
         }
         row.add_css_class("card-open");
         row.update_state(&[gtk::accessible::State::Expanded(Some(true))]);
-        // While a card is open no other row lights up under the pointer.
         self.layer.add_css_class("cards-open");
         self.open = Some((index, opener));
     }
