@@ -107,11 +107,12 @@ impl BigCopyableDetailRow {
             .subtitle(&spec.value)
             .selectable(true)
             .build();
-        let copy_button = gtk::Button::builder()
-            .icon_name("edit-copy-symbolic")
-            .valign(gtk::Align::Center)
-            .build();
-        copy_button.set_tooltip_text(Some(&spec.copy_label));
+        let copy_button = big_gtk_kit::tooltip::icon_button(
+            "edit-copy-symbolic",
+            &spec.copy_label,
+            &["image-button"],
+        );
+        copy_button.set_valign(gtk::Align::Center);
         let value = spec.value;
         copy_button.connect_clicked(move |button| {
             button.clipboard().set_text(&value);
@@ -172,6 +173,22 @@ mod tests {
                 row.subtitle()
                     .is_some_and(|shown| shown.contains("<a href"))
             );
+        });
+    }
+
+    #[test]
+    fn copy_button_is_named() {
+        big_testkit::harness::require_gtk_test(|| {
+            let row = BigCopyableDetailRow::new(
+                BigCopyableDetailRowSpec::new("Codec", "H.264", "Copy codec"),
+                None,
+            )
+            .into_row();
+            assert!(big_testkit::harness::has_named_descendant(
+                &row,
+                gtk::AccessibleRole::Button,
+                "Copy codec",
+            ));
         });
     }
 }
