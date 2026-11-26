@@ -47,16 +47,23 @@ fn size_with_mark(bytes: u64, mark: char) -> String {
         clippy::cast_precision_loss,
         reason = "sizes are displayed with at most one decimal"
     )]
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 1;
+    // The unit is chosen by the number as shown: 1 048 575 bytes is 1023.999 KiB,
+    // which reads 1.0 MiB rather than 1024 KiB.
+    while value.round() >= 1024.0 && unit + 1 < UNITS.len() {
         value /= 1024.0;
         unit += 1;
     }
-    if value >= 10.0 {
-        format!("{value:.0} {}", UNITS[unit])
+    let tenths = (value * 10.0).round();
+    if tenths < 100.0 {
+        format!("{:.1} {}", tenths / 10.0, UNITS[unit]).replacen(
+            '.',
+            mark.encode_utf8(&mut [0; 4]),
+            1,
+        )
     } else {
-        format!("{value:.1} {}", UNITS[unit]).replacen('.', mark.encode_utf8(&mut [0; 4]), 1)
+        format!("{:.0} {}", value.round(), UNITS[unit])
     }
 }
 
@@ -75,12 +82,28 @@ fn decimal_with_mark(value: f64, mark: char) -> String {
 mod tests {
     use super::*;
 
+    /// Expected values computed by hand: the byte count over 1024 per unit,
+    /// rounded to the places shown.
     #[test]
     fn size_rounds_in_binary_units() {
-        assert_eq!(size_with_mark(999, ','), "999 B");
-        assert_eq!(size_with_mark(2_355, ','), "2,3 KiB");
-        assert_eq!(size_with_mark(10 * 1024, ','), "10 KiB");
-        assert_eq!(size_with_mark(3 * 1024 * 1024, '.'), "3.0 MiB");
+        for (bytes, mark, shown) in [
+            (999, ',', "999 B"),
+            (1_023, ',', "1023 B"),
+            (1_024, ',', "1,0 KiB"),
+            (2_355, ',', "2,3 KiB"),
+            (10_188, ',', "9,9 KiB"),
+            (10_189, ',', "10 KiB"),
+            (10 * 1024, ',', "10 KiB"),
+            (1_048_063, ',', "1023 KiB"),
+            (1_048_064, ',', "1,0 MiB"),
+            (1_048_575, ',', "1,0 MiB"),
+            (1_048_576, ',', "1,0 MiB"),
+            (3 * 1024 * 1024, '.', "3.0 MiB"),
+            (1_073_741_823, '.', "1.0 GiB"),
+            (u64::MAX, '.', "16777216 TiB"),
+        ] {
+            assert_eq!(size_with_mark(bytes, mark), shown, "{bytes} bytes");
+        }
     }
 
     #[test]
