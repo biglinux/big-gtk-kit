@@ -9,6 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -46,6 +47,15 @@ const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// On-disk entry layout version. Bump when the header or pixel format changes.
 const DISK_FORMAT: &str = "rgba-premul-1";
+/// Entries unchanged this long are removed. Keys carry the source's size and
+/// time, so an updated theme or a size no longer drawn leaves entries that
+/// nothing reads again; a read does not refresh an entry (homes are often
+/// `noatime`), so an icon still in use is drawn again once a month.
+const DISK_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// How often the programs sharing the cache prune it, between them.
+const DISK_PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// The file in the cache folder whose modification time is the last pruning.
+const DISK_PRUNE_STAMP: &str = "pruned";
 
 /// What to do with a texture once it exists.
 pub type Deliver = Box<dyn FnOnce(gdk::Texture)>;
@@ -701,13 +711,80 @@ fn disk_put(key: &str, texture: &gdk::Texture) {
     // home is not the icon's problem. A reader never sees a partial entry, and a
     // failed write only costs the next start a decode.
     gio::spawn_blocking(move || {
-        let _ = big_os_kit::storage::atomic_write(&path, &out);
+        if big_os_kit::storage::atomic_write(&path, &out).is_ok()
+            && let Some(directory) = path.parent()
+        {
+            prune_disk_cache(directory, SystemTime::now());
+        }
     });
+}
+
+/// Remove the entries of `directory` older than [`DISK_MAX_AGE`], unless one
+/// of the programs sharing it did within [`DISK_PRUNE_INTERVAL`] of `now`.
+fn prune_disk_cache(directory: &Path, now: SystemTime) {
+    // A time ahead of `now` (the clock was set back) is no age at all, so it
+    // neither keeps an entry stale nor holds the next pruning off.
+    let age = |modified: SystemTime| now.duration_since(modified).ok();
+    let stamp = directory.join(DISK_PRUNE_STAMP);
+    let pruned = std::fs::metadata(&stamp).and_then(|metadata| metadata.modified());
+    if pruned.is_ok_and(|pruned| age(pruned).is_some_and(|age| age < DISK_PRUNE_INTERVAL)) {
+        return;
+    }
+    if std::fs::File::create(&stamp)
+        .and_then(|file| file.set_modified(now))
+        .is_err()
+    {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry.file_name() != DISK_PRUNE_STAMP
+            && entry.metadata().is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata
+                        .modified()
+                        .is_ok_and(|modified| age(modified).is_some_and(|age| age >= DISK_MAX_AGE))
+            });
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disk_cache_drops_old_entries_once_a_day() {
+        let dir = std::env::temp_dir().join(format!("big-icon-prune-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now();
+        let entry = |name: &str, age: Duration| {
+            let path = dir.join(name);
+            std::fs::File::create(&path)
+                .unwrap()
+                .set_modified(now - age)
+                .unwrap();
+            path
+        };
+        let day = Duration::from_secs(24 * 60 * 60);
+        let old = entry("old.rgba", 31 * day);
+        let fresh = entry("fresh.rgba", day);
+        prune_disk_cache(&dir, now);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+
+        let old = entry("old.rgba", 31 * day);
+        prune_disk_cache(&dir, now + day / 2);
+        assert!(old.exists(), "pruned less than a day ago");
+        prune_disk_cache(&dir, now + day);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn source_key_tracks_size_variant_stamp() {
