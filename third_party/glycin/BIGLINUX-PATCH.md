@@ -39,7 +39,8 @@ decoding under big-image), with these changes:
   (`src/sandbox.rs`, `src/landlock.rs`): it sets on itself, before it executes
   the loader from `/`, the bubblewrap sandbox's memory limit and seccomp
   filter, with `socket`, `connect` and `socketcall` refused, since no network
-  namespace keeps a socket from the network and the session bus, and with
+  namespace keeps a socket from the network and the session bus, `chmod` and
+  `fchmodat` refused, since Landlock does not govern a mode change, and with
   `getpriority`, `setpriority`, `prlimit64` and `sched_getaffinity` on itself
   only, since no PID namespace hides the user's other processes. Landlock
   rules let it open what the bubblewrap sandbox holds: `/usr`, the library

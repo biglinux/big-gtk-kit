@@ -736,11 +736,11 @@ impl Sandbox {
         }
 
         let not_sandboxed = self.sandbox_mechanism == SandboxMechanism::NotSandboxed;
-        // Outside a network namespace a socket reaches the network and the
-        // session bus. socketcall multiplexes every socket call on i386, s390x
-        // and ppc: refused whole, a loader whose C library sends through it fails.
+        // Outside the namespaces a socket reaches the network and the session
+        // bus, and a mode change, which Landlock does not govern, every file of
+        // the user. socketcall carries every socket call on i386, s390x and ppc.
         let refused: &[&str] = if not_sandboxed {
-            &["socket", "connect", "socketcall"]
+            &["socket", "connect", "socketcall", "chmod", "fchmodat"]
         } else {
             &[]
         };
@@ -1171,7 +1171,8 @@ mod tests {
             ConfigEntry::Loader(ImageLoaderConfig {
                 exec: exe.clone(),
                 expose_base_dir: false,
-                fontconfig: false,
+                // The widest set of calls a loader is given.
+                fontconfig: true,
             }),
             dbus_socket,
         );
@@ -1218,6 +1219,15 @@ mod tests {
         );
         assert_eq!(
             std::fs::write(dir.join("written"), "x").unwrap_err().kind(),
+            denied
+        );
+        assert_eq!(
+            std::fs::set_permissions(
+                dir.join("secret"),
+                std::os::unix::fs::PermissionsExt::from_mode(0o777)
+            )
+                .unwrap_err()
+                .kind(),
             denied
         );
         assert_eq!(
