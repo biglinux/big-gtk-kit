@@ -433,15 +433,16 @@ pub fn atomic_create_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> 
 
 /// Replace an existing document in one step, keeping what describes it: its
 /// mode, its group, its `user.*` extended attributes (a browser's download
-/// origin, desktop tags) and its access ACL.
+/// origin, desktop tags) and its access ACL. A link is written through, to the
+/// file it names, and stays a link.
 ///
 /// Waits until the copy and its directory entry are on the disk: for documents
 /// the person saved. `still_current` runs after the new copy is complete and
 /// right before the rename; when it answers `false` nothing is published and
 /// this returns `Ok(false)`. A file owned by another user, or one carrying
 /// attributes an unprivileged writer cannot set again (`security.*`,
-/// `trusted.*`), is refused with [`std::io::ErrorKind::Unsupported`] before
-/// anything is written.
+/// `trusted.*`), or one whose group this user is not in, is refused with
+/// [`std::io::ErrorKind::Unsupported`] and left as it was.
 ///
 /// # Errors
 /// Returns the refusal above or the I/O failure; the original is untouched
@@ -452,6 +453,7 @@ pub fn atomic_replace_document(
     bytes: &[u8],
     still_current: impl FnOnce() -> bool,
 ) -> std::io::Result<bool> {
+    let path = &written_through(path)?;
     let metadata = fs::metadata(path)?;
     if metadata.uid() != crate::microdaemon::current_effective_user_id() {
         return Err(std::io::Error::new(
@@ -464,7 +466,16 @@ pub fn atomic_replace_document(
     let file = pending.file_mut()?;
     file.write_all(bytes)?;
     if metadata.gid() != file.metadata()?.gid() {
-        fchown(&*file, None, Some(Gid::from_raw(metadata.gid())))?;
+        fchown(&*file, None, Some(Gid::from_raw(metadata.gid()))).map_err(|error| {
+            if error == rustix::io::Errno::PERM {
+                std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "the file's group is not one of this user's",
+                )
+            } else {
+                error.into()
+            }
+        })?;
     }
     for (name, value) in &attributes {
         fsetxattr(&*file, name, value, XattrFlags::empty())?;
@@ -490,16 +501,22 @@ pub fn atomic_replace_document(
 /// failure.
 #[cfg(target_os = "linux")]
 pub fn atomic_save_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let target = if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_symlink()) {
-        fs::canonicalize(path)?
-    } else {
-        path.to_path_buf()
-    };
+    let target = written_through(path)?;
     match atomic_create_document(&target, bytes) {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             atomic_replace_document(&target, bytes, || true).map(drop)
         }
         written => written,
+    }
+}
+
+/// The file a document named `path` is written to: the one a link names.
+#[cfg(target_os = "linux")]
+fn written_through(path: &Path) -> std::io::Result<PathBuf> {
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_symlink()) {
+        fs::canonicalize(path)
+    } else {
+        Ok(path.to_path_buf())
     }
 }
 

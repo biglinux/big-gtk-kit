@@ -69,6 +69,24 @@ fn replaced_document_keeps_mode_and_xattrs() {
 }
 
 #[test]
+fn replaced_document_keeps_its_link() {
+    let directory = storage_test_path("replace-link");
+    fs::create_dir(&directory).unwrap();
+    let target = directory.join("notes.txt");
+    let link = directory.join("notes-link.txt");
+    fs::write(&target, b"old").unwrap();
+    std::os::unix::fs::symlink("notes.txt", &link).unwrap();
+
+    assert!(atomic_replace_document(&link, b"new", || true).unwrap());
+
+    let still_link = fs::symlink_metadata(&link).unwrap().is_symlink();
+    let written = fs::read(&target).unwrap();
+    let _ = fs::remove_dir_all(&directory);
+    assert!(still_link);
+    assert_eq!(written, b"new");
+}
+
+#[test]
 fn stale_replacement_changes_nothing() {
     let directory = storage_test_path("replace-stale");
     fs::create_dir(&directory).unwrap();
