@@ -48,8 +48,9 @@ thread_local! {
 
 /// Add `sheet` to the default display at `priority`, once per display.
 ///
-/// A later call with the same text adds nothing: the display keeps every
-/// provider it is given, and a second copy restyles every window for nothing.
+/// A later call with the same text and priority adds nothing: the display
+/// keeps every provider it is given, and a second copy restyles every window
+/// for nothing.
 /// Before GTK opens a display there is nothing to add it to, and the next call
 /// adds it. A sheet that changes while the program runs is a [`DisplaySheet`].
 pub fn install(sheet: &str, priority: u32) {
@@ -57,7 +58,7 @@ pub fn install(sheet: &str, priority: u32) {
         return;
     };
     let mut hasher = DefaultHasher::new();
-    sheet.hash(&mut hasher);
+    (sheet, priority).hash(&mut hasher);
     let key = (display, hasher.finish());
     if INSTALLED.with_borrow(|installed| installed.contains(&key)) {
         return;
@@ -213,7 +214,7 @@ mod tests {
         }
     }
 
-    /// The same text twice adds one provider.
+    /// The same text twice adds one provider, at each priority.
     #[gtk::test]
     #[ignore = "needs a display"]
     fn installs_once_per_display() {
@@ -224,6 +225,8 @@ mod tests {
         install(sheet, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         install(sheet, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         assert_eq!(count(), before + 1);
+        install(sheet, gtk::STYLE_PROVIDER_PRIORITY_USER);
+        assert_eq!(count(), before + 2, "another priority is another sheet");
         let label = gtk::Label::builder()
             .label("probe")
             .css_classes(["install-probe"])
