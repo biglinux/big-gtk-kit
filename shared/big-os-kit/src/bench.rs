@@ -15,17 +15,26 @@
 //! product's window.
 
 use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 static SINK: LazyLock<Option<Mutex<std::fs::File>>> = LazyLock::new(|| {
+    // test-seam: allow profiling switch for installed builds, set by the same account
     let path = std::env::var_os("BIG_BENCH_TIMING")?;
-    std::fs::OpenOptions::new()
+    // The log names the programs that open and when: the person's alone.
+    let opened = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-        .ok()
-        .map(Mutex::new)
+        .mode(0o600)
+        .open(&path);
+    match opened {
+        Ok(file) => Some(Mutex::new(file)),
+        Err(error) => {
+            eprintln!("BIG_BENCH_TIMING: cannot open {}: {error}", path.display());
+            None
+        }
+    }
 });
 
 /// Milliseconds of `CLOCK_MONOTONIC`, the clock `Instant` and Python's
@@ -103,6 +112,8 @@ pub fn timed<T>(label: &'static str, body: impl FnOnce() -> T) -> T {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
     /// A mark is stamped on the clock a launcher in another process reads, so a
     /// start can be timed from the launch to a mark the resident host writes.
     #[test]
@@ -127,7 +138,9 @@ mod tests {
             .expect("child run");
         let after = super::monotonic_ms();
         let text = std::fs::read_to_string(&log).expect("the child wrote its log");
+        let mode = std::fs::metadata(&log).map(|meta| meta.permissions().mode() & 0o777);
         let _ = std::fs::remove_file(&log);
+        assert_eq!(mode.ok(), Some(0o600), "the log is the person's alone");
         assert!(child.status.success(), "{}", child.stdout_lossy());
         let (stamp, label) = text.trim().split_once("  ").expect("stamp and label");
         assert_eq!(label, "probe");
