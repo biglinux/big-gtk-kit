@@ -3,9 +3,6 @@ language: Rust
 severity: error
 message: Name a control with big_gtk_kit::tooltip::name_control
 note: The tooltip a person reads and the label a screen reader announces are one name, set in one place.
-# The owners live in the shared crates; the kit's own crates sit below them.
-files:
-  - shared/**
 rule:
   kind: expression_statement
   any:
