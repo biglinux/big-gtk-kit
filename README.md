@@ -187,23 +187,13 @@ the owner passes back, so no handler holds a widget.
 ## Checks
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --config 'build.warnings="deny"'
-tools/headless-gate.sh cargo nextest run --workspace
-cargo nextest run -p glycin --lib
-tools/headless-gate.sh cargo nextest run --workspace --run-ignored only -j 1 \
-    -E 'not test(/::(mount_change_is_seen|closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|work_start_is_announced|capture_refusal_is_announced)$/)'
-tools/headless-gate.sh --accessible cargo nextest run --workspace --run-ignored only \
-    -E 'test(/::(closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|work_start_is_announced|capture_refusal_is_announced)$/)'
-tools/headless-gate.sh cargo test --workspace --doc
-ast-grep scan
-cargo deny --workspace check
-ruff check . && ruff format --check .
+scripts/quality-check.sh
 ```
 
-The patched glycin copy is outside the workspace, so `--workspace` skips its
-tests; `-p glycin` runs them (`third_party/glycin/BIGLINUX-PATCH.md` says what
-they check).
+runs every check a change passes: formatting, Clippy, the tests with every
+feature (the ignored ones too, and the patched glycin copy's, which the
+workspace leaves out), the doc tests, the ast-grep rules, `cargo deny`, ruff
+and the tools' own checks.
 
 `tools/headless-gate.sh` runs the tests in a private KWin session with a home
 of its own. The ignored tests take the activation, so they run one at a time;
