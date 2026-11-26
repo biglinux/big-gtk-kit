@@ -499,7 +499,7 @@ pub(crate) fn place_beside(
     let rtl = layer.direction() == gtk::TextDirection::Rtl;
     let from_start = |left: i32, span: i32| {
         if rtl {
-            layer.width() - left - span
+            (layer.width() - left - span).max(0)
         } else {
             left
         }
@@ -514,7 +514,8 @@ pub(crate) fn place_beside(
     if !fits(right) && !fits(left) {
         // The end margin keeps the overlay from giving the card more than
         // the room left of it.
-        let card_width = natural_width.min(layer.width() - 2 * GAP);
+        // A layer not yet laid out has no room at all.
+        let card_width = natural_width.min(layer.width() - 2 * GAP).max(0);
         let (_, card_height, _, _) = card.measure(gtk::Orientation::Vertical, card_width);
         // Lined up with the row's start edge, below the row, else above it.
         let aligned = if rtl { x + width - card_width } else { x };
@@ -563,7 +564,7 @@ pub(crate) fn place_beside(
     let bridge_width = GAP + 2 * reach;
     bridge.set_margin_start(from_start(bridge_left, bridge_width));
     bridge.set_margin_top(y + RING_INSET);
-    bridge.set_size_request(bridge_width, height - 2 * RING_INSET);
+    bridge.set_size_request(bridge_width, (height - 2 * RING_INSET).max(0));
     bridge.set_visible(true);
     true
 }
