@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! GTK-free OS primitives for the big/ suite: atomic and versioned JSON
-//! [`storage`], diagnostics report assembly, directory metadata scans, process
+//! GTK-free OS primitives for the BigLinux programs: atomic and versioned JSON
+//! [`storage`], directory metadata scans, process
 //! descriptors ([`pidfd`]), whether a typed name can be a file's ([`file_name`]),
 //! checksums ([`crc32`]), signals read from a pipe ([`signal_pipe`]), a first
 //! capital letter ([`first_capital`]), `file://` URIs read as path bytes
@@ -18,7 +18,6 @@ pub mod compositor_session;
 pub mod confinement;
 pub mod crash_reports;
 pub mod crc32;
-pub mod diagnostics;
 pub mod directory_listing;
 pub mod exit_wait;
 pub mod file_io;
