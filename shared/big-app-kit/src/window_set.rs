@@ -120,7 +120,8 @@ where
         workspace == self.primary.workspace_id() || self.secondary.contains_key(&workspace)
     }
 
-    /// Register a launched secondary controller under its own workspace id.
+    /// Register a launched secondary controller under its own workspace id; it
+    /// becomes the active window when no other window of the app is open.
     ///
     /// Returns the workspace identity.
     ///
@@ -135,6 +136,9 @@ where
             "workspace identities are app-scoped"
         );
         self.secondary.insert(workspace, controller);
+        if self.live_active().is_none() {
+            self.active = workspace;
+        }
         workspace
     }
 
@@ -242,5 +246,65 @@ where
         } else if let Some(controller) = self.secondary.get(&workspace) {
             on_secondary(controller, payload);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Workspace(u32);
+
+    impl BigWorkspaceWindow for Workspace {
+        type Id = u32;
+
+        fn workspace_id(&self) -> u32 {
+            self.0
+        }
+    }
+
+    struct Secondary(Workspace);
+
+    impl relm4::SimpleComponent for Secondary {
+        type Init = u32;
+        type Input = ();
+        type Output = ();
+        type Root = ();
+        type Widgets = ();
+
+        fn init_root() -> Self::Root {}
+
+        fn init(
+            workspace: u32,
+            (): Self::Root,
+            _sender: relm4::ComponentSender<Self>,
+        ) -> relm4::ComponentParts<Self> {
+            relm4::ComponentParts {
+                model: Self(Workspace(workspace)),
+                widgets: (),
+            }
+        }
+    }
+
+    impl BigSecondaryWindow for Secondary {
+        type Window = Workspace;
+
+        fn window(&self) -> &Workspace {
+            &self.0
+        }
+    }
+
+    /// A request that arrives before the new window is activated goes to it,
+    /// not to the closed primary nor to one more new window.
+    #[test]
+    fn window_after_closed_primary_is_active() {
+        big_testkit::harness::on_test_context(|_| {
+            let mut windows = BigWindowSet::<Workspace, Secondary>::new(Workspace(0));
+            windows.close_primary();
+            assert_eq!(windows.live_active(), None);
+            windows.insert_secondary(Secondary::builder().launch(1).detach());
+            assert_eq!(windows.live_active(), Some(1));
+            assert_eq!(windows.with_active_window(Workspace::workspace_id), 1);
+        });
     }
 }
