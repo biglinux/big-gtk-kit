@@ -1003,7 +1003,7 @@ mod tests {
     /// The oracle is `gdk_key_event_matches`: a consumed Shift is set aside, and
     /// with Shift written the keyval is the one Shift gives.
     #[test]
-    fn accels_compare_as_gtk_matches_a_press() {
+    fn accels_compare_like_gtk() {
         big_testkit::harness::require_gtk_test(|| {
             assert!(same_accel("<Ctrl><Shift>plus", "<Primary>plus"));
             assert!(same_accel("<Shift>question", "question"));
