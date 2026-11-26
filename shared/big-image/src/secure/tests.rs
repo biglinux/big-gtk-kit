@@ -214,14 +214,14 @@ fn assert_unavailable(error: Option<BigImageError>) {
 fn decoding_refused_without_sandbox() {
     if std::env::var_os(WITHOUT_SANDBOX).is_some() {
         every_entry_point_refuses();
-    } else {
+    } else if Path::new(big_os_kit::confinement::BWRAP).exists() {
         run_without_user_namespaces();
     }
 }
 
 /// This test again, in a namespace that may not make another, where
-/// bubblewrap fails the way it does with user namespaces off; without
-/// bubblewrap at all, as it is.
+/// bubblewrap fails the way it does with user namespaces off. Without
+/// bubblewrap glycin still names it the sandbox, and a load fails as a decode.
 fn run_without_user_namespaces() {
     use big_os_kit::subprocess::BigSubprocessSpec;
 
@@ -230,27 +230,11 @@ fn run_without_user_namespaces() {
     // for; nothing is read from it before the refusal.
     let mut data_dirs = nowhere.join("jpg").into_os_string();
     data_dirs.push(":/usr/share");
-    let test = std::env::current_exe().unwrap();
-    let wrapped = Path::new(big_os_kit::confinement::BWRAP).exists();
-    let (program, wrapper): (&Path, &[&str]) = if wrapped {
-        (
-            Path::new(big_os_kit::confinement::BWRAP),
-            &[
-                "--dev-bind",
-                "/",
-                "/",
-                "--unshare-user",
-                "--disable-userns",
-                "--",
-            ],
-        )
-    } else {
-        (&test, &[])
-    };
     let out = BigSubprocessSpec::builder()
-        .program(program)
-        .args(wrapper)
-        .args(wrapped.then_some(test.as_os_str()))
+        .program(big_os_kit::confinement::BWRAP)
+        .args(["--dev-bind", "/", "/", "--unshare-user", "--disable-userns"])
+        .arg("--")
+        .arg(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "secure::tests::decoding_refused_without_sandbox",
@@ -260,6 +244,7 @@ fn run_without_user_namespaces() {
         .env("GLYCIN_DATA_DIR", nowhere)
         .env("XDG_DATA_DIRS", data_dirs)
         .timeout(std::time::Duration::from_secs(60))
+        .allow_list([big_os_kit::confinement::BWRAP])
         .build()
         .run()
         .unwrap();
