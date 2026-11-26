@@ -28,10 +28,13 @@ struct DurableJobJournal {
 
 /// Load a durable-job journal shared by the BigLinux microdaemons.
 ///
-/// Corrupt or unsupported journals are quarantined by renaming the original file
-/// to a `.corrupt.<pid>-<nanos>` sibling and returning an empty set. State
-/// recovery policy remains daemon-owned: callers decide which non-terminal
-/// states become interrupted and how domain-specific details are reconciled.
+/// A journal that does not parse, or one of a version not in
+/// `accepted_versions` (a newer build's), is renamed to a
+/// `.corrupt.<pid>-<nanos>` sibling and an empty set returned: the daemon
+/// starts, and the file is kept for whoever reads it, never written over.
+/// State recovery policy remains daemon-owned: callers decide which
+/// non-terminal states become interrupted and how domain-specific details are
+/// reconciled.
 ///
 /// # Errors
 ///
@@ -64,12 +67,6 @@ pub fn load_durable_job_journal(
 }
 
 fn read_bounded_journal(journal_path: &Path) -> io::Result<Vec<u8>> {
-    if fs::metadata(journal_path)?.len() > MAX_JOURNAL_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "microdaemon journal exceeds size limit",
-        ));
-    }
     read_bounded(journal_path, MAX_JOURNAL_BYTES).map_err(|error| match error {
         BigBoundedReadError::Io(error) => error,
         BigBoundedReadError::TooLarge { .. } => io::Error::new(
