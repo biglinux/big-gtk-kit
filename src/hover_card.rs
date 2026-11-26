@@ -169,7 +169,9 @@ impl HoverCards {
             CardEvent::Entered(index) => {
                 self.hovered = Some(index);
                 match self.open {
-                    None => self.show(index, Opener::Pointer),
+                    None => {
+                        self.show(index, Opener::Pointer);
+                    }
                     Some((open, Opener::Pointer)) if open == index => self.cancel(),
                     Some((_, Opener::Pointer)) => self.schedule(SWITCH_DELAY, Some(index)),
                     Some((_, Opener::Keyboard)) => {}
@@ -196,15 +198,14 @@ impl HoverCards {
             CardEvent::Settled => {
                 if by_pointer {
                     match self.settle_to.or(self.hovered) {
-                        Some(index) => self.show(index, Opener::Pointer),
+                        Some(index) => {
+                            self.show(index, Opener::Pointer);
+                        }
                         None => self.close(),
                     }
                 }
             }
-            CardEvent::Activated(index) => {
-                self.show(index, Opener::Keyboard);
-                return true;
-            }
+            CardEvent::Activated(index) => return self.show(index, Opener::Keyboard),
             CardEvent::Escape => {
                 if let Some(index) = self.open() {
                     self.close();
@@ -212,7 +213,11 @@ impl HoverCards {
                 }
             }
             CardEvent::FocusLeft => {
-                if matches!(self.open, Some((_, Opener::Keyboard))) {
+                // A card closed for the next one reports leaving after that one
+                // opened: only a focus outside the open card closes it.
+                if let Some((index, Opener::Keyboard)) = self.open
+                    && !crate::focus::holds_focus(&self.cards[index])
+                {
                     self.close();
                 }
             }
@@ -242,20 +247,22 @@ impl HoverCards {
         }
     }
 
-    /// Opens row `index`'s card beside it, held inside the window.
-    fn show(&mut self, index: usize, opener: Opener) {
+    /// Opens row `index`'s card beside it, held inside the window; whether
+    /// it opened.
+    fn show(&mut self, index: usize, opener: Opener) -> bool {
         self.cancel();
         if self.open.map(|(open, _)| open) != Some(index) {
             self.close();
         }
         let (row, card) = (&self.rows[index], &self.cards[index]);
         if !place_beside(&self.layer, row, card, &self.bridge) {
-            return;
+            return false;
         }
         row.add_css_class("card-open");
         row.update_state(&[gtk::accessible::State::Expanded(Some(true))]);
         self.layer.add_css_class("cards-open");
         self.open = Some((index, opener));
+        true
     }
 
     fn contains(&self, widget: &gtk::Widget, x: f64, y: f64) -> bool {
@@ -303,7 +310,7 @@ mod tests {
             }
             layer.set_child(Some(&column));
             let cards: Vec<gtk::Widget> = (0..2)
-                .map(|index| gtk::Label::new(Some(&format!("Card {index}"))).upcast())
+                .map(|index| gtk::Button::with_label(&format!("Card {index}")).upcast())
                 .collect();
             let heard = Rc::new(RefCell::new(Vec::new()));
             let cards_heard = Rc::clone(&heard);
@@ -334,6 +341,17 @@ mod tests {
             );
             hover.handle(CardEvent::Entered(0));
             assert_eq!(hover.open(), Some(1), "the pointer never replaces it");
+            cards[1].grab_focus();
+            hover.handle(CardEvent::FocusLeft);
+            assert_eq!(
+                hover.open(),
+                Some(1),
+                "a stale leave keeps the focused card"
+            );
+            gtk::prelude::GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+            hover.handle(CardEvent::FocusLeft);
+            assert_eq!(hover.open(), None, "a focus outside it closes it");
+            assert!(hover.handle(CardEvent::Activated(1)));
             hover.handle(CardEvent::Escape);
             assert_eq!(hover.open(), None);
             window.destroy();
