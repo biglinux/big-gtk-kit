@@ -59,7 +59,8 @@ impl ShortcutSearch {
 
     /// Whether the shortcut titled `title`, whose keys read `label` on screen and
     /// are `keys` (the modifiers held and the key's name, `t` or `Return`), is one
-    /// this search finds: its title or label holds what was typed, or one of its
+    /// this search finds: its title holds what was typed, or its label when what
+    /// was typed reads as no keys, or one of its
     /// keys holds every modifier typed and is the key typed, by its name or as
     /// GTK shows it (`Return` reads `Enter`).
     #[must_use]
@@ -73,11 +74,12 @@ impl ShortcutSearch {
                 .join(" ")
         };
         let typed = joined(&self.text);
-        if self.text.is_empty()
-            || title.to_lowercase().contains(&self.text)
-            || label.to_lowercase().contains(&self.text)
-            || (!typed.is_empty() && joined(label).contains(&typed))
-        {
+        // Typed as keys, the label is no text to search: "ctrl+alt+t" is not
+        // "Ctrl+Alt+Tab", whose key is a whole name.
+        let label_holds = self.keys.is_none()
+            && (label.to_lowercase().contains(&self.text)
+                || (!typed.is_empty() && joined(label).contains(&typed)));
+        if self.text.is_empty() || title.to_lowercase().contains(&self.text) || label_holds {
             return true;
         }
         let Some((modifiers, key)) = &self.keys else {
@@ -133,8 +135,27 @@ mod tests {
             let unbound = ("Zoom in", "Disabled", vec![]);
             let zoom_out = ("Shrink text", "Ctrl+-", vec![(control, "minus")]);
             let page = ("Previous page", "Ctrl+Page Up", vec![(control, "Page_Up")]);
+            let switch = (
+                "Switch window",
+                "Ctrl+Alt+Tab",
+                vec![(control | ModifierType::ALT_MASK, "Tab")],
+            );
+            let open_terminal = (
+                "Open terminal",
+                "Ctrl+Alt+T",
+                vec![(control | ModifierType::ALT_MASK, "t")],
+            );
             let rows = [
-                &new_tab, &reopen, &close, &menu, &terminal, &unbound, &zoom_out, &page,
+                &new_tab,
+                &reopen,
+                &close,
+                &menu,
+                &terminal,
+                &unbound,
+                &zoom_out,
+                &page,
+                &switch,
+                &open_terminal,
             ];
             for (typed, expected) in [
                 (
@@ -148,11 +169,21 @@ mod tests {
                         "Zoom in",
                         "Shrink text",
                         "Previous page",
+                        "Switch window",
+                        "Open terminal",
                     ],
                 ),
-                ("ctrl+t", vec!["New tab", "Reopen closed tab"]),
-                ("Ctrl + T", vec!["New tab", "Reopen closed tab"]),
+                (
+                    "ctrl+t",
+                    vec!["New tab", "Reopen closed tab", "Open terminal"],
+                ),
+                (
+                    "Ctrl + T",
+                    vec!["New tab", "Reopen closed tab", "Open terminal"],
+                ),
                 ("ctrl+shift+t", vec!["Reopen closed tab"]),
+                // Typed as keys, Ctrl+Alt+Tab's label holds the text but not the key.
+                ("ctrl+alt+t", vec!["Open terminal"]),
                 (
                     "ctrl+",
                     vec![
@@ -161,11 +192,13 @@ mod tests {
                         "Close window",
                         "Shrink text",
                         "Previous page",
+                        "Switch window",
+                        "Open terminal",
                     ],
                 ),
                 ("Super", vec!["Open the menu", "Terminal"]),
                 ("super+t", vec!["Terminal"]),
-                ("w", vec!["New tab", "Close window"]),
+                ("w", vec!["New tab", "Close window", "Switch window"]),
                 ("close", vec!["Reopen closed tab", "Close window"]),
                 ("zoom", vec!["Zoom in"]),
                 ("ctrl -", vec!["Shrink text"]),
@@ -180,6 +213,8 @@ mod tests {
                         "Terminal",
                         "Shrink text",
                         "Previous page",
+                        "Switch window",
+                        "Open terminal",
                     ],
                 ),
                 ("ctrl+q", vec![]),
