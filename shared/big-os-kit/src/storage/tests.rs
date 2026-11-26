@@ -127,6 +127,45 @@ fn new_document_follows_umask() {
 }
 
 #[test]
+fn new_document_never_overwrites() {
+    let directory = storage_test_path("create-taken");
+    fs::create_dir(&directory).unwrap();
+    let target = directory.join("page.html");
+    fs::write(&target, b"theirs").unwrap();
+
+    let error = atomic_create_document(&target, b"ours").unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(&target).unwrap(), b"theirs");
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    let _ = fs::remove_dir_all(&directory);
+}
+
+/// Saving over an existing document replaces it in place, so what describes
+/// it stays: a new file would take `0666` less the umask, never an execute
+/// bit, and lose the attribute.
+#[test]
+fn saved_document_keeps_mode_and_xattrs() {
+    let directory = storage_test_path("save-keeps");
+    fs::create_dir(&directory).unwrap();
+    let target = directory.join("download.txt");
+    fs::write(&target, b"old").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o740)).unwrap();
+    let has_xattrs = set_xattr(&target, "user.xdg.origin.url", b"https://example.org/x");
+
+    atomic_save_document(&target, b"new").unwrap();
+
+    assert_eq!(fs::read(&target).unwrap(), b"new");
+    assert_eq!(fs::metadata(&target).unwrap().mode() & 0o7777, 0o740);
+    if has_xattrs {
+        let kept = document_attributes(&target).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].1, b"https://example.org/x");
+    }
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
 fn write_through_symlink_keeps_link() {
     let directory = storage_test_path("linked-document");
     fs::create_dir(&directory).unwrap();
