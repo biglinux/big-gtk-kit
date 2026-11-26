@@ -179,6 +179,35 @@ impl Opening {
     }
 }
 
+/// The first field in `dialog`'s content (an alert's extra child) that takes
+/// typing and is shown. The content maps after the dialog, so a field counts as
+/// shown when it and every parent up to the content are.
+fn first_field(dialog: &adw::Dialog) -> Option<gtk::Widget> {
+    let content = dialog
+        .downcast_ref::<adw::AlertDialog>()
+        .map_or_else(|| dialog.child(), adw::AlertDialog::extra_child)?;
+    let shown = |widget: &gtk::Widget| {
+        let mut inside = Some(widget.clone());
+        while let Some(current) = inside {
+            if !current.is_visible() || !current.is_child_visible() {
+                return false;
+            }
+            if current == content {
+                return true;
+            }
+            inside = current.parent();
+        }
+        false
+    };
+    crate::widget_tree::subtree(&content).find(|widget| {
+        widget.is_sensitive()
+            && widget
+                .dynamic_cast_ref::<gtk::Editable>()
+                .is_some_and(gtk::prelude::EditableExt::is_editable)
+            && shown(widget)
+    })
+}
+
 /// Hand `dialog` to `give_back` once it has closed and left its window: at the
 /// end of its closing, or with its window. Not at `closed`, which comes as the
 /// closing starts and before the `response` that closed an alert; in an idle,
@@ -209,13 +238,17 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
     // when it is presented while shown, so one asked again opens with none, and
     // on that first map it prefers a destructive answer to the default one. So
     // each map gives the focus to the field set as the dialog's focus, else to
-    // the default answer; a dialog asked again with neither takes it itself.
+    // the first shown field that takes typing, else to the default answer; a
+    // dialog asked again with none of them takes it itself.
     let mapped_before = Cell::new(false);
     dialog
         .upcast_ref::<adw::Dialog>()
         .connect_map(move |dialog| {
             let asked_again = mapped_before.replace(true);
-            let field = dialog.focus().filter(|focus| !focus.is::<gtk::Button>());
+            let field = dialog
+                .focus()
+                .filter(|focus| !focus.is::<gtk::Button>())
+                .or_else(|| first_field(dialog));
             match field.or_else(|| dialog.default_widget()) {
                 Some(target) => {
                     target.grab_focus();

@@ -705,7 +705,7 @@ mod tests {
     }
 
     /// A question with a field opens with the focus in the field, asked again
-    /// as the first time.
+    /// as the first time, whether the field was set as its focus or not.
     #[gtk::test]
     #[ignore = "needs a display"]
     fn field_takes_the_focus_each_time() {
@@ -713,7 +713,7 @@ mod tests {
         crate::dialog::install();
         let window = adw::Window::new();
         window.present();
-        for round in 0..2 {
+        for (round, named) in [(0, false), (1, false), (2, true), (3, true)] {
             let entry = gtk::Entry::new();
             let alert = Alert::builder(Some(&window))
                 .heading("Name?")
@@ -721,7 +721,9 @@ mod tests {
                 .build();
             alert.add_responses(&[("cancel", "_Cancel"), ("save", "_Save")]);
             alert.set_extra_child(Some(&entry));
-            alert.set_focus(Some(&entry));
+            if named {
+                alert.set_focus(Some(&entry));
+            }
             alert.present();
             for _ in 0..10 {
                 pump();
@@ -729,7 +731,7 @@ mod tests {
             let focused = GtkWindowExt::focus(&window);
             assert!(
                 focused.is_some_and(|focus| focus == entry || focus.is_ancestor(&entry)),
-                "round {round}: the field lacks the focus"
+                "round {round}: the field lacks the focus (set as focus: {named})"
             );
             let shown = alert.dialog().clone();
             drop(alert);
