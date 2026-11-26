@@ -413,13 +413,7 @@ pub fn atomic_write_private_durable(path: &Path, bytes: &[u8]) -> std::io::Resul
 /// # Errors
 /// Returns AlreadyExists rather than replacing another file, or the I/O failure.
 pub fn atomic_create_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut pending = PendingAtomicWrite::create_sibling(path, Some(0o600))?;
-    let file = pending.file_mut()?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    pending.install_new(path)?;
-    drop(pending);
-    sync_parent_directory(path)
+    atomic_create(path, bytes, 0o600)
 }
 
 /// Publish a new document only when the destination does not exist, with the
@@ -431,7 +425,13 @@ pub fn atomic_create_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// # Errors
 /// Returns AlreadyExists rather than replacing another file, or the I/O failure.
 pub fn atomic_create_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut pending = PendingAtomicWrite::create_sibling(path, Some(0o666))?;
+    atomic_create(path, bytes, 0o666)
+}
+
+/// [`atomic_create_private`] and [`atomic_create_document`], the new file made
+/// with `mode` less the umask.
+fn atomic_create(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    let mut pending = PendingAtomicWrite::create_sibling(path, Some(mode))?;
     let file = pending.file_mut()?;
     file.write_all(bytes)?;
     file.sync_all()?;
