@@ -10,12 +10,13 @@ use gtk::glib;
 /// `AdwDialog` or `AdwBreakpointBin`) and let go of it when `owner` is
 /// destroyed.
 ///
-/// libadwaita 1.9 keeps a window's breakpoints in a `GPtrArray` made without a
-/// free function (`adw_breakpoint_bin_init`), so the reference `add_breakpoint`
-/// takes is never dropped: each window or dialog closed left its breakpoints
-/// behind. Once `owner` has gone, the breakpoint is released if that orphaned
-/// reference is the only one left; a libadwaita that fixes this has already
-/// finalized it, and one the program still holds is left alone.
+/// libadwaita up to 1.10 keeps a window's breakpoints in a `GPtrArray` made
+/// without a free function (`adw_breakpoint_bin_init`), so the reference
+/// `add_breakpoint` takes is never dropped, and leaves each breakpoint's
+/// `notify::condition` handler aimed at the freed bin. Under such a libadwaita,
+/// once `owner` has gone the breakpoint loses that handler, and the orphaned
+/// reference too if it is the only one left: one the program still holds is
+/// left alone.
 ///
 /// Breakpoints in a `.ui` file, and the three an adaptive `AdwDialog` makes
 /// for itself, cannot be reached from here.
@@ -37,7 +38,33 @@ pub fn add(owner: &impl IsA<gtk::Widget>, breakpoint: adw::Breakpoint) {
     } else {
         return;
     }
+    if !BINS_LEAK_BREAKPOINTS.with(|leak| *leak) {
+        return;
+    }
+    // The bin the breakpoint went to is one of these. Only their addresses are
+    // kept: the handler's data is matched, never read, after the bins are freed.
+    let bins: Vec<glib::ffi::gpointer> = crate::widget_tree::subtree(owner)
+        .filter(|widget| widget.is::<adw::BreakpointBin>())
+        .map(|bin| bin.as_ptr().cast())
+        .collect();
     owner.connect_destroy(move |_| {
+        if let Some(breakpoint) = weak.upgrade() {
+            for &bin in &bins {
+                // SAFETY: `breakpoint` is alive, and GLib compares `bin` with each
+                // handler's data without following it.
+                unsafe {
+                    glib::gobject_ffi::g_signal_handlers_disconnect_matched(
+                        breakpoint.as_ptr().cast(),
+                        glib::gobject_ffi::G_SIGNAL_MATCH_DATA,
+                        0,
+                        0,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        bin,
+                    );
+                }
+            }
+        }
         let weak = weak.clone();
         // After the owner's children, and with them its breakpoint bin, are gone.
         glib::idle_add_local_once(move || {
@@ -51,10 +78,39 @@ pub fn add(owner: &impl IsA<gtk::Widget>, breakpoint: adw::Breakpoint) {
     });
 }
 
+thread_local! {
+    /// Whether this libadwaita keeps the breakpoints of a disposed bin, measured
+    /// once on a throwaway bin: a release that frees them would have the orphan
+    /// unreference above drop the program's own reference instead.
+    static BINS_LEAK_BREAKPOINTS: bool = {
+        let breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            0.0,
+            adw::LengthUnit::Px,
+        ));
+        let bin = adw::BreakpointBin::new();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the probe of what add works around"
+        )]
+        bin.add_breakpoint(breakpoint.clone());
+        drop(bin);
+        let leak = breakpoint.ref_count() == 2;
+        if leak {
+            // SAFETY: drops the reference the disposed bin took and lost;
+            // `breakpoint` keeps its own.
+            unsafe { glib::gobject_ffi::g_object_unref(breakpoint.as_ptr().cast()) };
+        }
+        leak
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
+
+    use gtk::glib::translate::IntoGlib;
 
     use super::*;
     use crate::testing::{init, pump, watch};
@@ -94,5 +150,37 @@ mod tests {
         pump();
         assert_eq!(finalized.get(), 0, "freed under the program's reference");
         drop(kept);
+    }
+
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn a_kept_breakpoint_has_no_handler_left_on_its_bin() {
+        init();
+        let window = adw::Window::new();
+        let condition = adw::BreakpointCondition::parse("max-width: 500sp").expect("valid");
+        let kept = adw::Breakpoint::new(condition);
+        add(&window, kept.clone());
+        window.destroy();
+        drop(window);
+        pump();
+        let notify =
+            glib::subclass::signal::SignalId::lookup("notify", glib::Object::static_type())
+                .expect("GObject's notify");
+        // SAFETY: `kept` is alive; the lookup only reads its handler list.
+        let handler = unsafe {
+            glib::gobject_ffi::g_signal_handler_find(
+                kept.as_ptr().cast(),
+                glib::gobject_ffi::G_SIGNAL_MATCH_ID | glib::gobject_ffi::G_SIGNAL_MATCH_DETAIL,
+                notify.into_glib(),
+                glib::Quark::from_str("condition").into_glib(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            handler, 0,
+            "a notify::condition handler aimed at the freed bin"
+        );
     }
 }
