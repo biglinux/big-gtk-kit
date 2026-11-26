@@ -59,4 +59,52 @@ mod tests {
         let path = path().expect("a configuration directory");
         assert!(path.ends_with("big-desktop/crash-reports"));
     }
+
+    /// A core dump holds the process's secrets: none unless the switch is
+    /// there. Checked in child runs, which own their limits and environment.
+    #[test]
+    fn core_dumps_follow_the_switch() {
+        use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+        const CHILD: &str = "BIG_OS_KIT_CHILD_CRASH_REPORTS";
+        if let Some(switch) = std::env::var_os(CHILD) {
+            let limit = getrlimit(Resource::Core);
+            // A hard limit of 0 leaves nothing to lower.
+            if limit.maximum == Some(0) {
+                return;
+            }
+            let raised = Rlimit {
+                current: limit.maximum,
+                maximum: limit.maximum,
+            };
+            setrlimit(Resource::Core, raised).unwrap();
+            let on = switch == "on";
+            assert_eq!(apply(), on);
+            assert_eq!(getrlimit(Resource::Core).current == Some(0), !on);
+            return;
+        }
+        let config =
+            std::env::temp_dir().join(format!("big-os-kit-crash-reports-{}", std::process::id()));
+        std::fs::create_dir_all(config.join("big-desktop")).unwrap();
+        for switch in ["off", "on"] {
+            if switch == "on" {
+                std::fs::write(config.join("big-desktop/crash-reports"), b"").unwrap();
+            }
+            let child = crate::subprocess::BigSubprocessSpec::builder()
+                .program(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "crash_reports::tests::core_dumps_follow_the_switch",
+                    "--quiet",
+                ])
+                .env_inherit(false)
+                .env(CHILD, switch)
+                .env("XDG_CONFIG_HOME", &config)
+                .stdout(crate::subprocess::BigSubprocessOutputMode::Capture)
+                .build()
+                .run()
+                .expect("child run");
+            assert!(child.status.success(), "{switch}: {}", child.stdout_lossy());
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
 }
