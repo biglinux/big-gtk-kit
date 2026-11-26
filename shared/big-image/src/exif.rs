@@ -152,7 +152,8 @@ pub(crate) fn read_exif(bytes: &[u8]) -> BigExif {
 
 /// The TIFF block of `raw` for a copy whose pixels stand upright: Orientation 1,
 /// and no thumbnail, which shows the picture before its turn, crop and resize.
-/// `None` when the first directory cannot be read or the thumbnail overlaps it.
+/// `None` when the first directory cannot be read, or the thumbnail lies before
+/// the second directory, where the first one's data is.
 #[must_use]
 pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
     let tiff = raw.strip_prefix(b"Exif\0\0").unwrap_or(raw);
@@ -168,10 +169,14 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
         dropped.push(second..second.saturating_add(2 + entries * 12 + 4));
         dropped.extend(thumbnail::thumbnail_span(&reader, second));
     }
+    // What the first directory points to lies before the second one, as
+    // writers lay the block out; a thumbnail there could be any of it.
     let kept = [0..8, first..first_end];
     if dropped.iter().any(|span| {
-        kept.iter()
-            .any(|keep| span.start < keep.end && keep.start < span.end)
+        span.start < second
+            || kept
+                .iter()
+                .any(|keep| span.start < keep.end && keep.start < span.end)
     }) {
         return None;
     }
@@ -492,6 +497,20 @@ mod tests {
             assert_eq!(thumbnail::tiff_orientation(&copy), 1);
             assert_eq!(copy.len(), copy_len);
         }
+    }
+
+    /// A thumbnail named before the second directory may be the first one's
+    /// data: the copy goes without EXIF rather than with it blanked.
+    #[test]
+    fn upright_keeps_first_directory_data() {
+        let mut tiff = thumbnail::tests::camera_tiff(6, Some(&[0xFF, 0xD8, 0xFF, 0xD9]));
+        // Eight bytes of the first directory's data at 26, the second
+        // directory moved to 34, its thumbnail named at 26.
+        tiff[22..26].copy_from_slice(&34u32.to_le_bytes());
+        tiff.splice(26..26, *b"IFD0DATA");
+        tiff[44..48].copy_from_slice(&26u32.to_le_bytes());
+        tiff[56..60].copy_from_slice(&8u32.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
     }
 
     /// Deterministic xorshift: enough randomness for a mutation sweep.
