@@ -82,7 +82,10 @@ pub fn installed_path(running: &Path) -> Option<&str> {
 /// have a mount namespace of its own, where `/proc/PID/exe` names whatever
 /// file was mounted at `path`, so the file it runs must also be the one at
 /// `path` here, or one an upgrade unlinked, owned by root and writable by
-/// nobody else.
+/// nobody else. A root-owned program the user mounted over `path` in a user
+/// namespace before an upgrade unlinks it passes then: with Yama's
+/// `ptrace_scope` at 1 no more than a parent tracing its child can do, at 2
+/// or 3 a route of its own.
 #[cfg(feature = "bus-caller")]
 pub fn runs_installed(pid: u32, path: &str) -> bool {
     let exe = format!("/proc/{pid}/exe");
@@ -98,8 +101,6 @@ pub fn runs_installed(pid: u32, path: &str) -> bool {
 
 /// Whether the running file is root's, writable by nobody else, and the file
 /// at the installed path (`same`) or one an upgrade unlinked (no `links`).
-/// A program mounted over the path passes once an upgrade unlinks it, no
-/// stronger a route than a parent tracing the installed program it started.
 #[cfg(feature = "bus-caller")]
 fn installed_file(owner: u32, mode: u32, same: bool, links: u64) -> bool {
     owner == 0 && mode & 0o022 == 0 && (same || links == 0)
