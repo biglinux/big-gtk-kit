@@ -28,8 +28,8 @@ fn raster_images_never_upscale() {
     assert_eq!(effective_decode_bound(None, Some((10, 10)), false), None);
 }
 
-/// A 1170x710 screenshot asked for 256x256 came back square: Glycin scales
-/// to exactly the size asked, so the size asked keeps the image's shape.
+/// Glycin scales to exactly the size asked, so the size asked keeps the
+/// image's shape: a wide picture in a square bound is not squashed square.
 #[test]
 fn decode_size_keeps_proportions() {
     assert_eq!(
@@ -360,8 +360,8 @@ fn cicp_source_reports_its_profile() {
 
 /// A PQ picture keeps its 16 bits and its color state, at its own size and
 /// shrunk. The fixture is a 288×162 lossless 10-bit AVIF, BT.2020 and PQ:
-/// nine 32-pixel bars of the codes `big-compositor/tests/hdr/oracle.py`
-/// sends, encoded by avifenc from a 16-bit PNG with those codes.
+/// nine 32-pixel bars of the 10-bit codes in `BARS`, encoded by avifenc from
+/// a 16-bit PNG with those codes.
 #[test]
 fn pq_texture_keeps_16_bits() {
     const BARS: [[u16; 3]; 9] = [

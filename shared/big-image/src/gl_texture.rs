@@ -472,8 +472,8 @@ pub fn renderer_is_gl(widget: &impl IsA<gtk::Widget>) -> bool {
 
 /// Whether `renderer` draws on the processor: Cairo, or GL on llvmpipe. GTK
 /// passes over llvmpipe when it picks a renderer itself, but takes it when
-/// `GSK_RENDERER=gl` names GL, as bigshell-session does on a GPU without a
-/// Vulkan driver, and when GL is its fallback after Vulkan.
+/// `GSK_RENDERER=gl` names GL, as a session may on a GPU without a Vulkan
+/// driver, and when GL is its fallback after Vulkan.
 #[must_use]
 pub fn renderer_draws_in_software(renderer: &gtk::gsk::Renderer) -> bool {
     if renderer.is::<gtk::gsk::CairoRenderer>() {

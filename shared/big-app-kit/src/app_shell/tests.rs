@@ -432,6 +432,23 @@ fn simple_input_method_fills_gap() {
     );
 }
 
+/// An input method daemon counts only when it runs as this user.
+#[test]
+fn other_users_daemon_ignored() {
+    let proc =
+        std::env::temp_dir().join(format!("big-app-kit-proc-{}", glib::uuid_string_random()));
+    for (process, comm) in [("1234", "fcitx5\n"), ("self", "ibus-daemon\n")] {
+        std::fs::create_dir_all(proc.join(process)).expect("process directory");
+        std::fs::write(proc.join(process).join("comm"), comm).expect("comm");
+    }
+    let own = big_os_kit::microdaemon::current_effective_user_id();
+    let for_own = input_method_daemon_runs(&proc, own);
+    let for_other = input_method_daemon_runs(&proc, own.wrapping_add(1));
+    std::fs::remove_dir_all(&proc).expect("scratch removed");
+    assert!(for_own);
+    assert!(!for_other);
+}
+
 /// A launch that hands its arguments to a running instance never reaches
 /// `startup`: it must not have paid for the toolkit by then.
 #[test]

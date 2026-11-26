@@ -276,11 +276,6 @@ fn frame_argv(source: &Path, frame: &Path, bound: i32, seek: bool) -> Vec<std::f
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::disallowed_methods,
-        reason = "tests create temporary media files for cache-key contracts"
-    )]
-
     use big_os_kit::subprocess::BigSubprocessSpec;
 
     use super::*;

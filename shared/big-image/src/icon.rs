@@ -31,14 +31,9 @@ const MAX_SVG_OUTPUT_SIDE: u32 = 1024;
 
 /// Hard cap on textures kept in this process beyond the ones widgets still show.
 const MEMORY_CACHE_CAP: usize = 512;
-/// Byte ceiling for the icon cache, so a handful of large icons can't pin tens
-/// Byte ceiling for the icons kept after their widgets are gone.
-///
-/// It was 32 MiB, and the full-screen menu, which shows every application,
-/// filled it: 35 MB more in the desktop after ninety opens, kept for the rest of
-/// the session with the menu closed. An icon still on screen is found through
-/// `LIVE` whatever this says; this only decides how many recently closed ones
-/// come back without reading their few kilobytes from the disk cache.
+/// Byte ceiling for the icons kept after their widgets are gone: a view of
+/// every installed application fills any larger one and holds it for the
+/// session. An icon still on screen is found through `LIVE` whatever this says.
 const MEMORY_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 /// The largest icon file read at all. Icons are kilobytes; a megabyte-scale
@@ -96,12 +91,9 @@ type Resolved = Option<(PathBuf, String)>;
 /// Ceiling on remembered theme answers; past it the memo starts over.
 const MAX_RESOLVED: usize = 4096;
 
-/// The file the icon theme draws `gicon` from at `size`×`scale`, and its cache key.
-///
-/// Remembered, because a file manager asks the same few dozen file-type icons
-/// again for every cell it binds: a folder of 1129 entries asked the theme 1670
-/// times and read the icon file's metadata as often, on the main thread, to reach
-/// the same twenty answers.
+/// The file the icon theme draws `gicon` from at `size`×`scale`, and its cache
+/// key; remembered, as a file view asks again for every cell it binds and each
+/// answer reads file metadata on the main thread.
 fn resolve(display: &gdk::Display, gicon: &gio::Icon, size: i32, scale: i32) -> Resolved {
     let theme = gtk::IconTheme::for_display(display);
     if !WATCHING_THEME.replace(true) {

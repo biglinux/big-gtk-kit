@@ -10,6 +10,7 @@
 
 use std::fs::File;
 use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -43,7 +44,12 @@ fn create_record(directory: &Path) -> Option<File> {
     }
     loop {
         let path = directory.join(format!("{number:04}.panic"));
-        match File::options().write(true).create_new(true).open(path) {
+        match File::options()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+        {
             Ok(file) => return Some(file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => number += 1,
             Err(_) => return None,
@@ -118,6 +124,26 @@ mod tests {
         assert_eq!(read("0002.panic"), "second");
         assert_eq!(read("0003.panic"), "third\n");
         std::fs::remove_dir_all(&directory).expect("remove test directory");
+    }
+
+    /// The record holds the panic message, which can carry the person's data.
+    #[test]
+    fn record_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = std::env::temp_dir().join(format!(
+            "big-crash-marker-mode-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("test directory");
+        let record = create_record(&directory).expect("new record");
+        let mode = record
+            .metadata()
+            .expect("record metadata")
+            .permissions()
+            .mode();
+        std::fs::remove_dir_all(&directory).expect("remove test directory");
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

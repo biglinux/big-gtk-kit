@@ -14,7 +14,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use big_os_kit::confinement::BWRAP;
-use big_os_kit::file_io::OwnedPrivateDirectory;
+use big_os_kit::file_io::{BigBoundedReadError, OwnedPrivateDirectory};
 use big_os_kit::subprocess::{BigSubprocessOutputMode, BigSubprocessSpec};
 
 use super::{BigImageError, BigRgbaImage};
@@ -31,6 +31,9 @@ const MAX_FRAME_BYTES: u64 = 1 << 30;
 /// the RGBA, and spills what its memory and map limits do not take into the
 /// frames' folder.
 const ENCODER_CACHE_FACTOR: u64 = 4;
+/// The largest encoded animation read back from the encoder: the ceiling of
+/// the RGBA frames it encodes, which their GIF or WebP does not reach.
+const MAX_ANIMATION_BYTES: u64 = MAX_FRAME_BYTES;
 
 /// A format that can hold more than one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,8 +204,18 @@ impl BigAnimationWriter {
         // encoder never sees the destination's folder.
         let staged = self.directory.path().join("animation");
         self.run_encoder(format, &staged)?;
-        std::fs::read(&staged)
-            .and_then(|bytes| big_os_kit::storage::atomic_save_document(destination, &bytes))
+        let answer =
+            big_os_kit::file_io::open_regular_no_follow(&staged).map_err(crate::save::unwritten)?;
+        let bytes = match big_os_kit::file_io::read_bounded_from(answer, MAX_ANIMATION_BYTES) {
+            Ok(bytes) => bytes,
+            Err(BigBoundedReadError::Io(error)) => return Err(crate::save::unwritten(error)),
+            Err(too_large @ BigBoundedReadError::TooLarge { .. }) => {
+                return Err(BigImageError::SaveFailed {
+                    reason: too_large.to_string(),
+                });
+            }
+        };
+        big_os_kit::storage::atomic_save_document(destination, &bytes)
             .map_err(crate::save::unwritten)
     }
 
@@ -368,10 +381,15 @@ mod tests {
             opaque: false,
         };
         assert!(writer.push(&broken, Duration::from_millis(50)).is_err());
-        let destination = std::env::temp_dir().join("big-image-empty-animation.gif");
-        let _ = std::fs::remove_file(&destination);
-        assert!(writer.finish(&destination).is_err(), "no frame, no file");
-        assert!(!destination.exists());
+        let directory =
+            std::env::temp_dir().join(format!("big-image-empty-animation-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("test directory");
+        let destination = directory.join("empty.gif");
+        let result = writer.finish(&destination);
+        let written = destination.exists();
+        std::fs::remove_dir_all(&directory).expect("test directory removed");
+        assert!(result.is_err(), "no frame, no file");
+        assert!(!written);
     }
 
     /// The encoder reads the frames it was handed and nothing else of the
@@ -414,6 +432,38 @@ mod tests {
         std::fs::remove_dir_all(&directory).expect("test directory removed");
         assert!(result.is_err());
         assert!(!foreign.exists());
+    }
+
+    /// The encoder's answer is read only as the regular file it writes: a link
+    /// left in its place is refused, even one to a file of its own folder.
+    #[test]
+    fn linked_answer_refused() {
+        if !Path::new(MAGICK).exists() || !Path::new(BWRAP).exists() {
+            return;
+        }
+        let directory =
+            std::env::temp_dir().join(format!("big-image-linked-answer-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("test directory");
+        let mut writer = BigAnimationWriter::new().expect("private directory");
+        let pixel = BigRgbaImage {
+            rgba: vec![255; 4],
+            width: 1,
+            height: 1,
+            cicp: None,
+            opaque: false,
+        };
+        writer
+            .push(&pixel, Duration::from_millis(50))
+            .expect("frame");
+        let frames = writer.directory.path();
+        std::os::unix::fs::symlink(frames.join("00000.rgba"), frames.join("animation"))
+            .expect("link in the answer's place");
+        let destination = directory.join("linked.gif");
+        let result = writer.finish(&destination);
+        let written = destination.exists();
+        std::fs::remove_dir_all(&directory).expect("test directory removed");
+        assert!(result.is_err());
+        assert!(!written);
     }
 
     #[test]

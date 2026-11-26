@@ -6,6 +6,8 @@
 //! from another device: every offset is checked against the head, and the walk
 //! stops after a fixed number of segments.
 
+use std::ops::Range;
+
 use super::{Reader, tiff_reader};
 
 /// Marker segments looked at before giving up: EXIF sits right after SOI and
@@ -107,8 +109,15 @@ pub(super) fn thumbnail_in(tiff: &[u8]) -> Option<EmbeddedThumbnail<'_>> {
     let reader = tiff_reader(tiff)?;
     let (orientation, next) = first_directory(&reader)?;
     let second = usize::try_from(next).ok().filter(|at| *at != 0)?;
+    let jpeg = tiff.get(thumbnail_span(&reader, second)?)?;
+    (jpeg.get(..2)? == [0xFF, 0xD8]).then_some(EmbeddedThumbnail { jpeg, orientation })
+}
+
+/// The bytes the directory at `second` names as its thumbnail, which may lie
+/// past the end of the block.
+pub(super) fn thumbnail_span(reader: &Reader<'_>, second: usize) -> Option<Range<usize>> {
     let (mut offset, mut length) = (None, None);
-    scan(&reader, second, |tag, value| {
+    scan(reader, second, |tag, value| {
         match tag {
             TAG_THUMBNAIL_OFFSET => offset = Some(value),
             TAG_THUMBNAIL_LENGTH => length = Some(value),
@@ -118,8 +127,7 @@ pub(super) fn thumbnail_in(tiff: &[u8]) -> Option<EmbeddedThumbnail<'_>> {
     })?;
     let start = usize::try_from(offset?).ok()?;
     let end = start.checked_add(usize::try_from(length?).ok()?)?;
-    let jpeg = tiff.get(start..end)?;
-    (jpeg.get(..2)? == [0xFF, 0xD8]).then_some(EmbeddedThumbnail { jpeg, orientation })
+    Some(start..end)
 }
 
 /// Hand every single SHORT or LONG entry of the directory at `at` to `each`

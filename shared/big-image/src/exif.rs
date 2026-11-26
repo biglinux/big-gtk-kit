@@ -150,11 +150,9 @@ pub(crate) fn read_exif(bytes: &[u8]) -> BigExif {
     exif
 }
 
-/// `raw` EXIF, as a picture whose pixels already stand upright carries it:
-/// Orientation reset to 1, and no thumbnail directory, as the thumbnail shows
-/// the picture before its turn and resize. The bytes after the `Exif\0\0`
-/// marker, or `None` when the first directory cannot be read: a copy then
-/// goes without rather than with a header that misleads.
+/// The TIFF block of `raw` for a copy whose pixels stand upright: Orientation 1,
+/// and no thumbnail, which shows the picture before its turn, crop and resize.
+/// `None` when the first directory cannot be read or the thumbnail overlaps it.
 #[must_use]
 pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
     let tiff = raw.strip_prefix(b"Exif\0\0").unwrap_or(raw);
@@ -162,7 +160,22 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
     let first = usize::try_from(reader.u32_at(4)?).ok()?;
     let count = usize::from(reader.u16_at(first)?);
     let next = first.checked_add(2)?.checked_add(count.checked_mul(12)?)?;
-    tiff.get(next..next.checked_add(4)?)?;
+    let first_end = next.checked_add(4)?;
+    let second = usize::try_from(reader.u32_at(next)?).ok()?;
+    let mut dropped = Vec::new();
+    if second != 0 {
+        let entries = usize::from(reader.u16_at(second).unwrap_or(0));
+        dropped.push(second..second.saturating_add(2 + entries * 12 + 4));
+        dropped.extend(thumbnail::thumbnail_span(&reader, second));
+    }
+    let kept = [0..8, first..first_end];
+    if dropped.iter().any(|span| {
+        kept.iter()
+            .any(|keep| span.start < keep.end && keep.start < span.end)
+    }) {
+        return None;
+    }
+
     let mut out = tiff.to_vec();
     let short = |value: u16| {
         if reader.big_endian {
@@ -178,7 +191,18 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
             out[entry + 8..entry + 10].copy_from_slice(&short(1));
         }
     }
-    out[next..next + 4].fill(0);
+    out[next..first_end].fill(0);
+    // Spans that reach the end of the block are cut off; the rest are blanked.
+    dropped.sort_by_key(|span| std::cmp::Reverse(span.end));
+    let mut end = out.len();
+    for span in dropped {
+        let blank = span.start.min(out.len())..span.end.min(out.len());
+        out[blank].fill(0);
+        if span.end >= end {
+            end = end.min(span.start);
+        }
+    }
+    out.truncate(end);
     Some(out)
 }
 
@@ -449,8 +473,28 @@ mod tests {
         bytes
     }
 
-    /// Deterministic xorshift: enough randomness for a mutation sweep, and no
-    /// dependency for a crate that has none.
+    /// A copy keeps no camera thumbnail: the second directory and the JPEG it
+    /// names are cut off at the end of the block, or blanked before other data.
+    #[test]
+    fn upright_drops_thumbnail() {
+        let thumbnail = [0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9];
+        let at_end = thumbnail::tests::camera_tiff(6, Some(&thumbnail));
+        let mut before_tail = at_end.clone();
+        before_tail.extend_from_slice(b"tail");
+        let before_tail_len = before_tail.len();
+        // The header and first directory end at 26 (see `camera_tiff`).
+        for (camera, copy_len) in [(at_end, 26), (before_tail, before_tail_len)] {
+            let copy = upright(&camera).expect("first directory reads");
+            assert!(
+                !copy.windows(2).any(|pair| pair == [0xFF, 0xD8]),
+                "{copy:?}"
+            );
+            assert_eq!(thumbnail::tiff_orientation(&copy), 1);
+            assert_eq!(copy.len(), copy_len);
+        }
+    }
+
+    /// Deterministic xorshift: enough randomness for a mutation sweep.
     fn next_random(state: &mut u64) -> u64 {
         *state ^= *state << 13;
         *state ^= *state >> 7;
@@ -460,10 +504,8 @@ mod tests {
 
     #[test]
     fn reader_survives_any_bytes() {
-        // A real fuzz harness would be better, but `cargo-fuzz` needs nightly
-        // and this workspace pins a stable toolchain. This is the same idea
-        // inside the suite that always runs: a valid blob, mutated every way
-        // this reader could be walked off the end of.
+        // A valid blob, mutated every way this reader could be walked off the
+        // end of.
         let valid = gps_blob();
         let mut state = 0x5eed_1234_9876_abcdu64;
         for round in 0..2_000 {

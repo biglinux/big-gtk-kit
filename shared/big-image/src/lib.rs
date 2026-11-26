@@ -700,8 +700,7 @@ fn pack_rgb_rows_to_rgbx(
 /// The fastest row packer this processor runs. The compiler does not turn
 /// the plain loop into byte shuffles for x86-64's baseline (SSE2), and SSSE3
 /// is absent from some processors still in use (AMD's K10), so it is chosen
-/// here: on the Sandy Bridge test laptop a 4K row set packs in 10 ms instead
-/// of 27, near the 7.4 ms a plain copy of the output takes.
+/// here at run time.
 fn rgb_row_packer() -> fn(&[u8], &mut [u8]) {
     #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("ssse3") {

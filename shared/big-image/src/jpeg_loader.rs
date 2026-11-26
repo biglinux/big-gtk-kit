@@ -219,8 +219,13 @@ mod tests {
             assert_eq!(super::large_jpeg_source(), expected == "routed");
             return;
         }
-        let nowhere =
+        // The routed child writes its loader list under the runtime directory.
+        let scratch =
             std::env::temp_dir().join(format!("big-image-routing-{}", std::process::id()));
+        let runtime = scratch.join("runtime");
+        std::fs::create_dir_all(&runtime).expect("scratch runtime directory");
+        let nowhere = scratch.join("glycin-data");
+        let mut outcomes = Vec::new();
         for (glycin_data_dir, expected) in [(None, "routed"), (Some(&nowhere), "unrouted")] {
             let mut child = big_os_kit::subprocess::BigSubprocessSpec::builder()
                 .program(std::env::current_exe().expect("test binary"))
@@ -229,11 +234,16 @@ mod tests {
                     "jpeg_loader::tests::glycin_data_dir_routes_nothing",
                     "--quiet",
                 ])
-                .env(CHILD, expected);
+                .env(CHILD, expected)
+                .env("XDG_RUNTIME_DIR", &runtime);
             if let Some(directory) = glycin_data_dir {
                 child = child.env("GLYCIN_DATA_DIR", directory);
             }
-            let out = child.build().run().expect("child runs");
+            outcomes.push((expected, child.build().run()));
+        }
+        std::fs::remove_dir_all(&scratch).expect("scratch removed");
+        for (expected, out) in outcomes {
+            let out = out.expect("child runs");
             assert!(
                 out.status.success() && out.stdout_lossy().contains("1 passed"),
                 "{expected}: {}",

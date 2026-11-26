@@ -14,8 +14,7 @@ Do not use it in production dependencies or as a substitute for product assertio
 
 GTK test runners, finalization census, RSS slope verdicts, the frame-interval probe (`frame_probe`: p50, p95, p99 and frames over a budget), key presses as GTK delivers them (`harness::press_key`) and the stylesheet check (`harness::assert_css_parses`).
 
-The exact public API and safety requirements are in crate-level rustdoc. Do not
-infer current methods from roadmap documents.
+The exact public API and safety requirements are in crate-level rustdoc.
 
 ## Ownership and lifecycle
 
@@ -24,8 +23,6 @@ Test harnesses create and fully tear down their GTK/application state.
 ## Native dependencies
 
 GTK, KWin and D-Bus for graphical tests; `/proc` for Linux memory probes.
-
-The workspace feature gates and nearest product PKGBUILD define exact versions.
 
 ## Example
 

@@ -5,6 +5,7 @@ use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::rc::Rc;
 
 use glib::translate::{IntoGlib, ToGlibPtr};
@@ -502,7 +503,12 @@ fn fill_input_method_gap() {
             session_type.as_deref(),
             desktop.as_deref(),
             configured.as_deref(),
-            input_method_daemon_is_running,
+            || {
+                input_method_daemon_runs(
+                    Path::new("/proc"),
+                    big_os_kit::microdaemon::current_effective_user_id(),
+                )
+            },
         )
     {
         return;
@@ -574,10 +580,10 @@ fn leave_out_silent_portal(application_id: &str) {
         PORTAL_WAIT_MS / 1000
     );
     gtk::disable_portals();
-    // SAFETY: glibc 2.41 and later never free an environment array they
-    // published (big-host and bigshell depend on that version), so a C
-    // `getenv` on the bus thread reads the old array or the new one; Rust
-    // readers take std's environment lock.
+    // SAFETY: glibc 2.41 and later, which the systems this crate targets ship,
+    // never free an environment array they published, so a C `getenv` on the
+    // bus thread reads the old array or the new one; Rust readers take std's
+    // environment lock.
     unsafe { std::env::set_var("ADW_DISABLE_PORTAL", "1") };
 }
 
@@ -601,13 +607,12 @@ fn needs_simple_input_method(
     !daemon_is_running()
 }
 
-/// Whether fcitx5 or ibus is already running for this user.
-///
-/// Read from `/proc` rather than by spawning `pgrep`: two extra processes at
-/// every application start buy nothing, and the exact-name comparison is the
-/// same one `pgrep -x` makes.
-fn input_method_daemon_is_running() -> bool {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+/// Whether fcitx5 or ibus runs as `user`, read from the `/proc` mounted at
+/// `proc`, where a process's directory belongs to its effective user: the
+/// exact-name match `pgrep -x` makes, without starting it at every launch.
+fn input_method_daemon_runs(proc: &Path, user: u32) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let Ok(entries) = std::fs::read_dir(proc) else {
         return false;
     };
     entries.filter_map(Result::ok).any(|entry| {
@@ -619,8 +624,9 @@ fn input_method_daemon_is_running() -> bool {
         {
             return false;
         }
-        std::fs::read_to_string(entry.path().join("comm"))
-            .is_ok_and(|comm| matches!(comm.trim_end(), "fcitx5" | "ibus-daemon"))
+        entry.metadata().is_ok_and(|process| process.uid() == user)
+            && std::fs::read_to_string(entry.path().join("comm"))
+                .is_ok_and(|comm| matches!(comm.trim_end(), "fcitx5" | "ibus-daemon"))
     })
 }
 
