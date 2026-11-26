@@ -13,7 +13,7 @@
 //! every consumer. `curl` is executed with argv-only arguments, explicit
 //! timeouts, bounded reads, and validated header values.
 
-use std::io::{Cursor, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
@@ -145,18 +145,24 @@ struct CurlHeaders {
 }
 
 struct CurlBodyReader {
-    /// Killed and reaped when the body reader drops.
-    _process: CurlProcess,
-    buffered: Cursor<Vec<u8>>,
-    stdout: ChildStdout,
+    /// Killed and reaped when the body reader drops; taken once the body
+    /// ends, when its exit says whether the body was whole.
+    process: Option<CurlProcess>,
+    stdout: BufReader<ChildStdout>,
 }
 
 impl Read for CurlBodyReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.buffered.position() < self.buffered.get_ref().len() as u64 {
-            return self.buffered.read(buf);
+        let read = self.stdout.read(buf)?;
+        // A stalled or reset transfer also ends the output: only curl's exit
+        // tells it from the end of the body.
+        if read == 0
+            && !buf.is_empty()
+            && let Some(process) = self.process.take()
+        {
+            wait_for_success(process).map_err(std::io::Error::other)?;
         }
-        self.stdout.read(buf)
+        Ok(read)
     }
 }
 
@@ -434,7 +440,7 @@ fn curl_bytes(
     if let Some(body) = body {
         write_request_body(&mut process, body)?;
     }
-    let mut stdout = process.stdout_take().ok_or(HttpError::Pipe("stdout"))?;
+    let mut stdout = BufReader::new(process.stdout_take().ok_or(HttpError::Pipe("stdout"))?);
     let parsed_headers = match read_final_headers(&mut stdout, follow_redirects) {
         Ok(headers) => headers,
         Err(error) => return Err(header_failure(process, error)),
@@ -469,7 +475,7 @@ fn curl_stream(
     if let Some(body) = body {
         write_request_body(&mut process, body)?;
     }
-    let mut stdout = process.stdout_take().ok_or(HttpError::Pipe("stdout"))?;
+    let mut stdout = BufReader::new(process.stdout_take().ok_or(HttpError::Pipe("stdout"))?);
     let parsed_headers = match read_final_headers(&mut stdout, follow_redirects) {
         Ok(headers) => headers,
         Err(error) => return Err(header_failure(process, error)),
@@ -479,8 +485,7 @@ fn curl_stream(
         content_type: parsed_headers.content_type,
         content_length: parsed_headers.content_length,
         reader: Box::new(CurlBodyReader {
-            _process: process,
-            buffered: Cursor::new(Vec::new()),
+            process: Some(process),
             stdout,
         }),
     })
@@ -498,6 +503,8 @@ fn spawn_curl(
     validate_url(url)?;
     let mut command = base_curl(deadline, headers.user_agent);
     restrict_protocols(&mut command, url);
+    // Brackets and braces in a URL are its own characters, not curl's ranges.
+    command.arg("--globoff");
     command.arg("--request").arg(match method {
         HttpMethod::Get => "GET",
         HttpMethod::Post => "POST",
@@ -547,7 +554,10 @@ fn restrict_protocols(command: &mut Command, url: &str) {
 
 fn base_curl(deadline: Deadline, user_agent: &str) -> Command {
     let mut command = Command::new(CURL);
+    // First, or curl reads ~/.curlrc, whose `location` or `output` would
+    // follow redirects with the caller's credentials or empty the pipe.
     command
+        .arg("--disable")
         .arg("--silent")
         .arg("--show-error")
         .arg("--connect-timeout")
@@ -857,5 +867,53 @@ mod tests {
         .unwrap();
         server.join().unwrap();
         assert_eq!(response.status, 302);
+    }
+
+    /// A body cut short ends in an error, not in a shorter body.
+    #[test]
+    fn cut_stream_reads_as_an_error() {
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort",
+        ]);
+        let mut response =
+            http_get_stream(&url, &RequestHeaders::default(), Duration::from_secs(5)).unwrap();
+        let read = read_stream_capped(response.reader.as_mut(), 1024);
+        server.join().unwrap();
+        assert!(read.is_err(), "{read:?}");
+    }
+
+    /// The server sees the path as asked: curl expands no `[1-3]` or `{a,b}`.
+    #[test]
+    fn url_brackets_reach_the_server() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/x[1-3]{{a,b}}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let read = stream.read(&mut request).unwrap();
+            let line = String::from_utf8_lossy(&request[..read])
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let answer = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{line}",
+                line.len()
+            );
+            stream.write_all(answer.as_bytes()).unwrap();
+        });
+        let answer = http_get_with_headers(&url, &RequestHeaders::default());
+        server.join().unwrap();
+        assert_eq!(answer.as_deref(), Some("GET /x[1-3]{a,b} HTTP/1.1"));
+    }
+
+    /// curl reads `~/.curlrc` unless `--disable` comes first.
+    #[test]
+    fn curl_ignores_the_users_curlrc() {
+        let command = base_curl(Deadline::Total(Duration::from_secs(1)), "");
+        assert_eq!(
+            arguments(&command).first().map(String::as_str),
+            Some("--disable")
+        );
     }
 }
