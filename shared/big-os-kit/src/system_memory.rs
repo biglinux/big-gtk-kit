@@ -10,6 +10,21 @@ use std::sync::OnceLock;
 
 mod cgroup;
 
+/// The cgroup reader over a membership line, a mount table and a control's
+/// value the kernel did not produce; for `cargo fuzz` only. Every control
+/// reads `value`, so both limits agree, and the walk up the tree stays bounded.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub fn fuzz_cgroup(membership: &[u8], mounts: &[u8], value: &[u8]) {
+    let mut reads = 0;
+    let limits = cgroup::observe(membership, mounts, |_| {
+        reads += 1;
+        assert!(reads <= 513, "ancestor traversal must remain bounded");
+        Ok(value.to_vec())
+    });
+    assert_eq!(limits.high, limits.max);
+}
+
 const MEMINFO_LIMIT: usize = 64 * 1024;
 
 /// Whether all visible cgroup v2 memory controls could be inspected.
