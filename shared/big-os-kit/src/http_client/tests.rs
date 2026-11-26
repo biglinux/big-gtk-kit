@@ -41,12 +41,17 @@ fn protocol_policy_restricts_redirects() {
     );
 }
 
-/// A stream has no total deadline, so a long download is not cut short.
+/// A stream has no total deadline, so a long download is not cut short; a
+/// zero total is the shortest one, not curl's "no limit".
 #[test]
 fn stream_deadline_is_a_stall_limit() {
-    let total = arguments(&base_curl(Deadline::Total(Duration::from_secs(15)), ""));
+    let total = arguments(&base_curl(Deadline::Total(Duration::from_secs(15)), "").unwrap());
     assert!(total.windows(2).any(|pair| pair == ["--max-time", "15"]));
-    let stall = arguments(&base_curl(Deadline::Stall(Duration::from_secs(30)), ""));
+    let zero = arguments(&base_curl(Deadline::Total(Duration::ZERO), "").unwrap());
+    assert!(zero.windows(2).any(|pair| pair == ["--max-time", "0.001"]));
+    let program = base_curl(Deadline::Total(Duration::ZERO), "").unwrap();
+    assert!(std::path::Path::new(program.get_program()).is_absolute());
+    let stall = arguments(&base_curl(Deadline::Stall(Duration::from_secs(30)), "").unwrap());
     assert!(!stall.iter().any(|arg| arg == "--max-time"));
     assert!(
         stall
@@ -305,7 +310,7 @@ fn url_brackets_reach_the_server() {
 /// curl reads `~/.curlrc` unless `--disable` comes first.
 #[test]
 fn curl_ignores_the_users_curlrc() {
-    let command = base_curl(Deadline::Total(Duration::from_secs(1)), "");
+    let command = base_curl(Deadline::Total(Duration::from_secs(1)), "").unwrap();
     assert_eq!(
         arguments(&command).first().map(String::as_str),
         Some("--disable")
@@ -317,10 +322,44 @@ fn curl_ignores_the_users_curlrc() {
 /// read as the server's answer.
 #[test]
 fn proxy_answer_stays_out_of_headers() {
-    let command = base_curl(Deadline::Total(Duration::from_secs(1)), "");
+    let command = base_curl(Deadline::Total(Duration::from_secs(1)), "").unwrap();
     assert!(
         arguments(&command)
             .iter()
             .any(|argument| argument == "--suppress-connect-headers")
     );
+}
+
+/// Only an http or https URL starts curl: whether a redirect may leave https
+/// is read from its first bytes.
+#[test]
+fn url_starts_with_its_scheme() {
+    for url in [" https://example.com", "ftp://example.com", "example.com"] {
+        assert!(
+            matches!(validate_url(url), Err(HttpError::UnsupportedUrl)),
+            "{url}"
+        );
+    }
+    assert!(validate_url("HTTPS://example.com").is_ok());
+}
+
+/// A Referer is for the host it names: a redirect is not followed.
+#[test]
+fn referer_stops_redirects() {
+    let moved: &[u8] =
+        b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let (url, server) = serve(vec![
+        moved,
+        moved,
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnext",
+    ]);
+    let headers = RequestHeaders {
+        referer: "https://example.com/",
+        ..RequestHeaders::default()
+    };
+    let answer = http_get_with_headers(&url, &headers);
+    let followed = http_get_with_headers(&url, &RequestHeaders::default());
+    server.join().unwrap();
+    assert_eq!(answer, None);
+    assert_eq!(followed.as_deref(), Some("next"));
 }
