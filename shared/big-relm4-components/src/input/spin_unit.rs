@@ -48,16 +48,31 @@ impl BigSpinUnit {
         }
     }
 
-    /// Read back a number typed in this unit, or `None` when it is not one.
+    /// What [`Self::display`] writes after the number, read back in any case.
+    const fn suffix(self) -> &'static str {
+        match self {
+            Self::Plain => "",
+            Self::Percent => "%",
+            Self::Pixels => "px",
+            Self::Milliseconds => "ms",
+            Self::Seconds => "s",
+            Self::Megabytes => "MB",
+            Self::Kilobytes => "KB",
+        }
+    }
+
+    /// Read back a number typed in this unit, bare or with this unit's
+    /// suffix, or `None` when it is not one.
     #[must_use]
     pub fn parse(self, text: &str) -> Option<f64> {
+        let text = text.trim();
+        let number = text.trim_end_matches(|c: char| c == '%' || c.is_ascii_alphabetic());
+        let (number, written) = text.split_at(number.len());
+        if !written.is_empty() && !written.eq_ignore_ascii_case(self.suffix()) {
+            return None;
+        }
         // A pt_BR keyboard types "1,5"; the parser only knows the dot.
-        let typed = text
-            .trim()
-            .trim_end_matches(|c: char| c == '%' || c.is_ascii_alphabetic() || c.is_whitespace())
-            .trim()
-            .replace(',', ".");
-        let typed: f64 = typed.parse().ok()?;
+        let typed: f64 = number.trim().replace(',', ".").parse().ok()?;
         Some(match self {
             Self::Plain | Self::Percent | Self::Pixels | Self::Milliseconds | Self::Seconds => {
                 typed
@@ -155,6 +170,17 @@ mod tests {
         assert_eq!(BigSpinUnit::Megabytes.parse("20"), Some(TWENTY_MEGABYTES));
         assert_eq!(BigSpinUnit::Percent.parse("1,5"), Some(1.5));
         assert_eq!(BigSpinUnit::Percent.parse("nada"), None);
+    }
+
+    /// Another unit's suffix is no number in this one: "20 KB" is not 20 MB.
+    #[test]
+    fn foreign_suffix_refused() {
+        assert_eq!(BigSpinUnit::Megabytes.parse("20 KB"), None);
+        assert_eq!(BigSpinUnit::Seconds.parse("300 ms"), None);
+        assert_eq!(BigSpinUnit::Pixels.parse("5%"), None);
+        assert_eq!(BigSpinUnit::Plain.parse("7 px"), None);
+        assert_eq!(BigSpinUnit::Kilobytes.parse("4kb"), Some(4096.0));
+        assert_eq!(BigSpinUnit::Milliseconds.parse(" 250 MS "), Some(250.0));
     }
 
     /// A value the field shows rounded is kept when the field is read back,
