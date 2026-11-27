@@ -133,14 +133,30 @@ pub(super) fn thumbnail_span(reader: &Reader<'_>, second: usize) -> Option<Range
 }
 
 /// Whether the directory at `second` keeps its thumbnail as pixels in strips
-/// or tiles (EXIF's uncompressed thumbnail), which no JPEG span names.
+/// or tiles (EXIF's uncompressed thumbnail), which no JPEG span names. The
+/// tag alone decides, whatever its format and count: several strips list
+/// several offsets.
 pub(super) fn in_strips(reader: &Reader<'_>, second: usize) -> bool {
-    let mut found = false;
-    scan(reader, second, |tag, _| {
-        found |= matches!(tag, TAG_STRIP_OFFSETS | TAG_TILE_OFFSETS);
-        Some(())
-    });
-    found
+    names_any(reader, second, &[TAG_STRIP_OFFSETS, TAG_TILE_OFFSETS])
+}
+
+/// Whether the directory at `second` names a JPEG thumbnail, placed or not.
+pub(super) fn names_jpeg(reader: &Reader<'_>, second: usize) -> bool {
+    names_any(
+        reader,
+        second,
+        &[TAG_THUMBNAIL_OFFSET, TAG_THUMBNAIL_LENGTH],
+    )
+}
+
+/// Whether the directory at `at` has an entry for one of `tags`.
+fn names_any(reader: &Reader<'_>, at: usize, tags: &[u16]) -> bool {
+    let count = reader.u16_at(at).map_or(0, usize::from);
+    (0..count).any(|index| {
+        at.checked_add(2 + index * 12)
+            .and_then(|entry| reader.u16_at(entry))
+            .is_some_and(|tag| tags.contains(&tag))
+    })
 }
 
 /// Hand every single SHORT or LONG entry of the directory at `at` to `each`

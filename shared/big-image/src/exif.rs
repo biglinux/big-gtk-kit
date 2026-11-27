@@ -169,7 +169,12 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
         }
         let entries = usize::from(reader.u16_at(second).unwrap_or(0));
         dropped.push(second..second.saturating_add(2 + entries * 12 + 4));
-        dropped.extend(thumbnail::thumbnail_span(&reader, second));
+        match thumbnail::thumbnail_span(&reader, second) {
+            Some(span) => dropped.push(span),
+            // Named but not placed, it could be any of the block.
+            None if thumbnail::names_jpeg(&reader, second) => return None,
+            None => {}
+        }
     }
     // What the first directory points to lies before the second one, as
     // writers lay the block out; a thumbnail there could be any of it.
@@ -193,8 +198,12 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
     };
     for index in 0..count {
         let entry = first + 2 + index * 12;
-        // Orientation is one SHORT, held in the entry itself.
-        if reader.u16_at(entry)? == 0x0112 && reader.u16_at(entry + 2)? == 3 {
+        if reader.u16_at(entry)? == 0x0112 {
+            // Orientation is one SHORT, held in the entry itself; any other
+            // shape holds an offset, which a rewrite would break.
+            if reader.u16_at(entry + 2)? != 3 || reader.u32_at(entry + 4)? != 1 {
+                return None;
+            }
             out[entry + 8..entry + 10].copy_from_slice(&short(1));
         }
     }
@@ -545,6 +554,29 @@ mod tests {
         // The second directory at 26 names StripOffsets and StripByteCounts.
         tiff[28..30].copy_from_slice(&0x0111u16.to_le_bytes());
         tiff[40..42].copy_from_slice(&0x0117u16.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
+        // Two strips: the entries list their offsets and counts elsewhere.
+        tiff[32..36].copy_from_slice(&2u32.to_le_bytes());
+        tiff[44..48].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
+    }
+
+    /// An orientation of several values holds an offset, never rewritten.
+    #[test]
+    fn upright_refuses_non_scalar_orientation() {
+        let mut tiff = thumbnail::tests::camera_tiff(6, None);
+        // The count of the first directory's Orientation entry.
+        tiff[14..18].copy_from_slice(&3u32.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
+    }
+
+    /// A thumbnail whose offset lists several values cannot be placed, so it
+    /// cannot be cut out either.
+    #[test]
+    fn upright_refuses_unplaced_thumbnail() {
+        let mut tiff = thumbnail::tests::camera_tiff(6, Some(&[0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9]));
+        // The count of the second directory's JPEGInterchangeFormat entry.
+        tiff[32..36].copy_from_slice(&2u32.to_le_bytes());
         assert_eq!(upright(&tiff), None);
     }
 
