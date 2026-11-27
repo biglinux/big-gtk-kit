@@ -665,6 +665,10 @@ impl BigShortcutEditor {
         let Some(index) = self.rows.iter().position(|row| row.action == action) else {
             return;
         };
+        if !accel.is_empty() && gtk::accelerator_parse(&accel).is_none() {
+            log::warn!("shortcut editor: {accel:?} is no GTK accelerator; capture kept open");
+            return;
+        }
         self.contested_accel = None;
         // Hiding a focused Replace would leave no widget to capture the next key.
         widgets.replace_button.set_visible(false);
@@ -1322,6 +1326,27 @@ mod tests {
             );
             assert!(!editor.widgets().replace_button.is_visible());
             assert_eq!(editor.model().rows[1].current_accel, "n");
+            window.destroy();
+        });
+    }
+
+    /// Text GTK reads no key from is never handed on to be saved; the capture
+    /// waits for a key.
+    #[test]
+    fn unparsable_commit_is_refused() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, outputs) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture(
+                "not-a-key".to_owned(),
+            ));
+            big_testkit::harness::pump();
+            assert!(outputs.borrow().is_empty());
+            assert_eq!(editor.model().rows[1].current_accel, "n");
+            editor.emit(BigShortcutEditorInput::CommitCapture("m".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(*outputs.borrow(), [changed("next", "m")]);
             window.destroy();
         });
     }
