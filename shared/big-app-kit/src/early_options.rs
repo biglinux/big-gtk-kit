@@ -112,8 +112,8 @@ impl ProductOptions<'_> {
         text
     }
 
-    /// The first argument before a taken `--` that the product does not take:
-    /// an option, or anything at all when it opens no files. The values a
+    /// The first argument the product does not take: an option before a taken
+    /// `--`, or anything at all when it opens no files. The values a
     /// taken option shows in its help follow it, whatever their spelling.
     fn refused<'a>(&self, arguments: &'a [OsString]) -> Option<&'a OsStr> {
         let mut arguments = arguments.iter().map(OsString::as_os_str);
@@ -125,7 +125,7 @@ impl ProductOptions<'_> {
                 continue;
             };
             if argument == "--" {
-                return None;
+                return arguments.next().filter(|_| !self.accepts_files);
             }
             for _ in 0..values {
                 arguments.next();
@@ -198,6 +198,7 @@ mod tests {
             refused(&no_files, &["--resize", "a.png"]),
             Some("a.png".into())
         );
+        assert_eq!(refused(&no_files, &["--", "a.png"]), Some("a.png".into()));
     }
 
     #[test]
