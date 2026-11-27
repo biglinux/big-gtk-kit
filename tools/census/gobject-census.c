@@ -36,6 +36,7 @@
 #include <glib-unix.h>
 #include <glib.h>
 #include <dlfcn.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -452,6 +453,16 @@ on_signal (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
+static gboolean
+install_signal (gpointer data)
+{
+  (void) data;
+  // Dispatched by the default main context, on the main thread, between events:
+  // never GLib inside a raw signal handler.
+  g_unix_signal_add (SIGUSR2, on_signal, NULL);
+  return G_SOURCE_REMOVE;
+}
+
 __attribute__ ((constructor)) static void
 install (void)
 {
@@ -459,7 +470,10 @@ install (void)
   if (!prefix || !*prefix)
     return;
   census_prefix = g_strdup (prefix);
-  // Dispatched by the default main context, on the main thread, between events:
-  // never GLib inside a raw signal handler.
-  g_unix_signal_add (SIGUSR2, on_signal, NULL);
+  // g_unix_signal_add starts GLib's worker thread, and a program may refuse to
+  // start with a thread already running (it sets the locale first). The source
+  // is added once the main loop runs; until then a census request is ignored
+  // instead of ending the program.
+  signal (SIGUSR2, SIG_IGN);
+  g_idle_add (install_signal, NULL);
 }
