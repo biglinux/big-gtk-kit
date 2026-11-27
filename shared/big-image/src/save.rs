@@ -285,10 +285,10 @@ impl BigRgbaImage {
     /// [`BigImageError::InvalidBytePixels`] when the buffer does not match
     /// its size.
     pub fn into_srgb(self) -> Result<Self, BigImageError> {
+        let stride = crate::texture_stride(&self).ok_or(BigImageError::InvalidBytePixels)?;
         if self.cicp.is_none() {
             return Ok(self);
         }
-        let stride = crate::texture_stride(&self).ok_or(BigImageError::InvalidBytePixels)?;
         let shape = Self {
             rgba: Vec::new(),
             ..self
