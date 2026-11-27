@@ -278,7 +278,8 @@ pub async fn send_clipboard(connection: &Connection, id: &str) -> zbus::Result<(
 }
 
 /// Ticks whenever the list of phones may have changed: a device appeared,
-/// went away or changed reachability, or the daemon started or stopped.
+/// went away, changed reachability or its plugins, or the daemon started or
+/// stopped.
 ///
 /// # Errors
 /// The bus refused the subscriptions.
@@ -293,7 +294,20 @@ pub async fn phones_changed(connection: &Connection) -> zbus::Result<impl Stream
         .receive_name_owner_changed_with_args(&[(0, SERVICE)])
         .await?
         .map(|_| ());
-    Ok(futures_util::stream::select(devices, owner))
+    // Any device's: turning sharing off on a phone changes no device list.
+    let plugins_rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(SERVICE)?
+        .interface("org.kde.kdeconnect.device")?
+        .member("pluginsChanged")?
+        .build();
+    let plugins = zbus::MessageStream::for_match_rule(plugins_rule, connection, None)
+        .await?
+        .map(|_| ());
+    Ok(futures_util::stream::select(
+        futures_util::stream::select(devices, owner),
+        plugins,
+    ))
 }
 
 /// Call `changed` with the phones running `plugin` now, and again after each
@@ -364,27 +378,30 @@ pub async fn mount(connection: &Connection, id: &str) -> Result<Vec<Storage>, Mo
         ));
     }
     let mount_point = PathBuf::from(sftp.mount_point().await?);
-    let mut storages: Vec<Storage> = sftp
-        .directories()
-        .await?
+    Ok(storages_at(&mount_point, sftp.directories().await?))
+}
+
+/// The storages among the daemon's `directories`, sorted by path. The daemon
+/// builds each key as `mountPoint + path`; a phone that names no paths gets
+/// the mount point itself ("All files") and its camera folder.
+fn storages_at(mount_point: &Path, directories: HashMap<String, OwnedValue>) -> Vec<Storage> {
+    let mut storages: Vec<Storage> = directories
         .into_iter()
         .filter_map(|(key, name)| {
             let name = String::try_from(name).ok()?;
-            // The daemon builds the keys as `mountPoint + path`: absolute, and
-            // a key that is not strictly below the mount point is no storage.
-            let below = Path::new(&key).strip_prefix(&mount_point).ok()?;
-            let inside = !below.as_os_str().is_empty()
-                && below
-                    .components()
-                    .all(|part| matches!(part, Component::Normal(_)));
+            // A key outside the mount point, or climbing out of it, is no storage.
+            let below = Path::new(&key).strip_prefix(mount_point).ok()?;
+            let inside = below
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)));
             inside.then(|| Storage {
-                path: mount_point.join(below),
+                path: mount_point.components().chain(below.components()).collect(),
                 name,
             })
         })
         .collect();
     storages.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(storages)
+    storages
 }
 
 /// Where `rest` of a phone is, among its `storages`: a first component naming

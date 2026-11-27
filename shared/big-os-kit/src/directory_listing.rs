@@ -176,7 +176,8 @@ impl DirectoryListingEntry {
     /// `is_symlink` comes from the same `statx` as the rest of the metadata
     /// rather than from a directory iterator's cached type, so one child read on
     /// its own answers exactly what the same child answers inside a full scan.
-    /// No call mounts an automount point it meets.
+    /// Neither the entry nor a link's final target is mounted when it is an
+    /// automount point; one on the way to a link's target is.
     fn capture(folder: BorrowedFd<'_>, name: &CStr, path: PathBuf) -> std::io::Result<Self> {
         let stat = rustix::fs::statx(
             folder,
@@ -413,10 +414,12 @@ impl DirectoryListingReader {
         self.failure.take()
     }
 
-    /// The next `limit` entries, or fewer; empty once none is left or once
-    /// reading the folder failed. On a share or FUSE mount a batch also ends
-    /// once it holds entries and 50 ms have gone by.
+    /// The next `limit` entries (at least one), or fewer; empty once none is
+    /// left or once reading the folder failed. On a share or FUSE mount a
+    /// batch also ends once it holds entries and 50 ms have gone by.
     pub fn next_batch(&mut self, limit: usize) -> Vec<DirectoryListingEntry> {
+        // An empty batch means the end, so even a limit of 0 reads on.
+        let limit = limit.max(1);
         let started = Instant::now();
         let mut entries = Vec::new();
         // Names read on several threads are looked at once a round of them is
@@ -588,7 +591,9 @@ mod tests {
             std::process::id(),
             DIRECTORY_LISTING_TEST_SEQ.fetch_add(1, Ordering::Relaxed),
         ));
-        fs::create_dir_all(&dir).unwrap();
+        // A failed run under a reused PID leaves its files behind.
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
         dir
     }
 
@@ -796,6 +801,17 @@ mod tests {
         assert!(!reader.may_stall);
         assert!(reader.source.is_some());
         assert_eq!(reader.lanes, None);
+    }
+
+    /// An empty batch is the end, so a limit of 0 still reads an entry.
+    #[test]
+    fn zero_limit_reads_on() {
+        let dir = directory_listing_test_dir("zero-limit");
+        fs::write(dir.join("file"), b"x").unwrap();
+        let mut reader = DirectoryListingReader::open(&dir).unwrap();
+        let batch = reader.next_batch(0);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(batch.len(), 1);
     }
 
     /// Reading in batches yields what one whole read does.

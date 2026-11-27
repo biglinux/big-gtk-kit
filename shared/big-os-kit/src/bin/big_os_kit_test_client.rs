@@ -26,6 +26,8 @@ fn main() -> std::io::Result<()> {
         .to_string_lossy()
         .into_owned();
     let mut stream = UnixStream::connect(socket_path)?;
+    // Exiting closes stdout, which ends the test's wait for the ready byte.
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     write_microdaemon_json_frame(
         &mut stream,
         &MicrodaemonFrame::command(
@@ -43,12 +45,20 @@ fn main() -> std::io::Result<()> {
         let MicrodaemonBody::Event { event } = frame.body else {
             continue;
         };
-        if matches!(event, MicrodaemonEvent::StreamFrame { .. }) {
-            // Tells the test this client is attached and may be killed.
-            std::io::stdout().write_all(b"x")?;
-            std::io::stdout().flush()?;
-            std::thread::sleep(Duration::from_secs(30));
-            return Ok(());
+        match event {
+            MicrodaemonEvent::StreamFrame { .. } => {
+                // Tells the test this client is attached and may be killed.
+                std::io::stdout().write_all(b"x")?;
+                std::io::stdout().flush()?;
+                std::thread::sleep(Duration::from_secs(30));
+                return Ok(());
+            }
+            MicrodaemonEvent::Error { .. } | MicrodaemonEvent::StreamEnded { .. } => {
+                return Err(std::io::Error::other(format!(
+                    "stream ended before a frame: {event:?}"
+                )));
+            }
+            _ => {}
         }
     }
 }

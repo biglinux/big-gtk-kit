@@ -703,7 +703,8 @@ pub fn program_on_path(program: &str) -> bool {
 /// run that project's file of the same name. Those entries are skipped.
 #[must_use]
 pub fn find_program(program: &str) -> Option<std::path::PathBuf> {
-    find_program_in(program, &std::env::var_os("PATH")?)
+    // Without `PATH` a bare name is found nowhere; an absolute path still is.
+    find_program_in(program, &std::env::var_os("PATH").unwrap_or_default())
 }
 
 /// [`find_program`] against the given `PATH` value.
@@ -965,11 +966,15 @@ pub fn give_back_limits(cmd: &mut std::process::Command) {
 }
 
 /// Give `pid`, a program this process started, the soft limits this process
-/// inherited, where it changed them.
+/// inherited, where it changed them. PID 0, which `prlimit` reads as this
+/// process, changes nothing.
 pub fn restore_limits(pid: u32) {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return;
     };
+    if pid == 0 {
+        return;
+    }
     for (resource, inherited) in inherited_limits() {
         let Some(inherited) = inherited else {
             continue;
@@ -1526,5 +1531,37 @@ mod program_lookup_tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(found, None);
         assert_eq!(absolute, Some(tool));
+    }
+
+    /// An absolute path needs no search, so it resolves with `PATH` unset;
+    /// checked in a child run, which owns its environment.
+    #[test]
+    fn absolute_program_needs_no_path() {
+        const CHILD: &str = "BIG_OS_KIT_CHILD_NO_PATH";
+        if std::env::var_os(CHILD).is_some() {
+            assert_eq!(std::env::var_os("PATH"), None);
+            assert_eq!(find_program("/bin/sh"), Some("/bin/sh".into()));
+            assert_eq!(find_program("sh"), None);
+            return;
+        }
+        let child = BigSubprocessSpec::builder()
+            .program(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "subprocess::program_lookup_tests::absolute_program_needs_no_path",
+                "--quiet",
+            ])
+            .env_inherit(false)
+            .env(CHILD, "1")
+            .stdout(BigSubprocessOutputMode::Capture)
+            .build()
+            .run()
+            .expect("child run");
+        // A name that matched no test would pass with nothing run.
+        assert!(
+            child.status.success() && child.stdout_lossy().contains("1 passed"),
+            "{}",
+            child.stdout_lossy()
+        );
     }
 }

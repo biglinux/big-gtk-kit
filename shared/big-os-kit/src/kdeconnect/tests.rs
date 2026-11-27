@@ -79,6 +79,37 @@ fn storage(path: &str, name: &str) -> Storage {
     }
 }
 
+/// A phone that sends no `multiPaths` gets the keys KDE Connect's sftp plugin
+/// builds for it: the mount point as "All files", and its camera folder.
+#[test]
+fn whole_phone_storage_holds_plain_folders() {
+    let named = |key: &str, name: &str| {
+        (
+            key.to_owned(),
+            OwnedValue::try_from(Value::from(name)).expect("a string value"),
+        )
+    };
+    let storages = storages_at(
+        Path::new("/m"),
+        HashMap::from([
+            named("/m", "All files"),
+            named("/m/DCIM/Camera", "Camera pictures"),
+            named("/m/../etc", "Climbs out"),
+        ]),
+    );
+    assert_eq!(
+        storages,
+        [
+            storage("/m", "All files"),
+            storage("/m/DCIM/Camera", "Camera pictures")
+        ]
+    );
+    assert_eq!(
+        place(&storages, Path::new("Music")),
+        Some(PathBuf::from("/m/Music"))
+    );
+}
+
 #[test]
 fn storage_name_selects_its_storage() {
     let storages = [
@@ -209,6 +240,9 @@ impl FakeDevice {
     fn has_plugin(&self, plugin: &str) -> bool {
         self.plugins.contains(&plugin)
     }
+
+    #[zbus(signal, name = "pluginsChanged")]
+    async fn plugins_changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
 struct FakeShare(Arc<Mutex<Vec<String>>>);
@@ -492,6 +526,22 @@ fn device_list_signal_ticks_the_watch() {
         FakeDaemon::device_list_changed(&emitter)
             .await
             .expect("emit");
+        assert!(ticks.next().await.is_some());
+    });
+}
+
+/// Turning a plugin off on a phone changes no device list; the device says so.
+#[test]
+fn plugin_change_ticks_the_watch() {
+    let bus = Bus::start();
+    zbus::block_on(async {
+        let (service, _) = serve(&bus, true).await;
+        let client = bus.connect().await;
+        let mut ticks = Box::pin(phones_changed(&client).await.expect("watch"));
+        let emitter =
+            zbus::object_server::SignalEmitter::new(&service, "/modules/kdeconnect/devices/a")
+                .expect("emitter");
+        FakeDevice::plugins_changed(&emitter).await.expect("emit");
         assert!(ticks.next().await.is_some());
     });
 }

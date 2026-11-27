@@ -323,6 +323,9 @@ fn progress_clamps_to_known_total() {
             total_units: Some(100),
         }
     );
+    let decoded: JobProgress = serde_json::from_str(r#"{"completed_units":120,"total_units":100}"#)
+        .expect("decode progress");
+    assert_eq!(decoded, JobProgress::new(100, Some(100)));
 }
 
 #[test]
@@ -360,6 +363,8 @@ fn journal_round_trips_restart_specs() {
 fn durable_job_journal_quarantines_corrupt_file() {
     let dir =
         std::env::temp_dir().join(format!("big-os-kit-corrupt-journal-{}", std::process::id()));
+    // A failed run under a reused PID leaves its quarantine files behind.
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let journal_path = dir.join("jobs.json");
     std::fs::write(&journal_path, "{not-json").expect("write corrupt journal");
@@ -401,6 +406,7 @@ fn durable_job_journal_quarantines_unsupported_version() {
         "big-os-kit-unsupported-journal-{}",
         std::process::id()
     ));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let journal_path = dir.join("jobs.json");
     std::fs::write(

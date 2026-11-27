@@ -149,16 +149,17 @@ const MAX_USER_DIRS_BYTES: u64 = 64 * 1024;
 /// process, as GLib reads it.
 #[must_use]
 pub fn user_dir(dir: UserDir) -> Option<PathBuf> {
-    static USER_DIRS: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    static USER_DIRS: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
     let text = USER_DIRS
         .get_or_init(|| read_user_dirs(&config_home_checked()?.join("user-dirs.dirs")))
         .as_deref()?;
     parse_user_dir(text, dir.key(), home_dir().as_deref())
 }
 
-fn read_user_dirs(path: &std::path::Path) -> Option<String> {
+/// The file's bytes: a path in it is a file name, not text, as GLib reads it.
+fn read_user_dirs(path: &std::path::Path) -> Option<Vec<u8>> {
     match crate::file_io::read_bounded_if_exists(path, MAX_USER_DIRS_BYTES) {
-        Ok(bytes) => String::from_utf8(bytes?).ok(),
+        Ok(bytes) => bytes,
         Err(error) => {
             log::warn!("{} could not be read: {error}", path.display());
             None
@@ -169,14 +170,16 @@ fn read_user_dirs(path: &std::path::Path) -> Option<String> {
 /// The last valid `KEY="value"` line wins. A value is `$HOME`, `$HOME/...` or
 /// an absolute path in double quotes, where a backslash escapes the next
 /// character; anything else is skipped as xdg-user-dirs and GLib skip it.
-fn parse_user_dir(text: &str, key: &str, home: Option<&std::path::Path>) -> Option<PathBuf> {
+fn parse_user_dir(text: &[u8], key: &str, home: Option<&std::path::Path>) -> Option<PathBuf> {
     let mut found = None;
-    for line in text.lines() {
-        let Some((name, value)) = line.trim_start().split_once('=') else {
+    for line in text.split(|byte| *byte == b'\n') {
+        let line = line.trim_ascii_start();
+        let Some(equals) = line.iter().position(|byte| *byte == b'=') else {
             continue;
         };
-        if name.trim_end() == key
-            && let Some(path) = user_dir_value(value.trim(), home)
+        let (name, value) = (&line[..equals], &line[equals + 1..]);
+        if name.trim_ascii_end() == key.as_bytes()
+            && let Some(path) = user_dir_value(value.trim_ascii(), home)
         {
             found = Some(path);
         }
@@ -184,23 +187,25 @@ fn parse_user_dir(text: &str, key: &str, home: Option<&std::path::Path>) -> Opti
     found
 }
 
-fn user_dir_value(value: &str, home: Option<&std::path::Path>) -> Option<PathBuf> {
-    let mut chars = value.strip_prefix('"')?.chars();
-    let mut unquoted = String::new();
+fn user_dir_value(value: &[u8], home: Option<&std::path::Path>) -> Option<PathBuf> {
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+    let mut bytes = value.strip_prefix(b"\"")?.iter();
+    let mut unquoted = Vec::new();
     loop {
-        match chars.next()? {
-            '"' => break,
-            '\\' => unquoted.push(chars.next()?),
+        match *bytes.next()? {
+            b'"' => break,
+            b'\\' => unquoted.push(*bytes.next()?),
             other => unquoted.push(other),
         }
     }
-    let path = if let Some(rest) = unquoted.strip_prefix("$HOME") {
-        if !rest.is_empty() && !rest.starts_with('/') {
+    let path = if let Some(rest) = unquoted.strip_prefix(b"$HOME") {
+        if !rest.is_empty() && !rest.starts_with(b"/") {
             return None;
         }
-        home?.join(rest.trim_start_matches('/'))
+        let rest = &rest[rest.iter().take_while(|byte| **byte == b'/').count()..];
+        home?.join(std::ffi::OsStr::from_bytes(rest))
     } else {
-        PathBuf::from(unquoted)
+        PathBuf::from(std::ffi::OsString::from_vec(unquoted))
     };
     path.is_absolute().then(|| path.components().collect())
 }
@@ -326,16 +331,27 @@ impl Drop for BigSettingChangeSubscription {
 ///     "big-settings-document-doctest-{}.json",
 ///     std::process::id(),
 /// ));
-/// let store = BigVersionedJsonStore::new(&path, 1);
-/// let document = BigSettingsDocument::new(AppSettings::default(), store);
-/// let _token = document.subscribe(|key| assert_eq!(key, "follow-system"));
-/// document.apply_change(
-///     "follow-system",
-///     |settings| settings.follow_system = true,
-///     |error| eprintln!("settings not saved: {error}"),
-/// );
-/// assert!(document.snapshot().follow_system);
-/// let _ = std::fs::remove_file(path);
+/// glib::MainContext::new()
+///     .with_thread_default(|| {
+///         let store = BigVersionedJsonStore::new(&path, 1);
+///         let document = BigSettingsDocument::new(AppSettings::default(), store);
+///         let _token = document.subscribe(|key| assert_eq!(key, "follow-system"));
+///         document.apply_change(
+///             "follow-system",
+///             |settings| settings.follow_system = true,
+///             |error| eprintln!("settings not saved: {error}"),
+///         );
+///         assert!(document.snapshot().follow_system);
+///         // The write ends on this thread's main context, as in an app's loop.
+///         let context = glib::MainContext::ref_thread_default();
+///         while document.is_saving() {
+///             context.iteration(true);
+///         }
+///     })
+///     .unwrap();
+/// let saved = BigVersionedJsonStore::<AppSettings>::new(&path, 1).read().unwrap();
+/// assert_eq!(saved, Some(AppSettings { follow_system: true }));
+/// std::fs::remove_file(path).unwrap();
 /// ```
 #[cfg(feature = "background-save")]
 #[derive(Clone)]
@@ -586,7 +602,7 @@ mod tests {
             XDG_VIDEOS_DIR=\"/srv/videos/\"\n\
             XDG_DOWNLOAD_DIR=\"$HOME\"\n\
             XDG_PICTURES_DIR=\"$HOME/My \\\"Shots\\\"\"\n";
-        let read = |key| parse_user_dir(text, key, home());
+        let read = |key| parse_user_dir(text.as_bytes(), key, home());
         assert_eq!(
             read("XDG_MUSIC_DIR"),
             Some(PathBuf::from("/home/u/Músicas"))
@@ -611,16 +627,34 @@ mod tests {
         ] {
             let text = format!("XDG_MUSIC_DIR=\"/srv/music\"\nXDG_MUSIC_DIR={value}\n");
             assert_eq!(
-                parse_user_dir(&text, "XDG_MUSIC_DIR", home()),
+                parse_user_dir(text.as_bytes(), "XDG_MUSIC_DIR", home()),
                 Some(PathBuf::from("/srv/music")),
                 "{value}"
             );
         }
         assert_eq!(
-            parse_user_dir("XDG_MUSIC_DIR=\"$HOME/Music\"", "XDG_MUSIC_DIR", None),
+            parse_user_dir(b"XDG_MUSIC_DIR=\"$HOME/Music\"", "XDG_MUSIC_DIR", None),
             None
         );
-        assert_eq!(parse_user_dir("", "XDG_MUSIC_DIR", home()), None);
+        assert_eq!(parse_user_dir(b"", "XDG_MUSIC_DIR", home()), None);
+    }
+
+    /// GLib reads the file as file names: a folder whose name is no UTF-8
+    /// keeps its bytes, and the other entries still read.
+    #[test]
+    fn user_dir_keeps_native_name_bytes() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let text = b"XDG_MUSIC_DIR=\"$HOME/M\xfasica\"\nXDG_VIDEOS_DIR=\"/srv/videos\"\n";
+        assert_eq!(
+            parse_user_dir(text, "XDG_MUSIC_DIR", home()),
+            Some(PathBuf::from(std::ffi::OsStr::from_bytes(
+                b"/home/u/M\xfasica"
+            )))
+        );
+        assert_eq!(
+            parse_user_dir(text, "XDG_VIDEOS_DIR", home()),
+            Some(PathBuf::from("/srv/videos"))
+        );
     }
 
     #[test]
@@ -630,7 +664,7 @@ mod tests {
         let cap = usize::try_from(MAX_USER_DIRS_BYTES).unwrap();
         let at_cap = format!("{line}{}", "#".repeat(cap - line.len()));
         std::fs::write(&path, &at_cap).unwrap();
-        assert_eq!(read_user_dirs(&path).as_deref(), Some(at_cap.as_str()));
+        assert_eq!(read_user_dirs(&path).as_deref(), Some(at_cap.as_bytes()));
         std::fs::write(&path, format!("{at_cap}#")).unwrap();
         assert_eq!(read_user_dirs(&path), None);
         std::fs::remove_file(&path).unwrap();

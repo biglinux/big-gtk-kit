@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 
 use big_os_kit::microdaemon::{
     DurableJobSpec, DurableJobState, JobProgress, MicrodaemonBody, MicrodaemonCommand,
-    MicrodaemonEvent, MicrodaemonFrame, MicrodaemonId, read_microdaemon_json_frame,
-    write_microdaemon_json_frame,
+    MicrodaemonEvent, MicrodaemonFrame, MicrodaemonId, load_durable_job_journal,
+    read_microdaemon_json_frame, write_microdaemon_json_frame,
 };
 use big_os_kit::subprocess::{
     BigSubprocessChild, BigSubprocessOutputMode, BigSubprocessSpec, BigSubprocessStatus,
@@ -129,6 +129,14 @@ fn durable_daemon_exits_after_job() {
         status.success(),
         "daemon should idle-exit cleanly: {status:?}"
     );
+    let journal = load_durable_job_journal(&journal_path, &[1]).expect("load journal");
+    assert!(
+        journal
+            .iter()
+            .any(|record| record.snapshot.job_id == "job-idle-complete"
+                && record.snapshot.state == DurableJobState::Completed),
+        "the daemon exited before its job completed: {journal:?}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -146,7 +154,9 @@ fn durable_daemon_stays_while_job_runs() {
         &mut client,
         "job-running",
         "slow",
-        serde_json::json!({"duration_ms": 300}),
+        // Long past the liveness check below, so a descheduled test still
+        // looks while the job runs.
+        serde_json::json!({"duration_ms": 2000}),
     );
     assert!(matches!(
         read_event(&mut client),
@@ -225,13 +235,11 @@ fn streaming_daemon_reattaches_after_disconnect() {
     ));
     let remaining_sequences = read_stream_until_end(&mut second_client, "job-stream");
 
-    assert!(
-        remaining_sequences
-            .iter()
-            .all(|sequence| *sequence > first_sequence),
-        "reattach should resume after the last consumed sequence"
+    assert_eq!(
+        remaining_sequences,
+        (first_sequence + 1..5).collect::<Vec<_>>(),
+        "reattach resumes after the last consumed sequence, losing and repeating none"
     );
-    assert!(remaining_sequences.contains(&4));
     drop(second_client);
     let status = wait_for_child_exit(&mut daemon, EXIT_DEADLINE);
     assert!(
@@ -255,7 +263,7 @@ fn streaming_daemon_survives_killed_client() {
         &mut submitter,
         "job-stream-kill",
         "stream-ticks",
-        serde_json::json!({"ticks": 8, "interval_ms": 50}),
+        serde_json::json!({"ticks": 8, "interval_ms": 100}),
     );
     assert!(matches!(
         read_event(&mut submitter),
@@ -298,9 +306,11 @@ fn streaming_daemon_survives_killed_client() {
             after_sequence: None,
         },
     );
+    // A tick still to come proves the stream went on past the killed client.
     assert!(matches!(
         read_event(&mut second_client),
-        MicrodaemonEvent::StreamRetention { job_id, .. } if job_id == "job-stream-kill"
+        MicrodaemonEvent::StreamRetention { job_id, retention }
+            if job_id == "job-stream-kill" && retention.next_sequence < 8
     ));
     let sequences = read_stream_until_end(&mut second_client, "job-stream-kill");
 
@@ -315,6 +325,35 @@ fn streaming_daemon_survives_killed_client() {
         status.success(),
         "daemon should idle-exit after stream: {status:?}"
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A journal named relative to the working directory has no parent in its
+/// path; quarantining a corrupt one must still sync that directory.
+#[test]
+fn bare_journal_name_quarantines() {
+    let dir = unique_temp_dir("daemon-bare-journal");
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    std::fs::write(dir.join("jobs.json"), b"not json").expect("corrupt journal");
+    let socket_path = dir.join("daemon.sock");
+    let mut daemon = BigSubprocessSpec::builder()
+        .program(test_daemon_bin())
+        .arg(socket_path.as_os_str())
+        .arg("jobs.json")
+        .cwd(dir.clone())
+        .build()
+        .spawn()
+        .expect("spawn test daemon");
+
+    wait_for_socket(&socket_path);
+    let mut client = connect_client(&socket_path);
+    write_command(&mut client, MicrodaemonCommand::Shutdown);
+    assert!(matches!(
+        read_event(&mut client),
+        MicrodaemonEvent::ShutdownAccepted
+    ));
+    let status = wait_for_child_exit(&mut daemon, EXIT_DEADLINE);
+    assert!(status.success(), "daemon failed to start: {status:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

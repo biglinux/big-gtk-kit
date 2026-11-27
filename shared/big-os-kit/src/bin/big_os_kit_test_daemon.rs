@@ -109,8 +109,11 @@ impl TestDaemon {
 
     fn spawn_connection(&self, stream: UnixStream) {
         let daemon = self.clone();
+        // Taken before the thread starts, so the accept loop's idle check
+        // cannot pass between accept and the thread's first instruction.
+        let client_lease = self.idle_exit.client_connected();
         std::thread::spawn(move || {
-            let _client_lease = daemon.idle_exit.client_connected();
+            let _client_lease = client_lease;
             let _ = daemon.handle_connection(stream);
         });
     }
@@ -171,14 +174,9 @@ impl TestDaemon {
             snapshot: snapshot.clone(),
             restart_spec: Some(job.clone()),
         })?;
-        write_event(
-            writer,
-            MicrodaemonEvent::JobAccepted {
-                job_id: snapshot.job_id.clone(),
-            },
-        )?;
-        write_event(writer, MicrodaemonEvent::JobSnapshot { snapshot })?;
-
+        // Started before the replies: a client gone mid-reply must not leave a
+        // journaled job that never runs, and an attach the snapshot prompts
+        // must find the stream.
         match job.job_class.as_str() {
             "quick" | "slow" => {
                 let job_lease = self.idle_exit.job_started();
@@ -190,7 +188,13 @@ impl TestDaemon {
             }
             _ => {}
         }
-        Ok(())
+        write_event(
+            writer,
+            MicrodaemonEvent::JobAccepted {
+                job_id: snapshot.job_id.clone(),
+            },
+        )?;
+        write_event(writer, MicrodaemonEvent::JobSnapshot { snapshot })
     }
 
     fn attach_job(&self, writer: &Arc<Mutex<UnixStream>>, job_id: String) -> io::Result<()> {

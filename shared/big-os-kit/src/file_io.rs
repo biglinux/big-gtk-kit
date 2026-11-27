@@ -441,7 +441,8 @@ impl From<std::io::Error> for BigBoundedReadError {
 /// use big_os_kit::file_io::read_bounded;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-read-bounded-doc.txt");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-read-bounded-doc-{}.txt", std::process::id()));
 /// atomic_write(&path, b"hello").unwrap();
 /// assert_eq!(read_bounded(&path, 8).unwrap(), b"hello");
 /// let _ = std::fs::remove_file(path);
@@ -560,7 +561,8 @@ pub fn modified_secs(path: &Path) -> Option<u64> {
 /// use big_os_kit::file_io::read_to_string;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-read-string-doc.txt");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-read-string-doc-{}.txt", std::process::id()));
 /// atomic_write(&path, b"name = \"demo\"\n").unwrap();
 /// assert!(read_to_string(&path).unwrap().contains("demo"));
 /// let _ = std::fs::remove_file(path);
@@ -686,7 +688,8 @@ fn rename_by_link(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Return sorted child file paths whose extension equals `extension`.
+/// Return sorted child file paths whose extension equals `extension`: regular
+/// files, or links to one, never a folder named like one.
 ///
 /// # Errors
 ///
@@ -698,7 +701,8 @@ fn rename_by_link(from: &Path, to: &Path) -> std::io::Result<()> {
 /// use big_os_kit::file_io::directory_file_paths_with_extension;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let dir = std::env::temp_dir().join("big-os-kit-extension-doc");
+/// let dir = std::env::temp_dir()
+///     .join(format!("big-os-kit-extension-doc-{}", std::process::id()));
 /// std::fs::create_dir_all(&dir).unwrap();
 /// atomic_write(&dir.join("a.toml"), b"id = \"a\"\n").unwrap();
 /// atomic_write(&dir.join("b.txt"), b"ignored").unwrap();
@@ -715,6 +719,7 @@ pub fn directory_file_paths_with_extension(
         .filter(|path| {
             path.extension()
                 .is_some_and(|candidate| candidate == extension)
+                && is_regular_file(path)
         })
         .collect())
 }
@@ -727,7 +732,8 @@ pub fn directory_file_paths_with_extension(
 /// use big_os_kit::file_io::is_regular_file;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-regular-file-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-regular-file-doc-{}", std::process::id()));
 /// atomic_write(&path, b"x").unwrap();
 /// assert!(is_regular_file(&path));
 /// let _ = std::fs::remove_file(path);
@@ -748,7 +754,8 @@ pub fn is_regular_file(path: &Path) -> bool {
 /// use big_os_kit::file_io::is_executable_file;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-executable-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-executable-doc-{}", std::process::id()));
 /// atomic_write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
 /// #[cfg(unix)]
 /// {
@@ -783,9 +790,11 @@ pub fn is_executable_file(path: &Path) -> bool {
 /// What stands between this process and running a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunVerdict {
-    /// The kernel would start it as it is.
+    /// The kernel would let it start as it is; whether its format or its
+    /// interpreter then loads is not asked.
     Runs,
-    /// Its permission bits do not let this account run it.
+    /// Its permission bits do not let this account run it, or it is no
+    /// regular file (a folder is searchable, never run).
     NotPermitted,
     /// It sits on a file system mounted without the right to run programs
     /// (`noexec`), which no permission bit changes.
@@ -809,6 +818,10 @@ pub fn may_run(path: &Path) -> std::io::Result<RunVerdict> {
     if stats.f_flag.contains(rustix::fs::StatVfsMountFlags::NOEXEC) {
         return Ok(RunVerdict::NoExecMount);
     }
+    let mode = rustix::fs::stat(&c_path)?.st_mode;
+    if rustix::fs::FileType::from_raw_mode(mode) != rustix::fs::FileType::RegularFile {
+        return Ok(RunVerdict::NotPermitted);
+    }
     match rustix::fs::access(&c_path, rustix::fs::Access::EXEC_OK) {
         Ok(()) => Ok(RunVerdict::Runs),
         Err(rustix::io::Errno::ACCESS | rustix::io::Errno::PERM) => Ok(RunVerdict::NotPermitted),
@@ -828,7 +841,8 @@ pub fn may_run(path: &Path) -> std::io::Result<RunVerdict> {
 /// use big_os_kit::file_io::check_readable_file;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-readable-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-readable-doc-{}", std::process::id()));
 /// atomic_write(&path, b"x").unwrap();
 /// check_readable_file(&path).unwrap();
 /// let _ = std::fs::remove_file(path);
@@ -850,7 +864,8 @@ pub fn check_readable_file(path: &Path) -> std::io::Result<()> {
 /// use big_os_kit::file_io::remove_file_if_exists;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-remove-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-remove-doc-{}", std::process::id()));
 /// atomic_write(&path, b"x").unwrap();
 /// remove_file_if_exists(&path).unwrap();
 /// remove_file_if_exists(&path).unwrap();
