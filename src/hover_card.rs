@@ -76,13 +76,17 @@ pub struct HoverCards {
     hovered: Option<usize>,
     /// What the running timer does: open this row's card, or close.
     settle_to: Option<usize>,
+    /// Whether a timer runs, or fired and its [`CardEvent::Settled`] waits: an
+    /// owner that queues events may hand one over after a cancel.
+    settling: bool,
     timer: OnceTimer,
     emit: Rc<dyn Fn(CardEvent)>,
 }
 
 impl HoverCards {
     /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`; a row or an
-    /// index without a card opens nothing.
+    /// index without a card opens nothing. The cards and controllers stay on
+    /// `layer` and the rows for their lifetime: make one for each layer.
     pub fn new(
         layer: &gtk::Overlay,
         rows: Vec<gtk::Widget>,
@@ -152,6 +156,7 @@ impl HoverCards {
             open: None,
             hovered: None,
             settle_to: None,
+            settling: false,
             timer: OnceTimer::new(),
             emit,
         }
@@ -197,7 +202,7 @@ impl HoverCards {
                 }
             }
             CardEvent::Settled => {
-                if by_pointer {
+                if by_pointer && std::mem::take(&mut self.settling) {
                     match self.settle_to.or(self.hovered) {
                         Some(index) => {
                             self.show(index, Opener::Pointer);
@@ -277,12 +282,14 @@ impl HoverCards {
     fn schedule(&mut self, delay: Duration, settle_to: Option<usize>) {
         self.cancel();
         self.settle_to = settle_to;
+        self.settling = true;
         let emit = self.emit.clone();
         self.timer.arm(delay, move || emit(CardEvent::Settled));
     }
 
     fn cancel(&mut self) {
         self.timer.cancel();
+        self.settling = false;
     }
 }
 
@@ -327,13 +334,21 @@ mod tests {
             hover.handle(CardEvent::Entered(0));
             assert_eq!(hover.open(), Some(0));
             assert!(cards[0].is_visible());
-            hover.handle(CardEvent::Left(0));
-            assert!(big_testkit::harness::pump_until(|| {
+            let settled = || {
                 heard
                     .borrow()
                     .iter()
-                    .any(|event| matches!(event, CardEvent::Settled))
-            }));
+                    .filter(|event| matches!(event, CardEvent::Settled))
+                    .count()
+            };
+            hover.handle(CardEvent::Left(0));
+            assert!(big_testkit::harness::pump_until(|| settled() == 1));
+            // Queued behind the timer's event, the pointer reached the card.
+            hover.handle(CardEvent::CardEntered);
+            hover.handle(CardEvent::Settled);
+            assert_eq!(hover.open(), Some(0), "a cancelled grace closes nothing");
+            hover.handle(CardEvent::CardLeft);
+            assert!(big_testkit::harness::pump_until(|| settled() == 2));
             hover.handle(CardEvent::Settled);
             assert_eq!(hover.open(), None);
             assert!(!cards[0].is_visible());
