@@ -8,11 +8,15 @@
 
 //! GTK-free directory metadata scans for file-manager style app surfaces.
 
-use std::ffi::OsString;
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs;
+use std::os::fd::{AsFd, BorrowedFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use rustix::fs::{AtFlags, Mode, OFlags, Statx, StatxFlags, StatxTimestamp};
 
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +58,20 @@ impl LocalEntryIdentity {
             modified_nanoseconds: metadata.mtime_nsec(),
             changed_seconds: metadata.ctime(),
             changed_nanoseconds: metadata.ctime_nsec(),
+        }
+    }
+
+    /// The identity in one `statx` answer of at least `STATX_BASIC_STATS`.
+    fn from_statx(stat: &Statx) -> Self {
+        Self {
+            device: libc::makedev(stat.stx_dev_major, stat.stx_dev_minor),
+            inode: stat.stx_ino,
+            mode: u32::from(stat.stx_mode),
+            size: stat.stx_size,
+            modified_seconds: stat.stx_mtime.tv_sec,
+            modified_nanoseconds: i64::from(stat.stx_mtime.tv_nsec),
+            changed_seconds: stat.stx_ctime.tv_sec,
+            changed_nanoseconds: i64::from(stat.stx_ctime.tv_nsec),
         }
     }
 
@@ -152,54 +170,75 @@ pub struct DirectoryListingEntry {
 }
 
 impl DirectoryListingEntry {
-    /// The child's `lstat`, asked relative to the open folder: the same call
-    /// [`fs::symlink_metadata`] makes, without walking the whole path again.
-    fn from_dir_entry(dir_entry: fs::DirEntry) -> std::io::Result<Self> {
-        let metadata = dir_entry.metadata()?;
-        Self::capture(dir_entry.path(), dir_entry.file_name(), &metadata)
-    }
-
-    /// The no-follow snapshot every listed entry carries, from its `lstat`.
+    /// The no-follow snapshot every listed entry carries, from one `statx` of
+    /// `name` in `folder`, whose path is `path`'s parent.
     ///
-    /// `is_symlink` comes from the same `lstat` as the rest of the metadata
+    /// `is_symlink` comes from the same `statx` as the rest of the metadata
     /// rather than from a directory iterator's cached type, so one child read on
     /// its own answers exactly what the same child answers inside a full scan.
-    fn capture(path: PathBuf, name: OsString, metadata: &fs::Metadata) -> std::io::Result<Self> {
-        let is_symlink = metadata.is_symlink();
-        let followed = is_symlink.then(|| fs::metadata(&path));
-        let targets_directory = metadata.is_dir()
-            || followed
-                .as_ref()
-                .is_some_and(|target| target.as_ref().is_ok_and(fs::Metadata::is_dir));
+    /// No call mounts an automount point it meets.
+    fn capture(folder: BorrowedFd<'_>, name: &CStr, path: PathBuf) -> std::io::Result<Self> {
+        let stat = rustix::fs::statx(
+            folder,
+            name,
+            AtFlags::SYMLINK_NOFOLLOW | AtFlags::NO_AUTOMOUNT,
+            StatxFlags::BASIC_STATS | StatxFlags::BTIME,
+        )?;
+        let kind = u32::from(stat.stx_mode) & libc::S_IFMT;
+        let is_symlink = kind == libc::S_IFLNK;
+        let followed = is_symlink.then(|| {
+            rustix::fs::statx(folder, name, AtFlags::NO_AUTOMOUNT, StatxFlags::TYPE)
+                .map_err(std::io::Error::from)
+        });
+        let targets_directory = kind == libc::S_IFDIR
+            || followed.as_ref().is_some_and(|target| {
+                target
+                    .as_ref()
+                    .is_ok_and(|target| u32::from(target.stx_mode) & libc::S_IFMT == libc::S_IFDIR)
+            });
         // Only a target that is not there is broken: a refused or unanswering
         // one exists, and its own folder page says what is wrong.
         let link_broken =
             followed.is_some_and(|target| target.is_err_and(|error| is_missing_target(&error)));
         let link_target = is_symlink
-            .then(|| fs::read_link(&path).map(PathBuf::into_os_string))
+            .then(|| {
+                rustix::fs::readlinkat(folder, name, Vec::new())
+                    .map(|target| OsString::from_vec(target.into_bytes()))
+            })
             .transpose()?;
+        let has_birth = StatxFlags::from_bits_retain(stat.stx_mask).contains(StatxFlags::BTIME);
         Ok(Self {
-            name,
+            name: OsStr::from_bytes(name.to_bytes()).to_os_string(),
             path,
-            is_dir: metadata.is_dir(),
+            is_dir: kind == libc::S_IFDIR,
             is_symlink,
             link_target,
             targets_directory,
             link_broken,
-            is_file: metadata.is_file(),
-            size: metadata.len(),
-            modified: metadata.modified().unwrap_or(UNIX_EPOCH),
-            created_seconds: metadata
-                .created()
-                .ok()
-                .and_then(|created| created.duration_since(UNIX_EPOCH).ok())
-                .and_then(|since| i64::try_from(since.as_secs()).ok()),
-            accessed_seconds: metadata.atime(),
-            identity: LocalEntryIdentity::from_metadata(metadata),
-            uid: metadata.uid(),
-            gid: metadata.gid(),
+            is_file: kind == libc::S_IFREG,
+            size: stat.stx_size,
+            modified: system_time(stat.stx_mtime),
+            created_seconds: has_birth
+                .then_some(stat.stx_btime.tv_sec)
+                .filter(|seconds| *seconds >= 0),
+            accessed_seconds: stat.stx_atime.tv_sec,
+            identity: LocalEntryIdentity::from_statx(&stat),
+            uid: stat.stx_uid,
+            gid: stat.stx_gid,
         })
     }
+}
+
+/// `time` as a [`SystemTime`], or the Unix epoch past what one can hold.
+fn system_time(time: StatxTimestamp) -> SystemTime {
+    let nanoseconds = Duration::from_nanos(u64::from(time.tv_nsec));
+    let whole = match u64::try_from(time.tv_sec) {
+        Ok(seconds) => UNIX_EPOCH.checked_add(Duration::from_secs(seconds)),
+        Err(_) => UNIX_EPOCH.checked_sub(Duration::from_secs(time.tv_sec.unsigned_abs())),
+    };
+    whole
+        .and_then(|whole| whole.checked_add(nanoseconds))
+        .unwrap_or(UNIX_EPOCH)
 }
 
 /// Read the metadata of one child, exactly as a full listing would read it.
@@ -213,14 +252,25 @@ impl DirectoryListingEntry {
 /// [`std::io::ErrorKind::NotFound`] means the entry is already gone.
 /// [`std::io::ErrorKind::InvalidInput`] means `path` names no child.
 pub fn read_listing_entry(path: &Path) -> std::io::Result<DirectoryListingEntry> {
-    let name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "listing entry path has no file name",
-        )
-    })?;
-    let metadata = fs::symlink_metadata(path)?;
-    DirectoryListingEntry::capture(path.to_path_buf(), name.to_os_string(), &metadata)
+    let name = path
+        .file_name()
+        .and_then(|name| CString::new(name.as_bytes()).ok())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "listing entry path has no file name",
+            )
+        })?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let folder = rustix::fs::open(
+        parent,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    DirectoryListingEntry::capture(folder.as_fd(), &name, path.to_path_buf())
 }
 
 /// Read one directory and return child metadata without filtering or sorting.
@@ -278,7 +328,22 @@ pub fn read_directory_listing_snapshot(path: &Path) -> std::io::Result<Directory
 /// [`read_directory_listing_snapshot`] apply to every batch.
 #[derive(Debug)]
 pub struct DirectoryListingReader {
-    children: fs::ReadDir,
+    /// The folder, opened once: its identity, its names and each one's
+    /// metadata all come from this one directory, even if the path is renamed
+    /// or replaced while it is read.
+    children: rustix::fs::Dir,
+    path: PathBuf,
+    /// Threads reading a batch's metadata at once, more than one only on a
+    /// local disk that does not spin, with cores to spare. Decided once a round
+    /// holds [`LANES_FROM`] names, so a small folder asks neither.
+    lanes: Option<usize>,
+    /// What is mounted where the folder is, to decide `lanes` by.
+    source: Option<String>,
+    /// On a share, a FUSE mount or one the table does not name, a batch comes
+    /// back once [`SLOW_MOUNT_BATCH`] has gone by, with what it read so far.
+    may_stall: bool,
+    /// The folder's names have all been read.
+    ended: bool,
     directory_identity: LocalEntryIdentity,
     incomplete: bool,
     /// Why the folder itself stopped being read: a server that went away
@@ -294,15 +359,36 @@ impl DirectoryListingReader {
     /// The errors of [`read_directory_listing_snapshot`] that stop the scan
     /// before its first entry.
     pub fn open(path: &Path) -> std::io::Result<Self> {
-        let directory_metadata = fs::metadata(path)?;
-        if !directory_metadata.is_dir() {
-            // The system's own error, so its words come in the session's
-            // language like every other listing failure.
-            return Err(std::io::Error::from_raw_os_error(libc::ENOTDIR));
-        }
+        // A path that is no folder fails with the system's own "not a
+        // directory", so its words come in the session's language like every
+        // other listing failure.
+        let folder = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let identity = rustix::fs::statx(
+            &folder,
+            c"",
+            AtFlags::EMPTY_PATH,
+            StatxFlags::BASIC_STATS | StatxFlags::MNT_ID,
+        )?;
+        // By the mount the folder is on, which a symlink on the way cannot hide.
+        let table = crate::mount_table::mountinfo();
+        let mount = crate::mount_table::mount_with_id(&table, identity.stx_mnt_id);
+        let may_stall = mount
+            .as_ref()
+            .is_none_or(|mount| crate::mount_table::may_stall(mount.filesystem));
         Ok(Self {
-            children: fs::read_dir(path)?,
-            directory_identity: LocalEntryIdentity::from_metadata(&directory_metadata),
+            // The descriptor itself, not the folder's "." opened again, which a
+            // folder that may be read but not searched refuses.
+            children: rustix::fs::Dir::new(folder)?,
+            path: path.to_path_buf(),
+            lanes: may_stall.then_some(1),
+            source: mount.filter(|_| !may_stall).map(|mount| mount.source),
+            may_stall,
+            ended: false,
+            directory_identity: LocalEntryIdentity::from_statx(&identity),
             incomplete: false,
             failure: None,
         })
@@ -327,29 +413,129 @@ impl DirectoryListingReader {
         self.failure.take()
     }
 
-    /// The next `limit` entries, or fewer at the end; empty once none is left
-    /// or once reading the folder failed.
+    /// The next `limit` entries, or fewer; empty once none is left or once
+    /// reading the folder failed. On a share or FUSE mount a batch also ends
+    /// once it holds entries and 50 ms have gone by.
     pub fn next_batch(&mut self, limit: usize) -> Vec<DirectoryListingEntry> {
+        let started = Instant::now();
         let mut entries = Vec::new();
-        while entries.len() < limit && self.failure.is_none() {
-            let dir_entry = match self.children.next() {
-                Some(Ok(dir_entry)) => dir_entry,
-                Some(Err(error)) => {
-                    self.failure = Some(error);
-                    break;
+        // Names read on several threads are looked at once a round of them is
+        // in; a round whose every name vanished meanwhile is followed by
+        // another, since an empty batch is the end.
+        'batch: while entries.len() < limit && !self.ended && self.failure.is_none() {
+            let mut names = Vec::new();
+            while entries.len() + names.len() < limit {
+                let child = match self.children.read() {
+                    Some(Ok(child)) => child,
+                    Some(Err(error)) => {
+                        self.failure = Some(error.into());
+                        break;
+                    }
+                    None => {
+                        self.ended = true;
+                        break;
+                    }
+                };
+                let name = child.file_name();
+                if name == c"." || name == c".." {
+                    continue;
                 }
-                None => break,
-            };
-            match DirectoryListingEntry::from_dir_entry(dir_entry) {
-                Ok(entry) => entries.push(entry),
-                // Removed between the read and the look: it is simply gone.
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => self.incomplete = true,
+                if self.lanes != Some(1) {
+                    names.push(name.to_owned());
+                    if names.len() == LANES_FROM && self.lanes.is_none() {
+                        self.lanes = Some(self.decide_lanes());
+                    }
+                    continue;
+                }
+                let read = self.capture(name);
+                self.keep(read, &mut entries);
+                if self.may_stall && !entries.is_empty() && started.elapsed() >= SLOW_MOUNT_BATCH {
+                    break 'batch;
+                }
+            }
+            for read in self.capture_together(&names) {
+                self.keep(read, &mut entries);
             }
         }
         entries
     }
+
+    fn capture(&self, name: &CStr) -> std::io::Result<DirectoryListingEntry> {
+        let path = self.path.join(OsStr::from_bytes(name.to_bytes()));
+        DirectoryListingEntry::capture(self.children.fd()?, name, path)
+    }
+
+    /// Add `read` to `entries`, or note why it is left out.
+    fn keep(
+        &mut self,
+        read: std::io::Result<DirectoryListingEntry>,
+        entries: &mut Vec<DirectoryListingEntry>,
+    ) {
+        match read {
+            Ok(entry) => entries.push(entry),
+            // Removed between the read and the look: it is simply gone.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => self.incomplete = true,
+        }
+    }
+
+    /// Threads for the rest of the folder: half the cores, at most
+    /// [`MAX_LANES`], on a disk the kernel says does not spin.
+    fn decide_lanes(&self) -> usize {
+        if !self
+            .source
+            .as_deref()
+            .is_some_and(crate::mount_table::on_solid_state)
+        {
+            return 1;
+        }
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        (cores / 2).clamp(1, MAX_LANES)
+    }
+
+    /// Each of `names` read on up to `lanes` threads, in the order given.
+    fn capture_together(&self, names: &[CString]) -> Vec<std::io::Result<DirectoryListingEntry>> {
+        let capture =
+            |part: &[CString]| -> Vec<_> { part.iter().map(|name| self.capture(name)).collect() };
+        let lanes = self.lanes.unwrap_or(1);
+        if names.len() < LANES_FROM || lanes == 1 {
+            return capture(names);
+        }
+        let part_size = names.len().div_ceil(lanes);
+        std::thread::scope(|scope| {
+            let parts: Vec<_> = names
+                .chunks(part_size)
+                .map(|part| {
+                    // A thread the system will not start leaves its part to this one.
+                    std::thread::Builder::new()
+                        .spawn_scoped(scope, move || capture(part))
+                        .map_err(|_| part)
+                })
+                .collect();
+            parts
+                .into_iter()
+                .flat_map(|part| match part {
+                    Ok(thread) => thread
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                    Err(part) => capture(part),
+                })
+                .collect()
+        })
+    }
 }
+
+/// The most threads one listing reads metadata on: past four, a fast disk
+/// gave no more, and every listing open at once takes as many.
+const MAX_LANES: usize = 4;
+
+/// Fewer names than this are read on the calling thread: starting threads
+/// costs more than they save.
+const LANES_FROM: usize = 512;
+
+/// How long a batch on a share or FUSE mount reads before it returns what it
+/// has, so a slow server shows rows as they come.
+const SLOW_MOUNT_BATCH: Duration = Duration::from_millis(50);
 
 /// Whether following a link failed because its target is not there: missing,
 /// not a folder on the way, or a loop of links.
@@ -524,6 +710,89 @@ mod tests {
         .unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(read, (0, false));
+    }
+
+    /// Read on several threads, a batch holds the same entries in the same
+    /// order as read on one, and still notes the one it could not read.
+    #[test]
+    fn lanes_keep_order_and_gaps() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = directory_listing_test_dir("lanes");
+        for index in 0..LANES_FROM * 3 {
+            fs::write(dir.join(format!("file-{index}")), b"x").unwrap();
+        }
+        // A link, read with its target, and a folder of entries no look may
+        // reach.
+        std::os::unix::fs::symlink("file-0", dir.join("link")).unwrap();
+        let locked = dir.join("locked");
+        fs::create_dir(&locked).unwrap();
+        for index in 0..LANES_FROM {
+            fs::write(locked.join(format!("hidden-{index}")), b"x").unwrap();
+        }
+        let read = |folder: &Path, lanes: usize| {
+            let mut reader = DirectoryListingReader::open(folder).unwrap();
+            reader.lanes = Some(lanes);
+            let entries: Vec<_> = reader
+                .next_batch(usize::MAX)
+                .into_iter()
+                .map(|entry| (entry.name, entry.identity, entry.link_target))
+                .collect();
+            (entries, reader.incomplete())
+        };
+        let (one, one_short) = read(&dir, 1);
+        let (four, four_short) = read(&dir, 4);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o600)).unwrap();
+        let (locked_four, locked_short) = read(&locked, 4);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(one.len(), LANES_FROM * 3 + 2);
+        assert_eq!(four, one);
+        assert!(!one_short && !four_short);
+        assert!(locked_four.is_empty() && locked_short);
+    }
+
+    /// A batch whose names all vanish before their look reads on, when names
+    /// are gathered for several threads too: an empty batch is taken for the
+    /// end of the folder.
+    #[test]
+    fn vanished_round_reads_on() {
+        let dir = directory_listing_test_dir("vanished-round");
+        for index in 0..8 {
+            fs::write(dir.join(format!("file-{index}")), b"x").unwrap();
+        }
+        // The folder's own order, which the reader below reads it in.
+        let order: Vec<OsString> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let mut reader = DirectoryListingReader::open(&dir).unwrap();
+        reader.lanes = Some(4);
+        // The first look fetches a run of names; the two the next batch reads
+        // first then go before it looks at them.
+        let primed = reader.children.read().unwrap().unwrap();
+        let skip = usize::from(primed.file_name() != c"." && primed.file_name() != c"..");
+        for name in &order[skip..skip + 2] {
+            fs::remove_file(dir.join(name)).unwrap();
+        }
+        let batch = reader.next_batch(2);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(batch.len(), 2, "{order:?}");
+        assert!(!reader.incomplete());
+    }
+
+    /// A local folder is found on its mount, and is not taken for a share
+    /// that may stall; a small one decides no threads.
+    #[test]
+    fn local_folder_is_no_share() {
+        let dir = directory_listing_test_dir("local");
+        fs::write(dir.join("file"), b"x").unwrap();
+        let mut reader = DirectoryListingReader::open(&dir).unwrap();
+        let entries = reader.next_batch(usize::MAX);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!reader.may_stall);
+        assert!(reader.source.is_some());
+        assert_eq!(reader.lanes, None);
     }
 
     /// Reading in batches yields what one whole read does.

@@ -17,3 +17,5 @@ rule:
         pattern: $NAME == ".."
 ignores:
   - shared/big-os-kit/src/file_name.rs
+  # Skips a folder's own "." and ".." entries as the kernel lists them; no name typed.
+  - shared/big-os-kit/src/directory_listing.rs

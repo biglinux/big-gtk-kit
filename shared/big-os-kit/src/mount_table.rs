@@ -64,6 +64,8 @@ fn changed(file: &File) -> bool {
 /// octal escapes undone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mount<'a> {
+    /// The mount's own id, which `statx` reports as `stx_mnt_id`.
+    pub id: u64,
     /// `major:minor` of the filesystem, the same for every mount of it.
     pub device: &'a str,
     /// The folder of the filesystem mounted here: `/` for a whole disk,
@@ -88,20 +90,32 @@ pub fn mounts(table: &str) -> impl Iterator<Item = Mount<'_>> {
 /// optional fields.
 fn parse_line(line: &str) -> Option<Mount<'_>> {
     let (mount, rest) = line.split_once(" - ")?;
-    let mut fields = mount.split(' ').skip(2);
-    let device = fields.next()?;
+    let mut fields = mount.split(' ');
+    let id = fields.next()?.parse().ok()?;
+    let device = fields.nth(1)?;
     let root = OsString::from_vec(unescape(fields.next()?.as_bytes())).into();
     let point = OsString::from_vec(unescape(fields.next()?.as_bytes())).into();
     let mut rest = rest.split(' ');
     let filesystem = rest.next()?;
     let source = String::from_utf8_lossy(&unescape(rest.next()?.as_bytes())).into_owned();
     Some(Mount {
+        id,
         device,
         root,
         point,
         filesystem,
         source,
     })
+}
+
+/// The mount in `table` whose id is `id`, the line parsed only once its id
+/// matches.
+pub(crate) fn mount_with_id(table: &str, id: u64) -> Option<Mount<'_>> {
+    let id = id.to_string();
+    table
+        .lines()
+        .find(|line| line.split(' ').next() == Some(id.as_str()))
+        .and_then(parse_line)
 }
 
 /// A mountinfo field with the escapes put back: the kernel writes a space, a
@@ -215,6 +229,30 @@ pub fn on_dm_crypt(source: &str) -> bool {
         .is_some_and(|name| dm_crypt_below(&name, 0))
 }
 
+/// Whether the mount source `source` (`/dev/nvme0n1p2`) is a block device the
+/// kernel says does not spin. `false` for anything it cannot tell, a source
+/// that is no device (`tmpfs`) included.
+pub(crate) fn on_solid_state(source: &str) -> bool {
+    // A name such as `tmpfs` is no device, and would resolve in the working folder.
+    if !source.starts_with('/') {
+        return false;
+    }
+    let Some(name) = std::fs::canonicalize(source)
+        .ok()
+        .and_then(|device| device.file_name().map(std::ffi::OsStr::to_os_string))
+    else {
+        return false;
+    };
+    // A partition keeps its queue in the disk's folder, its parent in sysfs.
+    let device = Path::new("/sys/class/block").join(name);
+    let queue = if device.join("partition").exists() {
+        device.join("../queue/rotational")
+    } else {
+        device.join("queue/rotational")
+    };
+    std::fs::read_to_string(queue).is_ok_and(|rotational| rotational.trim() == "0")
+}
+
 /// Whether the block device `name` (`dm-3`) is a dm-crypt target, or is built
 /// on one, looking at most eight layers down.
 fn dm_crypt_below(name: &str, depth: u8) -> bool {
@@ -267,6 +305,35 @@ mod tests {
         ));
     }
 
+    /// The disk under each mounted device spins or not as `lsblk` says, and
+    /// a source that is no device counts as one that spins.
+    #[test]
+    fn solid_state_matches_lsblk() {
+        let table = super::mountinfo();
+        let devices: std::collections::BTreeSet<String> = super::mounts(&table)
+            .map(|mount| mount.source)
+            .filter(|source| source.starts_with("/dev/"))
+            .collect();
+        for source in &devices {
+            let lsblk = crate::subprocess::BigSubprocessSpec::builder()
+                .program("lsblk")
+                .args(["--nodeps", "--noheadings", "--output", "ROTA"])
+                .arg(source)
+                .stdout(crate::subprocess::BigSubprocessOutputMode::Capture)
+                .build()
+                .run()
+                .unwrap();
+            let said = lsblk.stdout_lossy();
+            assert_eq!(
+                super::on_solid_state(source),
+                said.trim() == "0",
+                "{source}: {said}"
+            );
+        }
+        assert!(!super::on_solid_state("tmpfs"));
+        assert!(!super::on_solid_state("/dev/null"));
+    }
+
     #[test]
     fn holding_mount_is_the_longest() {
         let table = "\
@@ -316,6 +383,7 @@ not a mount line
         assert_eq!(
             mounts[0],
             super::Mount {
+                id: 50,
                 device: "8:17",
                 root: "/".into(),
                 point: "/run/media/me/My Disk".into(),
