@@ -312,16 +312,15 @@ impl imp::ItemView {
         let (size, scale) = (key.1, key.2);
         let view = obj.downgrade();
         let wanted = key.clone();
-        let fallback = gicon.clone();
-        let deliver = move |texture: Option<gdk::Texture>| {
+        let deliver = move |answer: Result<gdk::Texture, gtk::gio::Icon>| {
             let Some(view) = view.upgrade() else {
                 return;
             };
-            let state = match texture {
-                Some(texture) => IconState::Texture(texture),
-                None => IconState::Paintable(crate::icons::paintable(
+            let state = match answer {
+                Ok(texture) => IconState::Texture(texture),
+                Err(icon) => IconState::Paintable(crate::icons::paintable(
                     &view.display(),
-                    &fallback,
+                    &icon,
                     size,
                     scale,
                     view.direction() == gtk::TextDirection::Rtl,
@@ -331,7 +330,7 @@ impl imp::ItemView {
         };
         match self.icon_loader.get() {
             Some(load) => load(&obj.display(), gicon, size, scale, Box::new(deliver)),
-            None => deliver(None),
+            None => deliver(Err(gicon.clone())),
         }
         self.icons.borrow().get(&key)
     }

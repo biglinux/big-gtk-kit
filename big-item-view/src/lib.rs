@@ -37,10 +37,10 @@ pub use layout::{Flow, Runs, Sections, Step};
 pub use view::ItemView;
 
 /// Draws `icon` at `size` and `scale` for the display, and hands the picture to
-/// `deliver` on the main thread, at once or later; `None` lets GTK's icon theme
-/// draw it.
+/// `deliver` on the main thread, at once or later; `Err` names the icon GTK's
+/// icon theme draws in its place.
 pub type IconLoader =
-    fn(&gdk::Display, &gio::Icon, i32, i32, Box<dyn FnOnce(Option<gdk::Texture>)>);
+    fn(&gdk::Display, &gio::Icon, i32, i32, Box<dyn FnOnce(Result<gdk::Texture, gio::Icon>)>);
 
 /// What a consumer tells the view about its items.
 ///

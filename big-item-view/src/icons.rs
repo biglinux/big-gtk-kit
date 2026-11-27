@@ -21,7 +21,7 @@ pub(crate) enum IconState {
     Pending,
     /// A picture of the icon at the size asked.
     Texture(gdk::Texture),
-    /// A symbolic icon, or one the sandbox left to GTK: drawn by GTK.
+    /// A symbolic icon, or the icon the loader names in its place: drawn by GTK.
     Paintable(gtk::IconPaintable),
 }
 

@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
 
-//! Themed and file icons drawn at the size they are shown. GTK lays out an SVG
-//! icon's `<text>` with Pango on a worker thread, which is not thread-safe, so
-//! every SVG icon is decoded by glycin in its sandbox instead and cached in
-//! memory and on disk for the whole suite. Rasters are left to GTK.
+//! Themed and file icons drawn at the size they are shown. Every icon file is
+//! decoded by glycin in its sandbox and cached in memory and on disk for the
+//! whole suite: GTK decodes PNG, JPEG and TIFF in this process, and lays out an
+//! SVG icon's `<text>` with Pango on a worker thread, which is not thread-safe.
+//! GTK draws only symbolic theme icons and pictures compiled into a program.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -51,8 +52,8 @@ const DISK_PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// The file in the cache folder whose modification time is the last pruning.
 const DISK_PRUNE_STAMP: &str = "pruned";
 
-/// What to do with a texture once it exists.
-pub type Deliver = Box<dyn FnOnce(gdk::Texture)>;
+/// Who waits for a decode: `None` when the sandbox could not draw it.
+type Waiter = Box<dyn FnOnce(Option<gdk::Texture>)>;
 
 struct PendingSvg {
     key: String,
@@ -70,29 +71,45 @@ thread_local! {
     static TICK: Cell<u64> = const { Cell::new(0) };
     /// Who wants each texture that is still being decoded, by key. A second
     /// request for the same key while the first is in flight joins it here.
-    static WAITERS: RefCell<HashMap<String, Vec<Deliver>>> = RefCell::new(HashMap::new());
+    static WAITERS: RefCell<HashMap<String, Vec<Waiter>>> = RefCell::new(HashMap::new());
     /// Decodes not yet started, in request order.
     static PENDING: RefCell<VecDeque<PendingSvg>> = const { RefCell::new(VecDeque::new()) };
     /// Bytes of SVG source retained by `PENDING`, kept in step with it.
     static PENDING_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Decodes running right now.
     static IN_FLIGHT: Cell<usize> = const { Cell::new(0) };
-    /// Where the theme found each icon asked for, by the icon's string form, size
-    /// and scale: the file and its cache key, or `None` for "let GTK draw it".
-    /// Forgotten whenever the theme changes.
+    /// Where the theme found each themed icon asked for, by the icon's string
+    /// form, size and scale. Forgotten whenever the theme changes.
     static RESOLVED: RefCell<HashMap<(String, i32, i32), Resolved>> = RefCell::new(HashMap::new());
     static WATCHING_THEME: Cell<bool> = const { Cell::new(false) };
+    /// Keys the sandbox could not draw, and when it last tried.
+    static FAILED: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
 }
 
-/// What the theme answered for one icon: its file and cache key, or `None` for
-/// "let GTK draw it".
-type Resolved = Option<(PathBuf, String)>;
+/// What the theme answered for one icon.
+#[derive(Clone)]
+enum Resolved {
+    /// GTK draws it: a symbolic theme icon, recolored as it is drawn, or a
+    /// picture compiled into a program (GTK's own one for a theme miss).
+    Gtk,
+    /// A local file for the sandbox, and its cache key.
+    File(PathBuf, String),
+    /// Nothing the sandbox reads here and GTK must not decode: a remote file,
+    /// bytes, a texture.
+    Refused,
+}
 
 /// Ceiling on remembered theme answers; past it the memo starts over.
 const MAX_RESOLVED: usize = 4096;
 
-/// The file the icon theme draws `gicon` from at `size`×`scale`, and its cache
-/// key; remembered, as a file view asks again for every cell it binds and each
+/// How long a failed decode is believed: a loader the kernel ended under
+/// memory pressure fails like a broken file, and the shell runs all session.
+const FAILED_FOR: Duration = Duration::from_secs(10 * 60);
+/// Ceiling on remembered failures; past it the record starts over.
+const MAX_FAILED: usize = 1024;
+
+/// What the icon theme draws `gicon` from at `size`×`scale`; remembered for a
+/// themed icon, as a file view asks again for every cell it binds and each
 /// answer reads file metadata on the main thread.
 fn resolve(display: &gdk::Display, gicon: &gio::Icon, size: i32, scale: i32) -> Resolved {
     let theme = gtk::IconTheme::for_display(display);
@@ -101,27 +118,45 @@ fn resolve(display: &gdk::Display, gicon: &gio::Icon, size: i32, scale: i32) -> 
     }
     // Themed icons only: a file icon's file can change under the same name, and
     // its key has to see the new modification time.
-    let name = gicon
-        .is::<gio::ThemedIcon>()
-        .then(|| IconExt::to_string(gicon))
-        .flatten()
+    let themed = gicon.downcast_ref::<gio::ThemedIcon>();
+    let name = themed
+        .and_then(|_| IconExt::to_string(gicon))
         .map(|name| (name.to_string(), size, scale));
     if let Some(name) = &name
         && let Some(answer) = RESOLVED.with(|memo| memo.borrow().get(name).cloned())
     {
         return answer;
     }
-    let paintable = theme.lookup_by_gicon(
-        gicon,
-        size,
-        scale,
-        gtk::TextDirection::None,
-        gtk::IconLookupFlags::FORCE_REGULAR,
-    );
-    let answer = paintable.file().and_then(|file| file.path()).map(|path| {
-        let key = source_key(&path, (size * scale).max(1), "");
-        (path, key)
-    });
+    // GTK cannot draw a file icon without a local path (it logs criticals).
+    if gicon
+        .downcast_ref::<gio::FileIcon>()
+        .is_some_and(|icon| icon.file().path().is_none())
+    {
+        return Resolved::Refused;
+    }
+    // Only the first name: GLib appends a `-symbolic` twin of every name.
+    let asks_symbolic = themed
+        .and_then(|themed| themed.names().first().cloned())
+        .is_some_and(|name| name.ends_with("-symbolic"));
+    let flags = if asks_symbolic {
+        gtk::IconLookupFlags::empty()
+    } else {
+        gtk::IconLookupFlags::FORCE_REGULAR
+    };
+    let paintable = theme.lookup_by_gicon(gicon, size, scale, gtk::TextDirection::None, flags);
+    let answer = match paintable.file() {
+        Some(file) => match file.path() {
+            // A file icon named like a symbolic one is still a file from anywhere.
+            Some(path) if themed.is_some() && symbolic_file(&path) => Resolved::Gtk,
+            Some(path) => {
+                let key = source_key(&path, (size * scale).max(1), "");
+                Resolved::File(path, key)
+            }
+            None if file.has_uri_scheme("resource") => Resolved::Gtk,
+            None => Resolved::Refused,
+        },
+        None => Resolved::Refused,
+    };
     if let Some(name) = name {
         RESOLVED.with(|memo| {
             let mut memo = memo.borrow_mut();
@@ -132,6 +167,50 @@ fn resolve(display: &gdk::Display, gicon: &gio::Icon, size: i32, scale: i32) -> 
         });
     }
     answer
+}
+
+/// Whether GTK recolors the icon file at `path` as it draws it, which it tells
+/// by the file name alone (`gtk_icon_paintable_is_symbolic`, deprecated without a
+/// successor).
+fn symbolic_file(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(std::ffi::OsStr::as_encoded_bytes)
+        .unwrap_or_default();
+    [
+        &b"-symbolic.svg"[..],
+        b"-symbolic-ltr.svg",
+        b"-symbolic-rtl.svg",
+        b".symbolic.png",
+    ]
+    .into_iter()
+    .any(|suffix| name.ends_with(suffix))
+}
+
+/// Whether the sandbox failed to draw `key` within [`FAILED_FOR`].
+fn failed_lately(key: &str) -> bool {
+    FAILED.with(|failed| {
+        failed
+            .borrow()
+            .get(key)
+            .is_some_and(|when| when.elapsed() < FAILED_FOR)
+    })
+}
+
+/// Note that the sandbox could not draw `key`.
+fn record_failure(key: String) {
+    FAILED.with(|failed| {
+        let mut failed = failed.borrow_mut();
+        if failed.len() >= MAX_FAILED {
+            failed.clear();
+        }
+        failed.insert(key, Instant::now());
+    });
+}
+
+/// What GTK draws for an icon the sandbox could not, or would not, read.
+fn missing_icon() -> gio::Icon {
+    gio::ThemedIcon::new("image-missing-symbolic").upcast()
 }
 
 /// A cache key for `path` drawn `px` tall with `variant` (a tint, or empty).
@@ -179,22 +258,26 @@ pub fn set_icon_file(image: &gtk::Image, path: &Path) {
 /// Set `image` from a themed, mime-type or file `gicon` at the image's own
 /// pixel size.
 ///
-/// An SVG behind the icon is drawn by the sandbox at that size, a raster is
-/// decoded at that size off the main thread; either arrives a moment later (at
-/// once when cached). A symbolic icon and a lookup miss go to GTK: a symbolic
-/// icon is recoloured by the theme as it is drawn, which a bitmap cannot be.
+/// The file behind the icon is decoded by the sandbox at that size off the main
+/// thread and arrives a moment later (at once when cached); the image is blank
+/// meanwhile. GTK draws what [`gicon_texture`] leaves to it. An answer that
+/// arrives after the image was set again, as a recycled list row is, is dropped.
 pub fn set_gicon(image: &gtk::Image, gicon: &gio::Icon) {
     let size = image.pixel_size().max(16);
     let scale = image.scale_factor().max(1);
+    let asked = gdk::Paintable::new_empty(size, size);
+    image.set_paintable(Some(&asked));
     let weak = image.downgrade();
-    let fallback = gicon.clone();
-    gicon_texture(&image.display(), gicon, size, scale, move |texture| {
+    gicon_texture(&image.display(), gicon, size, scale, move |answer| {
         let Some(image) = weak.upgrade() else {
             return;
         };
-        match texture {
-            Some(texture) => image.set_paintable(Some(&texture)),
-            None => image.set_from_gicon(&fallback),
+        if image.paintable().as_ref() != Some(&asked) {
+            return;
+        }
+        match answer {
+            Ok(texture) => image.set_paintable(Some(&texture)),
+            Err(icon) => image.set_from_gicon(&icon),
         }
     });
 }
@@ -204,16 +287,19 @@ pub fn set_gicon(image: &gtk::Image, gicon: &gio::Icon) {
 pub const GICON_TEXTURE: fn(&gdk::Display, &gio::Icon, i32, i32, DeliverIcon) = gicon_texture;
 
 /// Where [`GICON_TEXTURE`] hands the picture.
-pub type DeliverIcon = Box<dyn FnOnce(Option<gdk::Texture>)>;
+pub type DeliverIcon = Box<dyn FnOnce(Result<gdk::Texture, gio::Icon>)>;
 
 /// Deliver `gicon` drawn `size`×`scale` pixels, the way [`set_gicon`] draws it, for
 /// a surface that takes a texture rather than a `gtk::Image`: a preview tile, a
 /// drag icon.
 ///
-/// `None` means "let GTK draw it": a symbolic icon (recoloured by the theme as it
-/// is drawn, which a bitmap cannot be), a lookup that found no file, or a raster
-/// the sandbox could not decode. An SVG that fails to render delivers nothing.
-/// `deliver` runs on the main thread, at once when cached.
+/// `Err` carries the icon for GTK to draw instead: `gicon` itself when it is a
+/// symbolic theme icon (recolored as it is drawn, which a bitmap cannot be) or a
+/// picture compiled into a program, and `image-missing-symbolic` when the
+/// sandbox could not decode the file or the icon is not a local file (a remote
+/// one, bytes). GTK never gets a file the sandbox refused. `deliver` runs once,
+/// on the main thread, at once when cached; a failure is answered at once for
+/// ten minutes after it.
 ///
 /// GTK's own loader keeps a raster icon at the size of its file (pixmaps ship
 /// 1024-pixel PNGs), and every image embedded in an SVG for the life of the
@@ -223,23 +309,22 @@ pub fn gicon_texture(
     gicon: &gio::Icon,
     size: i32,
     scale: i32,
-    deliver: impl FnOnce(Option<gdk::Texture>) + 'static,
+    deliver: impl FnOnce(Result<gdk::Texture, gio::Icon>) + 'static,
 ) {
-    // Only the first name: GLib appends a `-symbolic` twin of every name.
-    if gicon
-        .downcast_ref::<gio::ThemedIcon>()
-        .and_then(|themed| themed.names().first().cloned())
-        .is_some_and(|name| name.ends_with("-symbolic"))
-    {
-        deliver(None);
-        return;
-    }
     let size = size.max(16);
     let scale = scale.max(1);
-    let Some((path, key)) = resolve(display, gicon, size, scale) else {
-        deliver(None);
-        return;
+    let (path, key) = match resolve(display, gicon, size, scale) {
+        Resolved::Gtk => {
+            deliver(Err(gicon.clone()));
+            return;
+        }
+        Resolved::Refused => {
+            deliver(Err(missing_icon()));
+            return;
+        }
+        Resolved::File(path, key) => (path, key),
     };
+    let deliver = move |texture: Option<gdk::Texture>| deliver(texture.ok_or_else(missing_icon));
     let px = (size * scale).max(1);
     if path.extension().and_then(|ext| ext.to_str()) != Some("svg") {
         raster_texture(path, (px, px), key, deliver);
@@ -247,6 +332,10 @@ pub fn gicon_texture(
     }
     if let Some(texture) = memory_hit(&key) {
         deliver(Some(texture));
+        return;
+    }
+    if failed_lately(&key) {
+        deliver(None);
         return;
     }
     // Read the cached bitmap (or, on a miss, the SVG) off the main thread, and
@@ -271,11 +360,11 @@ pub fn gicon_texture(
         })
         .await
         else {
+            record_failure(key);
+            deliver(None);
             return;
         };
-        svg_texture(key, glib::Bytes::from_owned(bytes), px, move |texture| {
-            deliver(Some(texture));
-        });
+        svg_answer(key, glib::Bytes::from_owned(bytes), px, deliver);
     });
 }
 
@@ -292,6 +381,13 @@ fn raster_texture(
         deliver(Some(texture));
         return;
     }
+    if failed_lately(&key) {
+        deliver(None);
+        return;
+    }
+    if !join_waiters(&key, Box::new(deliver)) {
+        return;
+    }
     glib::spawn_future_local(async move {
         let cache_key = key.clone();
         let cached = gio::spawn_blocking(move || read_disk_rgba(&cache_key))
@@ -306,17 +402,41 @@ fn raster_texture(
                 .ok()
                 .flatten(),
         };
-        let Some((width, height, stride, pixels)) = pixels else {
-            deliver(None);
-            return;
-        };
-        let texture = texture_from_rgba(width, height, stride, pixels);
-        if fresh {
-            disk_put(&key, &texture);
+        let texture = pixels.map(|(width, height, stride, pixels)| {
+            texture_from_rgba(width, height, stride, pixels)
+        });
+        match &texture {
+            Some(texture) => {
+                if fresh {
+                    disk_put(&key, texture);
+                }
+                memory_put(key.clone(), texture.clone());
+            }
+            None => record_failure(key.clone()),
         }
-        memory_put(key, texture.clone());
-        deliver(Some(texture));
+        answer_waiters(&key, texture.as_ref());
     });
+}
+
+/// Wait for `key` with the decode already asked for, or be the first: `true`
+/// when the caller has to start it.
+fn join_waiters(key: &str, waiter: Waiter) -> bool {
+    WAITERS.with(|waiters| {
+        let mut waiters = waiters.borrow_mut();
+        let entry = waiters.entry(key.to_owned()).or_default();
+        entry.push(waiter);
+        entry.len() == 1
+    })
+}
+
+/// Hand everybody waiting for `key` what its decode gave.
+fn answer_waiters(key: &str, texture: Option<&gdk::Texture>) {
+    let waiters = WAITERS
+        .with(|waiters| waiters.borrow_mut().remove(key))
+        .unwrap_or_default();
+    for deliver in waiters {
+        deliver(texture.cloned());
+    }
 }
 
 /// Decode the raster at `path` to fit inside `bound`: `(width, height, stride,
@@ -325,10 +445,13 @@ fn raster_texture(
 /// Through this crate's own sandboxed decoder, whatever the format (PNG, JPEG,
 /// XPM, ICO, WebP…), and never gdk-pixbuf: its glycin loader copies every file
 /// to `/tmp` before the sandbox sees it. `None` when the sandbox cannot decode
-/// it, and the caller hands the icon to GTK as the last resort.
+/// it.
 fn reduced_raster(path: &Path, bound: (i32, i32)) -> Option<(i32, i32, usize, Vec<u8>)> {
+    // Themes link many icons to one file; the decoder opens no link itself.
+    let path = crate::followed_link(path.to_path_buf());
     let image =
-        crate::decode_rgba_sandboxed(&crate::BigImageSpec::bounded(path, bound.0, bound.1)).ok()?;
+        crate::decode_rgba_sandboxed(&crate::BigImageSpec::bounded(&path, bound.0, bound.1))
+            .ok()?;
     let row = usize::try_from(image.width).ok()? * 4;
     let mut pixels = image.rgba;
     // Straight alpha to premultiplied, which is what the disk cache holds.
@@ -431,7 +554,8 @@ pub fn own_png_texture(path: &Path, deliver: impl FnOnce(gdk::Texture) + 'static
 
 /// Deliver the texture for SVG `bytes` drawn `height_px` tall, as wide as that
 /// height makes it: from a cache at once, else from the sandboxed decoder when
-/// it is done. `deliver` runs on the main thread either way.
+/// it is done. `deliver` runs on the main thread either way, and not at all when
+/// the sandbox could not draw it.
 ///
 /// `key` names the source (see [`source_key`]); two callers asking for the same
 /// key while a decode is in flight share it.
@@ -441,44 +565,55 @@ pub fn svg_texture(
     height_px: i32,
     deliver: impl FnOnce(gdk::Texture) + 'static,
 ) {
+    svg_answer(key, bytes, height_px, |texture| {
+        if let Some(texture) = texture {
+            deliver(texture);
+        }
+    });
+}
+
+/// [`svg_texture`], answering `None` when the sandbox could not draw it.
+fn svg_answer(
+    key: String,
+    bytes: glib::Bytes,
+    height_px: i32,
+    deliver: impl FnOnce(Option<gdk::Texture>) + 'static,
+) {
     if let Some(texture) = memory_hit(&key) {
-        deliver(texture);
+        deliver(Some(texture));
+        return;
+    }
+    if failed_lately(&key) {
+        deliver(None);
         return;
     }
     if let Some(texture) = disk_hit(&key) {
         memory_put(key, texture.clone());
-        deliver(texture);
+        deliver(Some(texture));
         return;
     }
-    let first_asker = WAITERS.with(|waiters| {
-        let mut waiters = waiters.borrow_mut();
-        let entry = waiters.entry(key.clone()).or_default();
-        entry.push(Box::new(deliver));
-        entry.len() == 1
-    });
-    if first_asker {
-        // Bound the speculative queue: under a flood of icon requests, refuse to
-        // enqueue past the job or byte ceiling rather than growing PENDING and
-        // the SVG bytes it holds without limit. A refused tile keeps its
-        // placeholder; a later request retries.
-        let over_budget = PENDING.with(|pending| pending.borrow().len()) >= MAX_PENDING_JOBS
-            || PENDING_BYTES.with(Cell::get).saturating_add(bytes.len()) > MAX_PENDING_BYTES;
-        if over_budget {
-            WAITERS.with(|waiters| {
-                waiters.borrow_mut().remove(&key);
-            });
-            return;
-        }
-        PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
-        PENDING.with(|pending| {
-            pending.borrow_mut().push_back(PendingSvg {
-                key,
-                bytes,
-                height_px,
-            });
-        });
-        start_pending_decodes();
+    if !join_waiters(&key, Box::new(deliver)) {
+        return;
     }
+    // Bound the speculative queue: under a flood of icon requests, refuse to
+    // enqueue past the job or byte ceiling rather than growing PENDING and the
+    // SVG bytes it holds without limit. The refusal is not remembered, so a
+    // later request decodes it.
+    let over_budget = PENDING.with(|pending| pending.borrow().len()) >= MAX_PENDING_JOBS
+        || PENDING_BYTES.with(Cell::get).saturating_add(bytes.len()) > MAX_PENDING_BYTES;
+    if over_budget {
+        answer_waiters(&key, None);
+        return;
+    }
+    PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
+    PENDING.with(|pending| {
+        pending.borrow_mut().push_back(PendingSvg {
+            key,
+            bytes,
+            height_px,
+        });
+    });
+    start_pending_decodes();
 }
 
 fn start_pending_decodes() {
@@ -494,16 +629,14 @@ fn start_pending_decodes() {
         glib::MainContext::default().spawn_local(async move {
             let texture = decode_svg(job.bytes, job.height_px).await;
             IN_FLIGHT.with(|count| count.set(count.get().saturating_sub(1)));
-            let waiters = WAITERS
-                .with(|waiters| waiters.borrow_mut().remove(&job.key))
-                .unwrap_or_default();
-            if let Some(texture) = texture {
-                memory_put(job.key.clone(), texture.clone());
-                disk_put(&job.key, &texture);
-                for deliver in waiters {
-                    deliver(texture.clone());
+            match &texture {
+                Some(texture) => {
+                    memory_put(job.key.clone(), texture.clone());
+                    disk_put(&job.key, texture);
                 }
+                None => record_failure(job.key.clone()),
             }
+            answer_waiters(&job.key, texture.as_ref());
             start_pending_decodes();
         });
     }
@@ -761,6 +894,143 @@ fn prune_disk_cache(directory: &Path, now: SystemTime) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder of its own under the temporary directory, for icon files.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("big-icon-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A valid 8×8 PNG, encoded by GTK.
+    fn png() -> Vec<u8> {
+        let pixels = glib::Bytes::from_owned(vec![200u8; 8 * 8 * 4]);
+        gdk::MemoryTexture::new(8, 8, gdk::MemoryFormat::R8g8b8a8, &pixels, 8 * 4)
+            .save_to_png_bytes()
+            .to_vec()
+    }
+
+    fn file_icon(path: &Path) -> gio::Icon {
+        gio::FileIcon::new(&gio::File::for_path(path)).upcast()
+    }
+
+    /// What [`gicon_texture`] answers for `gicon` at 32 pixels, and whether it
+    /// answered before returning.
+    fn answer(gicon: &gio::Icon) -> (Result<gdk::Texture, gio::Icon>, bool) {
+        let display = gdk::Display::default().expect("a display");
+        let slot = std::rc::Rc::new(RefCell::new(None));
+        let sink = slot.clone();
+        gicon_texture(&display, gicon, 32, 1, move |answer| {
+            assert!(sink.replace(Some(answer)).is_none(), "answered twice");
+        });
+        let at_once = slot.borrow().is_some();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while slot.borrow().is_none() {
+            assert!(Instant::now() < deadline, "no answer for {gicon:?}");
+            glib::MainContext::default().iteration(false);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        (slot.take().expect("an answer"), at_once)
+    }
+
+    fn missing(answer: &Result<gdk::Texture, gio::Icon>) -> bool {
+        answer
+            .as_ref()
+            .err()
+            .and_then(|icon| icon.downcast_ref::<gio::ThemedIcon>())
+            .is_some_and(|icon| {
+                icon.names().first().map(glib::GString::as_str) == Some("image-missing-symbolic")
+            })
+    }
+
+    /// A file the sandbox cannot decode, or will not read, comes back as
+    /// image-missing and never as itself, which GTK would decode in this
+    /// process; the second ask is answered at once, without the sandbox.
+    #[test]
+    fn refused_icon_shows_missing() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dir = scratch("refused");
+            let truncated = dir.join("truncated.png");
+            let whole = png();
+            std::fs::write(&truncated, &whole[..whole.len() / 2]).unwrap();
+            let broken_svg = dir.join("broken.svg");
+            std::fs::write(&broken_svg, b"<svg").unwrap();
+            for path in [&truncated, &broken_svg] {
+                let (first, _) = answer(&file_icon(path));
+                assert!(missing(&first), "{}: {first:?}", path.display());
+                let (again, at_once) = answer(&file_icon(path));
+                assert!(missing(&again) && at_once, "{}: {again:?}", path.display());
+            }
+            let remote: gio::Icon =
+                gio::FileIcon::new(&gio::File::for_uri("https://example.invalid/a.png")).upcast();
+            assert!(missing(&answer(&remote).0));
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// Themes link many icons to one file: the link is decoded like its file.
+    #[test]
+    fn linked_icon_decodes() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dir = scratch("linked");
+            let target = dir.join("target.png");
+            std::fs::write(&target, png()).unwrap();
+            let link = dir.join("link.png");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let (linked, _) = answer(&file_icon(&link));
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(linked.is_ok(), "{linked:?}");
+        });
+    }
+
+    /// A symbolic theme icon is left to GTK, which recolors it; a file icon
+    /// named like one is still read by the sandbox.
+    #[test]
+    fn symbolic_theme_icon_left_to_gtk() {
+        big_testkit::harness::require_gtk_test(|| {
+            let themed: gio::Icon = gio::ThemedIcon::new("folder-symbolic").upcast();
+            let (answer_themed, at_once) = answer(&themed);
+            assert!(at_once);
+            assert_eq!(answer_themed.err().as_ref(), Some(&themed));
+
+            let dir = scratch("symbolic");
+            let named = dir.join("trap-symbolic.svg");
+            std::fs::write(
+                &named,
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>"#,
+            )
+            .unwrap();
+            let (from_file, _) = answer(&file_icon(&named));
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(from_file.is_ok(), "{from_file:?}");
+        });
+    }
+
+    /// A recycled image set again before its first icon arrived shows the
+    /// second icon, not the late first one.
+    #[test]
+    fn late_answer_dropped() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dir = scratch("late");
+            let first = dir.join("first.png");
+            std::fs::write(&first, png()).unwrap();
+            let image = gtk::Image::new();
+            image.set_pixel_size(32);
+            set_gicon(&image, &file_icon(&first));
+            let second: gio::Icon = gio::ThemedIcon::new("folder-symbolic").upcast();
+            set_gicon(&image, &second);
+            // The first decode ends, or is given up on.
+            let first_key = source_key(&first, 32, "");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline && memory_hit(&first_key).is_none() {
+                glib::MainContext::default().iteration(false);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(memory_hit(&first_key).is_some(), "the first icon decoded");
+            assert_eq!(image.gicon().as_ref(), Some(&second));
+        });
+    }
 
     #[test]
     fn old_disk_entries_are_pruned() {
