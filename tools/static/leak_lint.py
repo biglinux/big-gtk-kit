@@ -618,8 +618,12 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
             continue  # the binding itself
         if not any(lo <= m.start() < hi for lo, hi in shadowed.get(name, ())):
             used.add(name)  # outside every inner binding: the outer one, captured
-    # a local closure is used by calling it
-    calls = set(re.findall(r"(?<![.\w:])([a-z_]\w*)\s*\(", body)) - params
+    # a local closure is used by calling it, unless an inner binding of its name is called
+    calls = {
+        m.group(1)
+        for m in re.finditer(r"(?<![.\w:])([a-z_]\w*)\s*\(", body)
+        if not any(lo <= m.start() < hi for lo, hi in shadowed.get(m.group(1), ()))
+    } - params
     used -= params
     used -= {
         "self",
