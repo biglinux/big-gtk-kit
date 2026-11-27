@@ -357,29 +357,30 @@ mod tests {
     }
 
     /// [`MicrodaemonIdleExit::wait_for_client`] on another thread: whether it
-    /// saw a client and how long it took, or `None` while it still waits
-    /// after `limit`.
+    /// saw a client and how long after `since` it returned, or `None` while it
+    /// still waits after `limit`.
     fn wait_within(
         idle_exit: &MicrodaemonIdleExit,
         listener: &OwnedFd,
+        since: Instant,
         limit: Duration,
     ) -> Option<(bool, Duration)> {
         let idle_exit = idle_exit.clone();
         let listener = listener.try_clone().expect("the listener's duplicate");
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let started = Instant::now();
             let client = idle_exit.wait_for_client(listener.as_fd(), true);
-            let _ = sender.send((client, started.elapsed()));
+            let _ = sender.send((client, since.elapsed()));
         });
         receiver.recv_timeout(limit).ok()
     }
 
     #[test]
     fn wait_ends_with_idle_grace() {
+        let since = Instant::now();
         let idle_exit = MicrodaemonIdleExit::new(Duration::from_millis(80));
         let (listener, _writer) = quiet_listener();
-        let (client, waited) = wait_within(&idle_exit, &listener, Duration::from_secs(2))
+        let (client, waited) = wait_within(&idle_exit, &listener, since, Duration::from_secs(2))
             .expect("slept past the grace");
         assert!(!client);
         assert!(
@@ -394,11 +395,12 @@ mod tests {
         let idle_exit = MicrodaemonIdleExit::new(Duration::from_secs(30));
         let (listener, _writer) = quiet_listener();
         let client = idle_exit.client_connected();
+        let since = Instant::now();
         let leaving = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(150));
             drop(client);
         });
-        let (client, waited) = wait_within(&idle_exit, &listener, Duration::from_secs(5))
+        let (client, waited) = wait_within(&idle_exit, &listener, since, Duration::from_secs(5))
             .expect("never heard the client leave");
         assert!(!client);
         assert!(
@@ -432,9 +434,9 @@ mod tests {
         let _client = idle_exit.client_connected();
         idle_exit.wake();
 
-        let woken = wait_within(&idle_exit, &listener, Duration::from_secs(2));
+        let woken = wait_within(&idle_exit, &listener, Instant::now(), Duration::from_secs(2));
         assert_eq!(woken.map(|(client, _)| client), Some(false));
-        let again = wait_within(&idle_exit, &listener, Duration::from_millis(100));
+        let again = wait_within(&idle_exit, &listener, Instant::now(), Duration::from_millis(100));
         assert!(again.is_none(), "the bell rang once and was heard once");
         idle_exit.wake();
     }
