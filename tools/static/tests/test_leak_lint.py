@@ -620,6 +620,22 @@ class WarningRules(unittest.TestCase):
             with self.subTest(inner=inner):
                 self.assertEqual(lint(case.replace("INNER", inner)), [])
 
+    def test_inner_closure_holds_past_commas(self):
+        # A comma in a char literal or a closure's return type ends no inner closure.
+        case = """
+            fn wire(w: &gtk::Button, s: String, keep: Rc<Cell<usize>>) {
+                let w2 = w.clone();
+                w.connect_clicked(move |_| { BODY });
+            }
+        """
+        for body in (
+            "let n = s.chars().filter(|w2| *w2 == ',' || w2.is_whitespace()).count(); keep.set(n);",
+            "let f = |w2: &gtk::Button| -> Result<u32, String> { w2.hide(); Ok(1) }; keep.set(s.len());",
+            "let f = |w2: Pair<'a, 'b>| w2.hide(); keep.set(s.len());",  # lifetimes
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(lint(case.replace("BODY", body)), [])
+
     def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
             ("lazy-followers", "warning"),
