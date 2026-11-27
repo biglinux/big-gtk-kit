@@ -406,6 +406,65 @@ fn deferred_failure_returns_after_main_loop() {
     assert_eq!(exit, glib::ExitCode::from(23));
 }
 
+/// A local launch that fails at once keeps its status while the window it
+/// opened keeps GApplication's main loop turning.
+#[test]
+#[ignore = "display: needs a GTK display"]
+fn immediate_failure_survives_main_loop() {
+    struct FailingWindowRoot;
+
+    impl relm4::SimpleComponent for FailingWindowRoot {
+        type Init = ();
+        type Input = ();
+        type Output = ();
+        type Root = adw::ApplicationWindow;
+        type Widgets = ();
+
+        fn init_root() -> Self::Root {
+            adw::ApplicationWindow::builder().build()
+        }
+
+        fn init(
+            (): Self::Init,
+            root: Self::Root,
+            _sender: relm4::ComponentSender<Self>,
+        ) -> relm4::ComponentParts<Self> {
+            glib::idle_add_local_once(move || root.close());
+            relm4::ComponentParts {
+                model: Self,
+                widgets: (),
+            }
+        }
+    }
+
+    impl AppShellComponent for FailingWindowRoot {
+        fn init_for_activation(
+            _context: &AppShellContext,
+            request: AppShellActivationRequest,
+        ) -> Result<Self::Init, AppShellActivationError> {
+            request.fail(AppShellActivationError::new("immediate local failure", 23));
+            Ok(())
+        }
+
+        fn input_for_activation(
+            request: AppShellActivationRequest,
+        ) -> Result<Self::Input, AppShellActivationError> {
+            request.fail(AppShellActivationError::new(
+                "unexpected repeated activation",
+                24,
+            ));
+            Ok(())
+        }
+    }
+
+    let exit = run_root_with_args::<FailingWindowRoot, &str>(
+        AppShellSpec::new("br.com.biglinux.AppKitImmediateLocalStatus"),
+        vec!["appkit-immediate-local-status"],
+    );
+
+    assert_eq!(exit, glib::ExitCode::from(23));
+}
+
 /// Only fill the gap, and only where the gap breaks typing.
 ///
 /// Getting this wrong in either direction is user-visible: forcing
