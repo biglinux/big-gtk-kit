@@ -910,6 +910,10 @@ pub(crate) fn title_layout(
     if geometry.title_lines > 1 {
         layout.set_wrap(pango::WrapMode::WordChar);
         layout.set_height(-i32::from(geometry.title_lines));
+        // A name broken inside a word gets no hyphen it does not have.
+        let attributes = pango::AttrList::new();
+        attributes.insert(pango::AttrInt::new_insert_hyphens(false));
+        layout.set_attributes(Some(&attributes));
     }
     layout.set_alignment(match geometry.composition {
         Composition::Stacked => pango::Alignment::Center,

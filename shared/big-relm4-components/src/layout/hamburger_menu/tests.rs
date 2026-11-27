@@ -1280,6 +1280,21 @@ fn switch_and_scale_rows_follow_actions() {
         assert_eq!(zoom.state().and_then(|state| state.get::<i32>()), Some(5));
         zoom.set_state(&1_i32.to_variant());
         assert!((scale.value() - 1.0).abs() < f64::EPSILON);
+        // The slider is off while its action is, from the start too.
+        zoom.set_enabled(false);
+        assert!(!scale.is_sensitive());
+        let later = build_menu_model_action_popover_menu(
+            &menu,
+            &popover_labels(),
+            &[],
+            &[BigMenuActionGroupBinding::new("view", &actions)],
+        );
+        let later_scale = find_widget(later.upcast_ref(), &|widget| widget.is::<gtk::Scale>())
+            .expect("scale item is a slider");
+        assert!(!later_scale.is_sensitive());
+        zoom.set_enabled(true);
+        assert!(scale.is_sensitive());
+        assert!(later_scale.is_sensitive());
         window.close();
     });
 }
@@ -1545,6 +1560,90 @@ fn verb_strip_is_one_row() {
         assert_eq!(strip.x(), row.x());
         assert_eq!(strip.width(), row.width());
         popover.popdown();
+        window.close();
+    });
+}
+
+/// A strip's door says it opens a menu, and that it is closed, before it ever
+/// opened, as a door row does.
+#[test]
+fn strip_door_is_closed_popup() {
+    big_testkit::harness::require_gtk_test(|| {
+        let more = gio::Menu::new();
+        more.append(Some("Move to…"), Some("view.move"));
+        let menu = gio::Menu::new();
+        append_strip_section(
+            &menu,
+            None,
+            &[
+                described_item("Copy", None, Some("edit-copy-symbolic"), "view.copy"),
+                gio::MenuItem::new_submenu(Some("More"), &more),
+            ],
+        );
+        let popover = build_menu_model_action_popover_menu(&menu, &popover_labels(), &[], &[]);
+        let door = find_button_with_label(popover.upcast_ref(), "More").expect("the strip's door");
+        assert!(gtk::test_accessible_has_property(
+            &door,
+            gtk::AccessibleProperty::HasPopup
+        ));
+        assert!(gtk::test_accessible_has_state(
+            &door,
+            gtk::AccessibleState::Expanded
+        ));
+    });
+}
+
+/// Down passes over a strip whose buttons are all off, which the focus cannot
+/// enter, instead of stopping on it for good.
+#[test]
+fn down_skips_strip_all_off() {
+    big_testkit::harness::require_gtk_test(|| {
+        let actions = gio::SimpleActionGroup::new();
+        for name in ["open", "cut", "close"] {
+            let action = gio::SimpleAction::new(name, None);
+            action.set_enabled(name != "cut");
+            actions.add_action(&action);
+        }
+        let menu = gio::Menu::new();
+        menu.append(Some("Open"), Some("view.open"));
+        let cut = described_item("Cut", None, Some("edit-cut-symbolic"), "view.cut");
+        append_strip_section(&menu, None, &[cut]);
+        menu.append(Some("Close"), Some("view.close"));
+
+        let anchor = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let window = gtk::Window::builder().child(&anchor).build();
+        window.present();
+        assert!(big_testkit::harness::pump_until(|| window.is_mapped()));
+        let popover = gtk::Popover::new();
+        popover.set_parent(&anchor);
+        popover.set_autohide(false);
+        populate_menu_model_action_popover(
+            &popover,
+            &anchor,
+            &menu,
+            &popover_labels(),
+            &[BigMenuActionGroupBinding::new("view", &actions)],
+        );
+        popover.popup();
+        assert!(big_testkit::harness::pump_until(|| popover.is_visible()));
+        let cut = find_button_with_label(popover.upcast_ref(), "Cut").expect("the strip");
+        assert!(big_testkit::harness::pump_until(|| !cut.is_sensitive()));
+        let open = find_button_with_label(popover.upcast_ref(), "Open").expect("first row");
+        let close = find_button_with_label(popover.upcast_ref(), "Close").expect("last row");
+        assert!(open.grab_focus());
+        let page = find_stack(popover.upcast_ref())
+            .and_then(|stack| stack.visible_child())
+            .expect("the root page");
+
+        assert!(big_testkit::harness::press_key(
+            &page,
+            Some(gtk::PropagationPhase::Capture),
+            gtk::gdk::Key::Down,
+            gtk::gdk::ModifierType::empty(),
+        ));
+        assert!(close.is_focus(), "Down stopped on the strip");
+        popover.popdown();
+        popover.unparent();
         window.close();
     });
 }

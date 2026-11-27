@@ -218,7 +218,7 @@ impl BigNotice {
     /// Say what went well; it steps down after [`NOTICE_LINGER`], later while
     /// the pointer or the keyboard is on it.
     pub fn confirm(&self, message: &str) {
-        self.show(message, None, Tone::Passing);
+        self.show(message, None, Tone::Passing, None);
     }
 
     /// [`Self::confirm`], offering `label` to do `offer` while it shows:
@@ -229,7 +229,7 @@ impl BigNotice {
         label: &str,
         offer: impl Fn(&adw::Banner) + 'static,
     ) {
-        self.show(message, Some((label, Box::new(offer))), Tone::Passing);
+        self.show(message, Some((label, Box::new(offer))), Tone::Passing, None);
     }
 
     /// Say what was done, offering `label` to take it back. It stays until it
@@ -242,28 +242,27 @@ impl BigNotice {
                 undo();
             }
         };
-        self.show(message, Some((label, Box::new(offer))), Tone::Lasting);
+        self.show(message, Some((label, Box::new(offer))), Tone::Lasting, None);
     }
 
     /// Say how things stand: what the person is asked to do, or why something
     /// is not shown. It stays, with Close, until it is closed or something
     /// newer is said.
     pub fn tell(&self, message: &str) {
-        self.show(message, None, Tone::Lasting);
+        self.show(message, None, Tone::Lasting, None);
     }
 
     /// Say what was refused or went wrong. It stays, in the warning color and
     /// with Close, until it is closed or something newer is said.
     pub fn warn(&self, message: &str) {
-        self.show(message, None, Tone::Warning);
+        self.show(message, None, Tone::Warning, None);
     }
 
     /// [`Self::warn`] about `subject`, an action on one item ("rename
     /// /srv/notes.txt"): [`Self::withdraw`] with the same subject takes it down
     /// once that action has gone well.
     pub fn warn_about(&self, subject: &str, message: &str) {
-        self.show(message, None, Tone::Warning);
-        self.state.about.replace(Some(subject.to_owned()));
+        self.show(message, None, Tone::Warning, Some(subject));
     }
 
     /// Say what waits on the person, about `subject`, offering `label` to deal
@@ -276,8 +275,12 @@ impl BigNotice {
         label: &str,
         offer: impl Fn(&adw::Banner) + 'static,
     ) {
-        self.show(message, Some((label, Box::new(offer))), Tone::Lasting);
-        self.state.about.replace(Some(subject.to_owned()));
+        self.show(
+            message,
+            Some((label, Box::new(offer))),
+            Tone::Lasting,
+            Some(subject),
+        );
     }
 
     /// Whether the strip still says what it was told about `subject`.
@@ -303,7 +306,7 @@ impl BigNotice {
         label: &str,
         offer: impl Fn(&adw::Banner) + 'static,
     ) {
-        self.show(message, Some((label, Box::new(offer))), Tone::Warning);
+        self.show(message, Some((label, Box::new(offer))), Tone::Warning, None);
     }
 
     /// Say how far some work has got, offering `label` to stop it. Spoken once,
@@ -334,10 +337,12 @@ impl BigNotice {
         self.banner.set_revealed(false);
     }
 
-    fn show(&self, message: &str, offer: Option<(&str, Offer)>, tone: Tone) {
+    /// `about` is stored before the strip changes, so a handler on the strip
+    /// that says something else from there keeps its own subject.
+    fn show(&self, message: &str, offer: Option<(&str, Offer)>, tone: Tone, about: Option<&str>) {
         self.stop_step_down();
         self.state.working.set(false);
-        self.state.about.take();
+        self.state.about.replace(about.map(str::to_owned));
         let label = match offer {
             Some((label, offer)) => {
                 self.state.offer.replace(Some(offer));
@@ -493,6 +498,28 @@ mod tests {
             gtk::prelude::GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
             wait(NOTICE_LINGER + NOTICE_LINGER / 4);
             assert!(!banner.is_revealed(), "gone once the focus left");
+            window.destroy();
+        });
+    }
+
+    /// A warning said from a handler on the strip, while another one about
+    /// a subject comes in, keeps no subject of its own.
+    #[test]
+    fn nested_warning_keeps_its_subject() {
+        big_testkit::harness::require_gtk_test(|| {
+            let (notice, window) = shown_notice();
+            let inner = notice.downgrade();
+            let handler = notice.widget().connect_revealed_notify(move |_| {
+                if let Some(notice) = inner.upgrade() {
+                    notice.warn("B failed");
+                }
+            });
+            notice.warn_about("A", "A failed");
+            notice.widget().disconnect(handler);
+            assert_eq!(notice.widget().title(), "B failed");
+            assert!(!notice.is_about("A"));
+            notice.withdraw("A");
+            assert!(notice.widget().is_revealed(), "B stays");
             window.destroy();
         });
     }

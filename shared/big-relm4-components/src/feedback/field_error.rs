@@ -9,7 +9,7 @@
 //! below the whole form reaches neither the keyboard nor a screen reader in
 //! the field.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -25,6 +25,9 @@ pub struct FieldError {
     /// shared by the clones, so a hint added to one stays when another marks
     /// the field.
     hints: Rc<RefCell<Vec<gtk::Accessible>>>,
+    /// The line says a reason no screen reader could hear yet: it was given
+    /// before its window was on screen, and is said when the line appears.
+    unheard: Rc<Cell<bool>>,
 }
 
 impl FieldError {
@@ -39,10 +42,20 @@ impl FieldError {
             .css_classes(["error", "caption"])
             .accessible_role(gtk::AccessibleRole::Alert)
             .build();
+        let unheard = Rc::new(Cell::new(false));
+        line.connect_map({
+            let unheard = Rc::clone(&unheard);
+            move |line| {
+                if unheard.replace(false) {
+                    say_aloud(line, &line.label(), line.has_css_class("error"));
+                }
+            }
+        });
         Self {
             field: field.upcast_ref::<gtk::Widget>().downgrade(),
             line,
             hints: Rc::default(),
+            unheard,
         }
     }
 
@@ -95,6 +108,7 @@ impl FieldError {
 
     /// Take the refusal or the note back.
     pub fn clear(&self) {
+        self.unheard.set(false);
         if self.line.get_visible() {
             self.line.set_visible(false);
             self.mark(false);
@@ -115,19 +129,14 @@ impl FieldError {
             self.line.remove_css_class("error");
         }
         self.mark(refused);
-        // From the window: the line was hidden until now, and GTK drops an
-        // announcement from a widget no screen reader has met.
-        if new_reason {
-            announce_from_window(
-                &self.line,
-                message,
-                if refused {
-                    gtk::AccessibleAnnouncementPriority::High
-                } else {
-                    gtk::AccessibleAnnouncementPriority::Medium
-                },
-            );
+        if !new_reason {
+            return;
         }
+        let on_screen = self.line.root().is_some_and(|window| window.is_mapped());
+        if on_screen {
+            say_aloud(&self.line, message, refused);
+        }
+        self.unheard.set(!on_screen);
     }
 
     fn mark(&self, invalid: bool) {
@@ -174,6 +183,20 @@ impl FieldError {
             }
         }
     }
+}
+
+/// From the window: the line was hidden until now, and GTK drops an
+/// announcement from a widget no screen reader has met.
+fn say_aloud(line: &gtk::Label, message: &str, refused: bool) {
+    announce_from_window(
+        line,
+        message,
+        if refused {
+            gtk::AccessibleAnnouncementPriority::High
+        } else {
+            gtk::AccessibleAnnouncementPriority::Medium
+        },
+    );
 }
 
 /// `field`, and the child it is typed into when it has one: an `adw::EntryRow`
@@ -324,6 +347,38 @@ mod tests {
             settle();
             assert_eq!(heard.take(), ["A folder with that name exists"]);
             window.destroy();
+        });
+    }
+
+    /// A refusal given while the form is built is said when the form appears,
+    /// once, and the same reason given again stays quiet.
+    #[test]
+    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-relm4-components -- --ignored"]
+    fn refusal_before_window_is_announced() {
+        big_testkit::harness::require_gtk_test(|| {
+            use big_testkit::atspi::{Announcements, accessibility_bus, settle};
+            // The bridge joins the bus with the process's first window.
+            let first = gtk::Window::new();
+            first.present();
+            settle();
+            let (bus, application) =
+                accessibility_bus().expect("the AT-SPI bridge (headless-gate.sh --accessible)");
+            let heard = Announcements::listen(&bus, &application);
+            let field = gtk::Entry::new();
+            let error = FieldError::under(&field);
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            column.append(&field);
+            column.append(error.line());
+            error.show("Taken");
+            let window = gtk::Window::builder().child(&column).build();
+            window.present();
+            settle();
+            assert_eq!(heard.take(), ["Taken"]);
+            error.show("Taken");
+            settle();
+            assert_eq!(heard.take(), [] as [&str; 0]);
+            window.destroy();
+            first.destroy();
         });
     }
 }

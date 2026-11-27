@@ -53,6 +53,9 @@ pub struct BigContextMenu {
     popover: gtk::PopoverMenu,
     host: glib::WeakRef<gtk::Widget>,
     focus_return: BigMenuFocusReturn,
+    /// The prefixes of the groups the last opening put on the popover, which
+    /// would otherwise win over the host's own groups at the next opening.
+    group_prefixes: Rc<RefCell<Vec<String>>>,
 }
 
 /// Gives the keyboard back to the widget a menu was opened on when the menu
@@ -167,6 +170,7 @@ impl BigContextMenu {
             popover,
             host: host.downgrade(),
             focus_return,
+            group_prefixes: Rc::default(),
         }
     }
 
@@ -196,6 +200,10 @@ impl BigContextMenu {
         }
         let anchor = anchor.as_ref();
         self.popover.popdown();
+        for prefix in self.group_prefixes.take() {
+            self.popover
+                .insert_action_group(&prefix, None::<&gio::ActionGroup>);
+        }
         populate_menu_model_action_popover_menu(
             &self.popover,
             &content.model,
@@ -204,6 +212,9 @@ impl BigContextMenu {
         );
         for binding in &content.action_groups {
             insert_inheritable_action_group(&self.popover, &binding.prefix, &binding.group);
+            self.group_prefixes
+                .borrow_mut()
+                .push(binding.prefix.clone());
         }
         self.focus_return.remember(anchor);
 
@@ -797,6 +808,55 @@ mod tests {
                 pump();
             }
             assert!(elsewhere.is_focus(), "the item's focus was pulled back");
+            window.destroy();
+        });
+    }
+
+    /// An opening that names no group of its own runs the host's action, not
+    /// the group an earlier opening brought under the same prefix.
+    #[test]
+    fn earlier_opening_groups_leave() {
+        require_gtk_test(|| {
+            let counted_group = |count: &Rc<Cell<u32>>| {
+                let open = gio::SimpleAction::new("open", None);
+                let count = Rc::clone(count);
+                open.connect_activate(move |_, _| count.set(count.get() + 1));
+                let group = gio::SimpleActionGroup::new();
+                group.add_action(&open);
+                group
+            };
+            let (earlier, hosts) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+            let window = gtk::Window::new();
+            let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            host.insert_action_group("file", Some(&counted_group(&hosts)));
+            window.set_child(Some(&host));
+            window.present();
+            pump();
+
+            let menu = BigContextMenu::new(&host);
+            let model = gio::Menu::new();
+            model.append(Some("Open"), Some("file.open"));
+            let mut content = BigContextMenuContent::new(
+                model.clone(),
+                BigMenuModelPopoverLabels::new("File Actions"),
+            );
+            content.action_groups = vec![BigMenuActionGroupBinding::new(
+                "file",
+                &counted_group(&earlier),
+            )];
+            menu.popup(&host, 4.0, 4.0, &content);
+            assert!(pump_until(|| menu.popover().is_mapped()));
+            menu.popdown();
+            assert!(pump_until(|| !menu.popover().is_visible()));
+
+            let content =
+                BigContextMenuContent::new(model, BigMenuModelPopoverLabels::new("File Actions"));
+            menu.popup(&host, 4.0, 4.0, &content);
+            assert!(pump_until(|| menu.popover().is_mapped()));
+            let item = mapped_action_button(menu.popover().upcast_ref(), "file.open");
+            item.expect("the menu's Open").emit_clicked();
+            assert!(pump_until(|| earlier.get() + hosts.get() > 0));
+            assert_eq!((earlier.get(), hosts.get()), (0, 1));
             window.destroy();
         });
     }
