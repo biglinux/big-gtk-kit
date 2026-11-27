@@ -715,10 +715,12 @@ mod portal {
         if reply.message_type() != gio::DBusMessageType::Error {
             return Ok(reply);
         }
+        // The message is the body's first value, when it is a string, as
+        // GLib reads it: an error may carry more after it.
         let message = reply
             .body()
-            .and_then(|body| body.get::<(String,)>())
-            .map(|(message,)| message)
+            .filter(|body| body.n_children() > 0)
+            .and_then(|body| body.child_value(0).get::<String>())
             .unwrap_or_default();
         Err(gio::DBusError::new_for_dbus_error(
             reply.error_name().as_deref().unwrap_or_default(),
@@ -1081,13 +1083,16 @@ mod tests {
                 gio::bus_unown_name(owner);
                 portal.close_sync(gio::Cancellable::NONE).expect("closed");
 
-                let _successor = successor_portal();
+                let successor = successor_portal();
 
                 assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
                 assert!(
                     matches!(*answer.borrow(), Some(None)),
                     "not answered: fall back"
                 );
+                successor
+                    .close_sync(gio::Cancellable::NONE)
+                    .expect("closed");
             })
             .expect("the context of this thread");
     }
@@ -1100,7 +1105,7 @@ mod tests {
         glib::MainContext::new()
             .with_thread_default(|| {
                 let asked = Rc::new(Cell::new(false));
-                let (portal, _owner) = fake_portal(take_request(&asked));
+                let (portal, owner) = fake_portal(take_request(&asked));
                 let answer = ask_open();
                 let results = glib::VariantDict::new(None);
                 results.insert("uris", vec!["file:///a"]);
@@ -1130,6 +1135,8 @@ mod tests {
                     ),
                     "the file the portal chose"
                 );
+                gio::bus_unown_name(owner);
+                portal.close_sync(gio::Cancellable::NONE).expect("closed");
             })
             .expect("the context of this thread");
     }
@@ -1154,7 +1161,7 @@ mod tests {
     fn portal_refusal_is_error() {
         glib::MainContext::new()
             .with_thread_default(|| {
-                let _portal = fake_portal(|invocation| {
+                let (portal, owner) = fake_portal(|invocation| {
                     invocation.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied", "no");
                 });
                 let answer = ask_open();
@@ -1166,6 +1173,8 @@ mod tests {
                     ),
                     "the portal's own error"
                 );
+                gio::bus_unown_name(owner);
+                portal.close_sync(gio::Cancellable::NONE).expect("closed");
             })
             .expect("the context of this thread");
     }
