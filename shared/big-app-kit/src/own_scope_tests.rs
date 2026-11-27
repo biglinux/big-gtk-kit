@@ -464,6 +464,44 @@ fn given_token_reaches_bus_activatable_handler() {
     );
 }
 
+/// A Chromium entry whose `Exec` quotes the program still gets the page tree.
+#[test]
+fn quoted_chromium_gets_page_tree() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if std::env::var_os("GNOME_ACCESSIBILITY").is_none() {
+        run_in_child(
+            "own_scope::tests::quoted_chromium_gets_page_tree",
+            &[("GNOME_ACCESSIBILITY", std::ffi::OsStr::new("1"))],
+        );
+        return;
+    }
+    let dir = glib::mkdtemp(std::env::temp_dir().join("big-app-kit-chromium-XXXXXX"))
+        .expect("temporary directory");
+    let program = dir.join("chromium");
+    std::fs::write(&program, "#!/bin/sh\n").expect("program");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let entry = dir.join("org.example.Web.desktop");
+    std::fs::write(
+        &entry,
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Web\nExec=\"{}\" %U\n",
+            program.display()
+        ),
+    )
+    .expect("desktop file");
+    let application =
+        big_testkit::desktop_entry::app_info_from_file(&entry).expect("valid desktop file");
+    let accessible = with_page_accessibility(&application).and_then(|copy| copy.commandline());
+    std::fs::remove_dir_all(&dir).expect("temporary directory removed");
+    let commandline = accessible.expect("a Chromium-family entry");
+    assert!(
+        commandline
+            .to_string_lossy()
+            .contains("--force-renderer-accessibility"),
+        "{commandline:?}"
+    );
+}
+
 #[test]
 fn entry_without_exec_is_refused() {
     if std::env::var_os("GNOME_ACCESSIBILITY").is_none() {
