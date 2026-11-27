@@ -605,3 +605,20 @@ fn scope_refuses_this_process() {
     let (unit, _) = scope_for(other, "x").expect("a scope for another program");
     assert_eq!(unit, format!("app-bigshell-x-{other}.scope"));
 }
+
+/// A launch from a process with neither a token nor a display still gets the
+/// renderer's environment.
+#[test]
+fn launch_without_display_keeps_renderer() {
+    let environment: Vec<_> = launch_context(Renderer::Software, None, None)
+        .environment()
+        .into_iter()
+        .map(|line| line.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        environment
+            .iter()
+            .any(|line| line == "LIBGL_ALWAYS_SOFTWARE=1"),
+        "{environment:?}"
+    );
+}
