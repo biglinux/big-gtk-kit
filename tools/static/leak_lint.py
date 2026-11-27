@@ -792,8 +792,17 @@ REPEATING_SOURCE = re.compile(
 )
 
 
-# A failed upgrade that keeps the source: `None => Continue` beside an upgrade.
-WEAK_FAILS_ON = re.compile(r"\bNone\s*=>\s*(?:return\s+)?(?:[\w:]+::)?Continue\b")
+def none_arm_continues(closure: str) -> bool:
+    """Whether a `None` arm, a failed upgrade, can return `Continue` and so keep the
+    source after its target is gone."""
+    for m in re.finditer(r"\bNone\s*=>\s*", closure):
+        if closure.startswith("{", m.end()):
+            arm = call_argument(closure, m.end())
+        else:
+            arm = closure[m.end() : closure_end(closure, m.end())]
+        if re.search(r"\bContinue\b", arm):
+            return True
+    return False
 
 
 def rule_repeating_source_without_weak_exit(src: Source):
@@ -819,7 +828,7 @@ def rule_repeating_source_without_weak_exit(src: Source):
         if (
             "Break" in closure
             and re.search(r"\.upgrade\(\)|#\[upgrade_or", closure)
-            and not WEAK_FAILS_ON.search(closure)
+            and not none_arm_continues(closure)
         ):
             continue
         yield (
