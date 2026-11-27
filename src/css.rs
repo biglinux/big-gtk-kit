@@ -54,7 +54,7 @@ fn provider_following(settings: Option<gtk::Settings>) -> gtk::CssProvider {
 thread_local! {
     /// What [`install_for_display`] added: each display with the hash of a
     /// sheet's text.
-    static INSTALLED: RefCell<Vec<(gdk::Display, u64)>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static INSTALLED: RefCell<Vec<(gdk::Display, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// [`install_for_display`] on the default display.

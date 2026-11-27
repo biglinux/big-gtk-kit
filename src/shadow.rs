@@ -36,9 +36,10 @@ const ADWAITA_RULES: [&str; 9] = [
 /// 1.10 fades a window's shadow to a wider, softer one as the window loses the
 /// focus, and every frame of that fade has a new blur and spread, so each
 /// focus change adds about a dozen masks. `shadow.css` reaches the same
-/// shadows by fading colors only, high contrast included. It is loaded once
-/// the first window maps with a Cairo renderer, and only while libadwaita's
-/// stylesheet is the one in use and still has the rules it restates.
+/// shadows by fading colors only, high contrast included. It is loaded on the
+/// display of the first window that maps with a Cairo renderer, and only while
+/// libadwaita's stylesheet is the one in use there and still has the rules it
+/// restates.
 pub(crate) fn install() {
     if INSTALLED.replace(true) {
         return;
@@ -52,18 +53,22 @@ pub(crate) fn install() {
             return;
         }
         CHECKED.set(true);
-        let display = WidgetExt::display(&window);
-        if !adwaita_sheet_in_use(&display) || !adwaita_has_restated_rules() {
-            return;
-        }
-        // Above libadwaita's sheet (THEME), below the program's own CSS. Its
-        // high-contrast rules answer as libadwaita's do, which writes the
-        // contrast it follows into the settings.
-        crate::css::install(
-            include_str!("shadow.css"),
-            gtk::STYLE_PROVIDER_PRIORITY_THEME + 1,
-        );
+        restate_shadows(&WidgetExt::display(&window));
     });
+}
+
+fn restate_shadows(display: &gtk::gdk::Display) {
+    if !adwaita_sheet_in_use(display) || !adwaita_has_restated_rules() {
+        return;
+    }
+    // Above libadwaita's sheet (THEME), below the program's own CSS. Its
+    // high-contrast rules answer as libadwaita's do, which writes the
+    // contrast it follows into the settings.
+    crate::css::install_for_display(
+        display,
+        include_str!("shadow.css"),
+        gtk::STYLE_PROVIDER_PRIORITY_THEME + 1,
+    );
 }
 
 /// Whether libadwaita draws `display` with its own stylesheet: it names the
@@ -108,6 +113,22 @@ mod tests {
             adwaita_sheet_in_use(&display),
             std::env::var_os("GTK_THEME").is_none()
         );
+    }
+
+    /// A first window on a second display gets the sheet on that display.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn sheet_joins_the_windows_display() {
+        init();
+        let name = gtk::gdk::Display::default().expect("a display").name();
+        let other = gtk::gdk::Display::open(Some(&name)).expect("a second display");
+        assert!(adwaita_sheet_in_use(&other) && adwaita_has_restated_rules());
+        restate_shadows(&other);
+        assert!(
+            crate::css::INSTALLED
+                .with_borrow(|installed| installed.iter().any(|(display, _)| *display == other))
+        );
+        other.close();
     }
 
     #[gtk::test]
