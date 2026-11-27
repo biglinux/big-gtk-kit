@@ -255,7 +255,7 @@ fn shown_text(item: &gtk::ListItem) -> Option<String> {
         .into_iter()
         .flat_map(|child| subtree(&child))
         .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
-        .map(|label| label.label().to_string())
+        .map(|label| label.text().to_string())
         .find(|text| !text.is_empty());
     label.or_else(|| {
         item.item()
