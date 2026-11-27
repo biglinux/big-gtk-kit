@@ -453,13 +453,26 @@ on_signal (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
+// A request that came before the main loop ran, kept until it runs.
+static volatile sig_atomic_t early_request;
+
+static void
+note_early_request (int signum)
+{
+  (void) signum;
+  early_request = 1;
+}
+
 static gboolean
 install_signal (gpointer data)
 {
   (void) data;
   // Dispatched by the default main context, on the main thread, between events:
-  // never GLib inside a raw signal handler.
+  // never GLib inside a raw signal handler. Added first, so a request after the
+  // check below is GLib's to deliver.
   g_unix_signal_add (SIGUSR2, on_signal, NULL);
+  if (early_request)
+    on_signal (NULL);
   return G_SOURCE_REMOVE;
 }
 
@@ -472,8 +485,10 @@ install (void)
   census_prefix = g_strdup (prefix);
   // g_unix_signal_add starts GLib's worker thread, and a program may refuse to
   // start with a thread already running (it sets the locale first). The source
-  // is added once the main loop runs; until then a census request is ignored
-  // instead of ending the program.
-  signal (SIGUSR2, SIG_IGN);
+  // is added once the main loop runs; a request before that is noted and
+  // answered then.
+  struct sigaction early = { .sa_handler = note_early_request, .sa_flags = SA_RESTART };
+  sigemptyset (&early.sa_mask);
+  sigaction (SIGUSR2, &early, NULL);
   g_idle_add (install_signal, NULL);
 }
