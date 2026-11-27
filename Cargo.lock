@@ -336,6 +336,7 @@ dependencies = [
 name = "big-testkit"
 version = "0.1.0"
 dependencies = [
+ "big-gtk-kit",
  "big-os-kit",
  "big-relm4-components",
  "glib",

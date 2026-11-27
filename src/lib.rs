@@ -9,6 +9,7 @@
 pub mod accessible;
 pub mod alert;
 pub mod breakpoint;
+pub mod capture;
 pub mod css;
 pub mod dialog;
 pub mod directory;
