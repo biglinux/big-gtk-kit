@@ -48,7 +48,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustix::fs::{
-    Gid, XattrFlags, fchown, fsetxattr, getxattr, getxattr_query, listxattr, listxattr_query,
+    Gid, XattrFlags, fchown, fremovexattr, fsetxattr, getxattr, getxattr_query, listxattr,
+    listxattr_query,
 };
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -496,6 +497,17 @@ pub fn atomic_replace_document(
     }
     for (name, value) in &attributes {
         fsetxattr(&*file, name, value, XattrFlags::empty())?;
+    }
+    // A folder's default ACL gives the new copy an access ACL the original
+    // did not have, which can let another user read it.
+    if !attributes
+        .iter()
+        .any(|(name, _)| name.as_bytes() == b"system.posix_acl_access")
+    {
+        match fremovexattr(&*file, c"system.posix_acl_access") {
+            Ok(()) | Err(rustix::io::Errno::NODATA | rustix::io::Errno::NOTSUP) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     // After the ACL: setting an access ACL rewrites the group bits of the mode.
     file.set_permissions(fs::Permissions::from_mode(metadata.mode() & 0o7777))?;
