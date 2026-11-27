@@ -852,15 +852,24 @@ def rule_repeating_source_without_weak_exit(src: Source):
             continue  # the id is kept, returned or passed on
         closure = top_level_arguments(arg)[-1].strip()
         if re.fullmatch(r"\w+", closure):
-            local = list(
-                re.finditer(
-                    rf"\blet\s+(?:mut\s+)?{re.escape(closure)}\s*(?::[^=;]*)?=(?!=)",
-                    src.text[: m.start()],
-                )
+            # the binding visible here: in this fn, outside the blocks closed before the call
+            line = src.line_of(m.start())
+            fn_first = next(
+                (first for first, last in src.functions() if first < line <= last), 0
             )
+            head = src.text[src.starts[fn_first] : m.start()]
+            open_at_end = in_scope_at_end(head)
+            local = [
+                binding
+                for binding in re.finditer(
+                    rf"\blet\s+(?:mut\s+)?{re.escape(closure)}\s*(?::[^=;]*)?=(?!=)",
+                    head,
+                )
+                if open_at_end[binding.start()]
+            ]
             if not local:
                 continue  # a fn item captures nothing
-            closure = statement_after(src.text, local[-1].end())
+            closure = statement_after(head, local[-1].end())
         # words in strings and block comments are not code
         closure = re.sub(
             r'"(?:\\.|[^"\\])*"|/\*.*?\*/',

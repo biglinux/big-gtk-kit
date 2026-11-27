@@ -879,6 +879,39 @@ class RepeatingSources(unittest.TestCase):
         """),
         )
 
+    def test_callback_visible_at_call_is_read(self):
+        # The inner block's `tick` and the other fn's are gone at the call.
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: gtk::Label) {
+                let tick = move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                };
+                {
+                    let tick = move || glib::ControlFlow::Break;
+                    glib::idle_add_local_once(tick);
+                }
+                glib::idle_add_local(tick);
+            }
+        """),
+        )
+        self.assertEqual(
+            lint("""
+            fn other(label: gtk::Label) {
+                let tick = move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                };
+            }
+            fn watch() {
+                glib::idle_add_local(tick);
+            }
+        """),
+            [],
+        )
+
     def test_break_on_upgrade_success_warns(self):
         # A failed upgrade continues: the source outlives its target.
         case = """
