@@ -51,7 +51,15 @@ pub unsafe fn connection(display: &WaylandDisplay) -> Option<Connection> {
         *kept = Some((raw as usize, connection.clone()));
         // GTK says `closed` before it disconnects the display: the backend
         // must not outlive the `wl_display` it wraps.
-        display.connect_closed(|_, _| CONNECTION.with_borrow_mut(|kept| *kept = None));
+        let on = raw as usize;
+        display.connect_closed(move |_, _| {
+            CONNECTION.with_borrow_mut(|kept| {
+                // A later display's connection may have taken its place.
+                if kept.as_ref().is_some_and(|(kept_on, _)| *kept_on == on) {
+                    *kept = None;
+                }
+            });
+        });
         Some(connection)
     })
 }
@@ -93,6 +101,21 @@ mod tests {
             assert!(CONNECTION.with_borrow(Option::is_some));
             display.close();
             assert!(CONNECTION.with_borrow(Option::is_none));
+
+            // The first display closing leaves a second display's connection.
+            let first = gtk::gdk::Display::open(Some(&name))
+                .and_downcast::<WaylandDisplay>()
+                .expect("a Wayland display");
+            let second = gtk::gdk::Display::open(Some(&name))
+                .and_downcast::<WaylandDisplay>()
+                .expect("another Wayland display");
+            // SAFETY: each connection is dropped before its display closes.
+            drop(unsafe { connection(&first) }.expect("a connection"));
+            // SAFETY: as above.
+            drop(unsafe { connection(&second) }.expect("a connection"));
+            first.close();
+            assert!(CONNECTION.with_borrow(Option::is_some));
+            second.close();
         });
     }
 }
