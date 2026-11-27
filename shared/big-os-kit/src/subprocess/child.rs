@@ -322,8 +322,11 @@ impl BigSubprocessChild {
         // leaves the child for `std::process::Child`, and the lock keeps other
         // holders from reaping it before the kill below.
         let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-        if waitid(WaitId::Pid(pid), options).is_err() {
-            return Ok(());
+        match waitid(WaitId::Pid(pid), options) {
+            Ok(_) => {}
+            // Reaped already: the id may now name another group.
+            Err(Errno::CHILD) => return Ok(()),
+            Err(error) => return Err(BigSubprocessError::Io(error.into())),
         }
         // The child was spawned with `setsid`, so its pid is also the group id.
         match kill_process_group(pid, signal) {
