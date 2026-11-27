@@ -490,11 +490,13 @@ fn build(request: &FileRequest) -> gtk::FileDialog {
     if let Some(label) = &request.accept_label {
         dialog.set_accept_label(Some(label));
     }
-    if let Some(start) = &request.start_in {
-        dialog.set_initial_folder(Some(&gio::File::for_path(start)));
-    }
+    // The file first: it sets the folder too, and `start_in` outranks that
+    // folder, as it does for the portal.
     if let Some(file) = &request.select {
         dialog.set_initial_file(Some(&gio::File::for_path(file)));
+    }
+    if let Some(start) = &request.start_in {
+        dialog.set_initial_folder(Some(&gio::File::for_path(start)));
     }
     if let FileRequestKind::SaveFile { current_name } = &request.kind
         && !current_name.is_empty()
@@ -765,6 +767,23 @@ mod tests {
         expected.push(0);
         assert!(expected.starts_with(b"/"));
         assert_eq!(folder, Some(expected));
+    }
+
+    /// The toolkit's dialog starts where the portal's does: in `start_in`
+    /// over the selected file's folder, which still names the saved file.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn start_folder_outranks_selection() {
+        gtk::init().expect("a display");
+        let request = FileRequest::save_file("")
+            .starting_in("/srv/music")
+            .selecting("/home/ana/song.ogg");
+        let dialog = build(&request);
+        assert_eq!(
+            dialog.initial_folder().and_then(|folder| folder.path()),
+            Some(PathBuf::from("/srv/music"))
+        );
+        assert_eq!(dialog.initial_name().as_deref(), Some("song.ogg"));
     }
 
     /// Responses as the portal's `org.freedesktop.portal.Request` documents
