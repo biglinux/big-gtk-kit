@@ -470,6 +470,38 @@ class WarningRules(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertEqual(lint(case.replace("PATTERN", pattern)), expected)
 
+    def test_let_field_label_binds_nothing(self):
+        # A `let` pattern ends at its type annotation's colon, not at a field label's.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| {
+                    BODY
+                    widget.grab_focus();
+                    Stop
+                });
+                widget.add_controller(keys);
+            }
+        """
+        warns = [("handler-holds-owner", "warning")]
+        for body, expected in (
+            ("let Event { widget: w } = controller.event();", warns),
+            (
+                "if let Some(Event { widget: w }) = controller.event() { w.show(); }",
+                warns,
+            ),
+            (
+                "let Some(Event { widget: w }) = controller.event() else { return Stop; };",
+                warns,
+            ),
+            ("let Event { source: widget } = controller.event();", []),
+            ("let widget: gtk::Widget = controller.widget();", []),
+            ("let (widget, _): (gtk::Widget, u32) = controller.pair();", []),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(lint(case.replace("BODY", body)), expected)
+
     def test_inner_closure_binding_ends_with_it(self):
         # After the inner closure, `widget` is the function's again: it is captured.
         case = """
@@ -493,6 +525,64 @@ class WarningRules(unittest.TestCase):
                     ("handler-holds-owner", "warning"),
                     lint(case.replace("INNER", inner)),
                 )
+
+    def test_turbofish_comma_inside_inner_closure(self):
+        # `A, B` is one turbofish: the inner closure's `widget` reaches `(widget)`.
+        self.assertEqual(
+            lint("""
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| {
+                    controller.widget().map(|widget| cast::<A, B>(widget));
+                    Stop
+                });
+                widget.add_controller(keys);
+            }
+        """),
+            [],
+        )
+
+    def test_block_binding_ends_with_block(self):
+        # A `let` shadows to the end of its block, a `for` or `if let` within its body.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| {
+                    BODY
+                    Stop
+                });
+                widget.add_controller(keys);
+            }
+        """
+        warns = [("handler-holds-owner", "warning")]
+        for body, expected in (
+            (
+                "if ok { let widget = controller.widget(); widget.show(); } widget.grab_focus();",
+                warns,
+            ),
+            ("for widget in list { widget.show(); } widget.grab_focus();", warns),
+            ("for item in widget.children() { item.show(); }", warns),
+            (
+                "if let Some(widget) = controller.widget() { widget.show(); } widget.grab_focus();",
+                warns,
+            ),
+            (
+                "if let Some(widget) = controller.widget() { widget.show(); } else { widget.grab_focus(); }",
+                warns,
+            ),
+            ("let widget = controller.widget(); widget.grab_focus();", []),
+            ("if ok { let widget = controller.widget(); widget.grab_focus(); }", []),
+            ("for widget in list { widget.grab_focus(); }", []),
+            ("if let Some(widget) = controller.widget() { widget.grab_focus(); }", []),
+            (
+                "let Some(widget) = controller.widget() else { return Stop; }; widget.grab_focus();",
+                [],
+            ),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(lint(case.replace("BODY", body)), expected)
 
     def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
@@ -724,6 +814,37 @@ class RepeatingSources(unittest.TestCase):
             with self.subTest(arm=arm):
                 self.assertIn(self.RULE, lint(case.replace("ARM", arm)))
 
+    def test_failed_upgrade_branch_continues(self):
+        # The branch a failed upgrade takes decides; a `_` arm on another value does not.
+        case = """
+            fn watch(label: &gtk::Label) {
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || CLOSURE);
+            }
+        """
+        for closure, expected in (
+            (
+                "{ let Some(l) = weak.upgrade() else { return Continue; }; l.show(); Break }",
+                [self.RULE],
+            ),
+            (
+                "{ if let Some(l) = weak.upgrade() { l.show(); Break } else { Continue } }",
+                [self.RULE],
+            ),
+            ("match weak.upgrade() { Some(_) => Break, _ => Continue }", [self.RULE]),
+            ("match weak.upgrade() { Some(_) => Continue, _ => Break }", []),
+            (
+                "{ if let Some(l) = weak.upgrade() { l.show(); Continue } else { Break } }",
+                [],
+            ),
+            (
+                "{ let Some(l) = weak.upgrade() else { return Break; }; match l.state() { Done => Break, _ => Continue } }",
+                [],
+            ),
+        ):
+            with self.subTest(closure=closure):
+                self.assertEqual(lint(case.replace("CLOSURE", closure)), expected)
+
     def test_bounded_sources_are_fine(self):
         self.assertEqual(
             lint("""
@@ -772,6 +893,14 @@ class RepeatingSources(unittest.TestCase):
                         glib::ControlFlow::Continue
                     }
                     None => { glib::ControlFlow::Break }
+                });
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => {
+                        label.set_text("x");
+                        glib::ControlFlow::Continue
+                    }
+                    None => { /* not Continue */ glib::ControlFlow::Break }
                 });
                 let weak = label.downgrade();
                 glib::timeout_add_local(SECOND, move || {
