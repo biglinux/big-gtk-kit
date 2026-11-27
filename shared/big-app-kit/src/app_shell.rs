@@ -423,8 +423,9 @@ impl AppShell {
         match big_os_kit::set_locale_from_environment() {
             Ok(true) => {}
             Ok(false) => log::warn!("app shell: the locale the environment names is not installed"),
+            // On stderr: no logger may be installed yet, and this ends the program.
             Err(error) => {
-                log::error!("app shell: cannot set the locale: {error}");
+                eprintln!("app shell: cannot set the locale: {error}");
                 return glib::ExitCode::FAILURE;
             }
         }
