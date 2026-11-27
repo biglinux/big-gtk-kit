@@ -19,7 +19,12 @@ pub fn fuzz_cgroup(membership: &[u8], mounts: &[u8], value: &[u8]) {
     let mut reads = 0;
     let limits = cgroup::observe(membership, mounts, |_| {
         reads += 1;
-        assert!(reads <= 513, "ancestor traversal must remain bounded");
+        // One controller probe, then high, max and current for each of at
+        // most 256 groups, the depth the membership path is held to.
+        assert!(
+            reads <= 1 + 3 * 256,
+            "ancestor traversal must remain bounded"
+        );
         Ok(value.to_vec())
     });
     assert_eq!(limits.high, limits.max);
