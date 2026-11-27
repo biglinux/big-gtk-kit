@@ -109,8 +109,11 @@ impl TestDaemon {
 
     fn spawn_connection(&self, stream: UnixStream) {
         let daemon = self.clone();
+        // Taken before the thread starts, so the accept loop's idle check
+        // cannot pass between accept and the thread's first instruction.
+        let client_lease = self.idle_exit.client_connected();
         std::thread::spawn(move || {
-            let _client_lease = daemon.idle_exit.client_connected();
+            let _client_lease = client_lease;
             let _ = daemon.handle_connection(stream);
         });
     }
