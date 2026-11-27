@@ -296,7 +296,10 @@ pub struct BigSettingChangeSubscription {
 impl Drop for BigSettingChangeSubscription {
     fn drop(&mut self) {
         if let Some(stream) = self.stream.upgrade() {
-            stream.listeners.borrow_mut().remove(&self.id);
+            // Dropped after the map's borrow ends: a listener may own a
+            // subscription of its own, whose drop borrows the map again.
+            let removed = stream.listeners.borrow_mut().remove(&self.id);
+            drop(removed);
         }
     }
 }
@@ -561,6 +564,19 @@ mod tests {
 
     fn home() -> Option<&'static Path> {
         Some(Path::new("/home/u"))
+    }
+
+    /// A listener that owns a subscription of its own unsubscribes cleanly:
+    /// its subscription drops once the stream's listener map is free again.
+    #[test]
+    fn listener_owning_subscription_unsubscribes() {
+        let stream = BigSettingChangeStream::default();
+        let inner = stream.subscribe(|_| {});
+        let outer = stream.subscribe(move |_| {
+            let _ = &inner;
+        });
+        drop(outer);
+        assert!(stream.inner.listeners.borrow().is_empty());
     }
 
     #[test]
