@@ -58,6 +58,9 @@ fn transform(
     let transform = transformation(icc_profile, memory_format)?;
     let pixel = memory_format.n_bytes().usize();
     let pixels = buf.len() / pixel;
+    // A loader may hand a buffer longer than its frame; lcms2 panics on a
+    // partial pixel.
+    let buf = &mut buf[..pixels * pixel];
     let threads = (pixels / PIXELS_PER_THREAD).clamp(
         1,
         std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
@@ -149,4 +152,14 @@ fn chunked_matches_whole() {
 
     assert_ne!(whole, source, "the profile changes the pixels");
     assert!(chunked == whole, "chunked and whole transforms differ");
+}
+
+/// Bytes past the last whole pixel, which a loader may leave, are not handed
+/// to lcms2.
+#[test]
+fn partial_pixel_left_alone() {
+    let srgb = lcms2::Profile::new_srgb().icc().unwrap();
+    let mut buf = vec![10, 20, 30, 40];
+    transform(&srgb, MemoryFormat::R8g8b8, &mut buf).unwrap();
+    assert_eq!(buf[3], 40);
 }
