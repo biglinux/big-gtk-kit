@@ -488,9 +488,15 @@ not a mount line
                 std::ptr::null(),
             )
         };
+        let error = std::io::Error::last_os_error();
         let after = super::mountinfo();
-        assert_eq!(mounted, 0, "{}", std::io::Error::last_os_error());
+        // SAFETY: a NUL-terminated path that outlives the call.
+        let unmounted = mounted == 0 && unsafe { libc::umount(path.as_ptr()) } == 0;
+        let _ = std::fs::remove_dir(&target);
+        assert_eq!(mounted, 0, "{error}");
+        assert!(unmounted, "{}", std::io::Error::last_os_error());
         assert!(!std::sync::Arc::ptr_eq(&before, &after));
-        assert!(after.contains(target.to_str().expect("utf-8 path")));
+        // Parsed, since the table escapes a space or a tab in the path.
+        assert!(super::mounts(&after).any(|mount| mount.point == target));
     }
 }
