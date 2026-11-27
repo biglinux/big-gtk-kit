@@ -429,9 +429,10 @@ mod tests {
         writer.frames = 1;
         let foreign = directory.join("foreign.gif");
         let result = writer.finish(&foreign);
+        let written = foreign.exists();
         std::fs::remove_dir_all(&directory).expect("test directory removed");
         assert!(result.is_err());
-        assert!(!foreign.exists());
+        assert!(!written);
     }
 
     /// The encoder's answer is read only as the regular file it writes: a link
