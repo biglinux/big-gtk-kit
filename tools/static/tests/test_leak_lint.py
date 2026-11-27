@@ -6,6 +6,8 @@ The bad cases are the leaks measured on the BigLinux desktop, reduced to their
 shape; the good cases are look-alike shapes that do not leak.
 """
 
+import contextlib
+import io
 import sys
 import tempfile
 import textwrap
@@ -291,6 +293,158 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
+    def test_field_target_names_no_local(self):
+        # `picker.open` is the button, `open` the closure its handler calls.
+        self.assertEqual(
+            lint("""
+            fn connect(picker: &Rc<Picker>) {
+                let open = {
+                    let picker = Rc::downgrade(picker);
+                    move |name: Option<String>| {
+                        let Some(picker) = picker.upgrade() else {
+                            return;
+                        };
+                        picker.show(name);
+                    }
+                };
+                let open = Rc::new(open);
+                let button_open = Rc::clone(&open);
+                picker.open.connect_clicked(move |_| button_open(None));
+            }
+        """),
+            [],
+        )
+
+    def test_flag_set_pipes_bind_nothing(self):
+        # The `|` of a pattern and of a flag set paired with the inner
+        # closure's `|popover|`.
+        self.assertEqual(
+            lint("""
+            fn let_the_keyboard_in(popover: &gtk::Popover) {
+                let space = gtk::EventControllerKey::new();
+                let weak = popover.downgrade();
+                space.connect_key_pressed(move |_, key, _, state| {
+                    if !matches!(key, Key::space | Key::KP_Space)
+                        || state.intersects(
+                            ModifierType::CONTROL_MASK
+                                | ModifierType::ALT_MASK
+                                | ModifierType::SUPER_MASK,
+                        )
+                    {
+                        return Proceed;
+                    }
+                    let focus = weak.upgrade().and_then(|popover| {
+                        popover
+                            .root()
+                            .and_then(|root| root.focus())
+                            .filter(|focus| focus.is_ancestor(&popover))
+                    });
+                    match focus {
+                        Some(focus) if focus.activate() => Stop,
+                        _ => Proceed,
+                    }
+                });
+                popover.add_controller(space);
+            }
+        """),
+            [],
+        )
+
+    def test_match_arm_binding_shadows_outer(self):
+        # The arm's `widget` is `controller.widget()`, not the function's `widget`.
+        self.assertEqual(
+            lint("""
+            fn attach(widget: &gtk::Widget, open: impl Fn(&gtk::Widget) -> bool + 'static) {
+                let widget = widget.as_ref();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(
+                    move |controller, key, _, modifiers| match controller.widget() {
+                        Some(widget) if is_menu_key(key, modifiers) && open(&widget, None) => {
+                            gtk::glib::Propagation::Stop
+                        }
+                        _ => gtk::glib::Propagation::Proceed,
+                    },
+                );
+                widget.add_controller(keys);
+            }
+        """),
+            [],
+        )
+        # A guard reads the outer name: it is captured.
+        self.assertIn(
+            ("handler-holds-owner", "warning"),
+            lint("""
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, key, _, _| match key {
+                    Key::Menu if widget.is_visible() => Stop,
+                    _ => Proceed,
+                });
+                widget.add_controller(keys);
+            }
+        """),
+        )
+
+    def test_arms_found_past_braced_scrutinee(self):
+        # The first `{` after `match` may be a block scrutinee or a closure's body.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match SCRUTINEE {
+                    Some(widget) => {
+                        widget.grab_focus();
+                        Stop
+                    }
+                    None => Proceed,
+                });
+                widget.add_controller(keys);
+            }
+        """
+        for scrutinee in (
+            "{ controller.widget() }",
+            "controller.widget().filter(|w| { w.is_visible() })",
+        ):
+            with self.subTest(scrutinee=scrutinee):
+                self.assertEqual(lint(case.replace("SCRUTINEE", scrutinee)), [])
+
+    def test_match_without_arms_read(self):
+        for scrutinee in ("never {}", "unsafe { read() } { _ => () }"):
+            with self.subTest(scrutinee=scrutinee):
+                self.assertEqual(
+                    lint(f"""
+                    fn attach(widget: &gtk::Widget) {{
+                        let button = gtk::Button::new();
+                        button.connect_clicked(move |_| match {scrutinee});
+                    }}
+                    """),
+                    [],
+                )
+
+    def test_arm_binding_ends_with_its_arm(self):
+        # The second arm reads the function's `widget`: it is captured.
+        self.assertIn(
+            ("handler-holds-owner", "warning"),
+            lint("""
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match controller.widget() {
+                    Some(widget) => {
+                        widget.grab_focus();
+                        Stop
+                    }
+                    None => {
+                        widget.grab_focus();
+                        Proceed
+                    }
+                });
+                widget.add_controller(keys);
+            }
+        """),
+        )
+
     def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
             ("lazy-followers", "warning"),
@@ -419,6 +573,14 @@ class ProcessObjectHandlers(unittest.TestCase):
             }
         """),
         )
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn count_once_online() {
+                let _ = gio::NetworkMonitor::default().connect_network_changed(|_, _| {});
+            }
+        """),
+        )
 
     def test_kept_id_and_main_are_fine(self):
         self.assertEqual(
@@ -430,9 +592,206 @@ class ProcessObjectHandlers(unittest.TestCase):
             fn main() {
                 app.connect_activate(|_| {});
             }
+            fn count_once_online(self: &Rc<Self>) {
+                let handler =
+                    gio::NetworkMonitor::default().connect_network_changed(move |_, _| {});
+                self.once_online.replace(Some(handler));
+            }
+            fn init(sender: Sender) -> Model {
+                Model {
+                    dark_mode_handler: Some({
+                        let input = sender.clone();
+                        adw::StyleManager::default().connect_dark_notify(move |_| input.send(()))
+                    }),
+                }
+            }
         """),
             [],
         )
+
+
+class RepeatingSources(unittest.TestCase):
+    """A repeating GLib source whose id is dropped runs until its closure breaks."""
+
+    RULE = ("repeating-source-without-weak-exit", "warning")
+
+    def test_unbounded_dropped_source_warns(self):
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: &gtk::Label) {
+                let label = label.clone();
+                glib::timeout_add_seconds_local(600, move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                });
+            }
+        """),
+        )
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: gtk::Label) {
+                let mut tick = move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                };
+                let _ = gtk::glib::idle_add_local(tick);
+            }
+        """),
+        )
+
+    def test_typed_local_callback_warns(self):
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: gtk::Label) {
+                let tick: Box<dyn FnMut() -> glib::ControlFlow> = Box::new(move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                });
+                glib::idle_add_local(tick);
+            }
+        """),
+        )
+
+    def test_break_on_upgrade_success_warns(self):
+        # A failed upgrade continues: the source outlives its target.
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: &gtk::Label) {
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(_) => glib::ControlFlow::Break,
+                    None => glib::ControlFlow::Continue,
+                });
+            }
+        """),
+        )
+
+    def test_bounded_sources_are_fine(self):
+        self.assertEqual(
+            lint("""
+            fn keep_age_current(time: &gtk::Label) {
+                let clock = time.downgrade();
+                glib::timeout_add_seconds_local(60, move || {
+                    clock.upgrade().map_or(glib::ControlFlow::Break, |time| {
+                        time.set_text("now");
+                        glib::ControlFlow::Continue
+                    })
+                });
+            }
+            fn kept(label: gtk::Label) -> glib::SourceId {
+                let id =
+                    glib::timeout_add_local(SECOND, move || {
+                    label.set_text("x");
+                    glib::ControlFlow::Continue
+                });
+                id
+            }
+            fn returned(label: gtk::Label) -> glib::SourceId {
+                glib::timeout_add_local(SECOND, move || {
+                    label.set_text("x");
+                    glib::ControlFlow::Continue
+                })
+            }
+            fn worded(button: gtk::Button) {
+                glib::idle_add_local(move || {
+                    button.set_label("Continue");
+                    glib::ControlFlow::Break
+                });
+            }
+            fn weak_exits(label: &gtk::Label) {
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => {
+                        label.set_text("x");
+                        glib::ControlFlow::Continue
+                    }
+                    None => glib::ControlFlow::Break,
+                });
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || {
+                    let Some(label) = weak.upgrade() else {
+                        return glib::ControlFlow::Break;
+                    };
+                    label.set_text("x");
+                    glib::ControlFlow::Continue
+                });
+                glib::timeout_add_local(
+                    SECOND,
+                    glib::clone!(
+                        #[weak]
+                        label,
+                        #[upgrade_or]
+                        glib::ControlFlow::Break,
+                        move || {
+                            label.set_text("x");
+                            glib::ControlFlow::Continue
+                        }
+                    ),
+                );
+            }
+            fn once(label: gtk::Label) {
+                glib::timeout_add_local_once(SECOND, move || label.set_text("x"));
+                glib::idle_add_local_full(glib::Priority::HIGH_IDLE, move || {
+                    label.grab_focus();
+                    glib::ControlFlow::Break
+                });
+                glib::idle_add_local(tick);
+            }
+        """),
+            [],
+        )
+
+
+class Strict(unittest.TestCase):
+    def run_main(self, code: str, *flags: str) -> int:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "case.rs"
+            path.write_text(textwrap.dedent(code))
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                return leak_lint.main([*flags, "--no-icons", str(path)])
+
+    def test_strict_fails_on_warnings(self):
+        holds_itself = """
+            fn row() {
+                let row = gtk::Button::new();
+                let held = row.clone();
+                row.connect_clicked(move |_| held.set_label("x"));
+            }
+        """
+        self.assertEqual(self.run_main(holds_itself), 0)
+        self.assertEqual(self.run_main(holds_itself, "--strict"), 1)
+        waived = holds_itself.replace(
+            "row.connect_clicked",
+            "// leak-guard: allow(handler-holds-owner) lives as long as the app\n"
+            "                row.connect_clicked",
+        )
+        self.assertEqual(self.run_main(waived, "--strict"), 0)
+
+    def test_unusable_path_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "case.rs"
+            source.write_text("fn main() {}\n")
+            notes = Path(tmp) / "README.md"
+            notes.write_text("notes\n")
+            for extra in (Path(tmp) / "missing", notes):
+                with (
+                    self.subTest(extra=extra.name),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    self.assertEqual(
+                        leak_lint.main(
+                            ["--strict", "--no-icons", str(source), str(extra)]
+                        ),
+                        2,
+                    )
 
 
 class Suppression(unittest.TestCase):

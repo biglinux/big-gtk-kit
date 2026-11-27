@@ -1,0 +1,22 @@
+id: input-action
+language: Rust
+severity: error
+message: Install an action that only sends an input with big_app_kit::install_input_action
+note: One owner builds the action, sends the input and adds it to the window or group, so every product's plain actions behave alike.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: expression_statement
+  any:
+    - pattern: '$A.connect_activate(move |_, _| { let _ = $S.send($$$); });'
+    - pattern: '$A.connect_activate(move |_, _| { let _ = $S.send($$$) });'
+    - pattern: '$A.connect_activate(move |_, _| { $S.emit($$$); });'
+  follows:
+    stopBy: end
+    any:
+      - pattern: 'let $A = gio::SimpleAction::new($N, None);'
+      - pattern: 'let $A = gtk::gio::SimpleAction::new($N, None);'
+      - pattern: 'let $A = SimpleAction::new($N, None);'
+ignores:
+  - shared/big-app-kit/src/product_actions.rs

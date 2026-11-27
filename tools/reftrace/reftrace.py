@@ -14,7 +14,7 @@ whose function matches --crate, with its file:line.
 Reading the log: each line is `N|R|S|s|U address count frames…`, and `count` is
 the reference count before the operation. `N` is the creation, `s` a sink of the
 floating reference (it takes that reference over and adds none), and `U 1` is the
-last release: the object was finalised there. An address can be reused by another
+last release: the object was finalized there. An address can be reused by another
 object afterwards; a live check has to confirm the type (the census does).
 """
 
@@ -82,7 +82,7 @@ def resolver(trace, binary):
     return address
 
 
-def symbolise(binary, addresses):
+def symbolize(binary, addresses):
     names = {}
     if not addresses:
         return names
@@ -157,7 +157,7 @@ def main():
             if a is not None
         }
     )
-    names = symbolise(options.binary, wanted)
+    names = symbolize(options.binary, wanted)
     crate = re.compile(options.crate)
 
     def site(event):

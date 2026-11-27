@@ -9,6 +9,10 @@
 // is REFTRACE_TYPE, with a raw backtrace, to REFTRACE_OUT.<pid>, and copies
 // /proc/self/maps next to it on the first event. Without both variables, or when
 // the log cannot be created, it only forwards the calls.
+// Preloading replaces only calls made through the PLT: libgobject's own calls
+// (g_value_dup_object, properties, signal emission, bindings) reach its
+// g_object_ref directly, so those references are never logged and show only as a
+// jump in the count column.
 // The environment is left alone, so a wrapper in between (a shell, a session
 // script) passes it on; every process logs to its own REFTRACE_OUT.<pid>.
 // reftrace.py turns the log into the sites that take references and never give

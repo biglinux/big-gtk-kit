@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: MIT
 """The parts of the sweep that decide, without a display."""
 
+import contextlib
+import io
+import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -44,11 +48,77 @@ class Verdict(unittest.TestCase):
         )
 
 
+# One cycle per line on stdin: `every` leaks a thread and a file descriptor each
+# time, `once` only on the first; it answers when started and after each line.
+FIXTURE = """
+import os, sys, threading
+hold = threading.Event()
+print(flush=True)
+for n, line in enumerate(sys.stdin):
+    if line.strip() == "every" or n == 0:
+        os.open(os.devnull, os.O_RDONLY)
+        threading.Thread(target=hold.wait, daemon=True).start()
+    print(flush=True)
+"""
+
+
+class ProcessCounters(unittest.TestCase):
+    def rounds(self, mode: str, cycles: int = 3) -> dict[str, int]:
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-c", FIXTURE],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        child.stdout.readline()  # started: its imports closed their files
+        counts = [leak_sweep.process_counts(child.pid)]
+        for _ in range(2):
+            for _ in range(cycles):
+                child.stdin.write(mode + "\n")
+                child.stdin.flush()
+                child.stdout.readline()
+            counts.append(leak_sweep.process_counts(child.pid))
+        return leak_sweep.confirmed_growth(*counts)
+
+    def test_leak_per_cycle_is_confirmed(self):
+        self.assertEqual(
+            self.rounds("every"),
+            {"process threads": 3, "process file descriptors": 3},
+        )
+
+    def test_growth_in_one_round_passes(self):
+        self.assertEqual(self.rounds("once"), {})
+
+
 PROGRAM = """
 [program]
 command = ["prog"]
 atspi_name = "prog"
 """
+
+
+class Steps(unittest.TestCase):
+    def test_failing_command_is_an_error(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            leak_sweep.run_step(
+                {"do": "command", "argv": ["false"], "settle": 0}, {}, "", Path(tmp), 1
+            )
+
+
+class ExitedProgram(unittest.TestCase):
+    def test_census_refused_without_signal(self):
+        program = leak_sweep.Program.__new__(leak_sweep.Program)
+        program.process = subprocess.Popen(["true"])
+        program.process.wait()
+        program.prefix, program.serial = Path("unused"), 0
+        with unittest.mock.patch("os.kill") as kill, self.assertRaises(RuntimeError):
+            program.census()
+        kill.assert_not_called()
 
 
 class Spec(unittest.TestCase):
@@ -81,14 +151,14 @@ class Spec(unittest.TestCase):
         )
         self.assertEqual(spec["surface"][0]["name"], "about")
 
-    def test_a_program_without_a_command_is_refused(self):
+    def test_commandless_program_refused(self):
         with self.assertRaises(ValueError):
             leak_sweep.load_spec(self.write('[program]\natspi_name = "x"\n'))
 
     def test_string_command_is_refused(self):
         self.refused('[program]\ncommand = "prog --flag"\natspi_name = "x"\n')
 
-    def test_a_seed_outside_the_workdir_is_refused(self):
+    def test_seed_outside_workdir_refused(self):
         for name in ("/etc/passwd", "../outside"):
             self.refused(PROGRAM + f'[program.files]\n"{name}" = "x"\n')
 
@@ -106,6 +176,38 @@ class Spec(unittest.TestCase):
 
     def test_an_unknown_step_is_refused(self):
         self.refused(PROGRAM + '[[surface]]\nname = "a"\nopen = [{ do = "press" }]\n')
+
+    def test_malformed_tables_are_refused(self):
+        for text in (
+            PROGRAM + 'env = "x"\n',
+            PROGRAM + 'files = "x"\n',
+            'allow = ["x"]\n' + PROGRAM,
+            'surface = ["x"]\n' + PROGRAM,
+            PROGRAM + '[[surface]]\nname = "a"\nopen = []\nclose = "dismiss"\n',
+            PROGRAM + '[[surface]]\nname = "a"\nopen = []\nallow = ["x"]\n',
+        ):
+            with self.subTest(text=text):
+                self.refused(text)
+
+    def test_accessible_action_step_loads(self):
+        spec = leak_sweep.load_spec(
+            self.write(
+                PROGRAM
+                + '[[surface]]\nname = "a"\n'
+                + 'open = [{ do = "app-action", name = "win.open-disc" }]\n'
+            )
+        )
+        self.assertEqual(spec["surface"][0]["open"][0]["do"], "app-action")
+
+    def test_zero_cycles_is_refused(self):
+        path = self.write(PROGRAM)
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            status = leak_sweep.main(
+                [str(path), "--cycles", "0", "--library", str(path)]
+            )
+        self.assertEqual(status, 2)
+        self.assertIn("cycles", error.getvalue())
 
     def test_workdir_is_the_only_placeholder(self):
         self.assertEqual(

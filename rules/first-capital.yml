@@ -1,0 +1,14 @@
+id: first-capital
+language: Rust
+severity: error
+message: Raise a text's first letter with big_os_kit::first_capital::of
+note: Every heading and name built from a word goes through one function, so a fix to how a first letter is raised lands everywhere.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  any:
+    - pattern: $FIRST.to_uppercase().chain($REST)
+    - pattern: $FIRST.to_uppercase().collect::<String>() + $REST
+ignores:
+  - shared/big-os-kit/src/first_capital.rs

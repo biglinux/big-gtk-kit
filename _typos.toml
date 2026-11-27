@@ -1,0 +1,22 @@
+[default]
+locale = "en-us"
+# "PNGs" splits into PN and Gs; the other entry is test text in Portuguese.
+extend-ignore-re = ["\\bPNGs\\b", "Relatório Anual"]
+
+[default.extend-words]
+# Relm4, the component framework the shared crates build on.
+relm = "relm"
+# GNOME's word for the programs that draw thumbnails, and GTK's and GLib's
+# for a widget without a parent and for g_critical messages.
+thumbnailers = "thumbnailers"
+unparented = "unparented"
+criticals = "criticals"
+
+[files]
+# Copies of other projects' code and the patches sent to them keep their text.
+extend-exclude = ["third_party/", "upstream/"]
+
+[default.extend-identifiers]
+# GTK's own names.
+LabelledBy = "LabelledBy"
+GTK_ACCESSIBLE_RELATION_LABELLED_BY = "GTK_ACCESSIBLE_RELATION_LABELLED_BY"

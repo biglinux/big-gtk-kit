@@ -1,0 +1,19 @@
+id: rounded-rectangle
+language: Rust
+severity: error
+message: Draw a rounded rectangle with big_relm4_components::shape::rounded_rectangle
+note: The owner holds the radius to half the shorter side, so a small rectangle stays a capsule instead of a path that crosses itself.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: expression_statement
+  pattern: $C.arc($$$);
+  precedes:
+    pattern: $C.arc($$$);
+    precedes:
+      pattern: $C.arc($$$);
+      precedes:
+        pattern: $C.arc($$$);
+ignores:
+  - shared/big-relm4-components/src/shape.rs

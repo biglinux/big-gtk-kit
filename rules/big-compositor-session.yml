@@ -1,0 +1,27 @@
+id: big-compositor-session
+language: Rust
+severity: error
+message: Ask big_os_kit::compositor_session (on_big_compositor, names_big_compositor) whether the session is big-compositor's
+note: One reading of XDG_CURRENT_DESKTOP, whole names separated by ':', so every program agrees on which session it runs in.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  any:
+    # A name list split and searched for the session's name.
+    - pattern: '$DESKTOPS.split($SEP).any(|$NAME| $NAME == "big-compositor")'
+    # A helper given the variable and the session's name.
+    - kind: call_expression
+      all:
+        - has:
+            field: arguments
+            has:
+              kind: string_literal
+              regex: '^"XDG_CURRENT_DESKTOP"$'
+        - has:
+            field: arguments
+            has:
+              kind: string_literal
+              regex: '^"big-compositor"$'
+ignores:
+  - shared/big-os-kit/src/compositor_session.rs

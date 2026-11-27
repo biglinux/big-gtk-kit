@@ -1,0 +1,4 @@
+# Owner rules: raw calls a shared owner replaces where clippy.toml cannot name
+# them, such as a literal argument. `ast-grep scan` lists every site.
+ruleDirs:
+  - rules

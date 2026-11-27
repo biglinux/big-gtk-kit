@@ -17,14 +17,14 @@
 // G_ENABLE_DEBUG, and distributions do not build it that way. Why not a debugger:
 // reading another process needs ptrace, which yama restricts to its ancestors.
 // So this counts from inside: every GTypeInstance begins with a pointer to its
-// class, and the class of every initialised type is known, so the process's own
+// class, and the class of every initialized type is known, so the process's own
 // writable anonymous memory is scanned for those pointers.
 //
-// A freed block keeps the class pointer it had, so a GObject is only counted when
-// the reference count after the pointer is plausible (1..1e6; a finalised object
-// leaves 0 there) and, when the allocator is glibc's, when the pointer starts an
-// instance at the right place in a malloc block that is in use. The last test
-// exists because copies of a class pointer outlive their instances: a dialog
+// GLib clears a finalized instance's class pointer, but copies of a class
+// pointer outlive their instances, so a GObject is only counted when the
+// reference count after the pointer is plausible (1..1e6) and, when the allocator
+// is glibc's, when the pointer starts an instance at the right place in a malloc
+// block that is in use. The last test exists for those copies: a dialog
 // opened and freed six times left six records holding its class pointer and
 // stack addresses, and they were counted as six live dialogs. With another
 // allocator that test is off and the census says so in its first line. Counts are
@@ -55,7 +55,7 @@ typedef struct {
   gboolean is_object;
   gboolean is_texture;
   guint instance_size;
-  gint private_bytes;  // learnt from the first block found; -1 until then
+  gint private_bytes;  // learned from the first block found; -1 until then
   guint64 count;
 } Entry;
 
@@ -176,7 +176,7 @@ excluded (uintptr_t lo, uintptr_t hi, const void *block, gsize bytes)
 
 // glibc marks a free block in two ways. A block in a thread cache has, 8 bytes
 // into it, the process's tcache key; any other free block has the PREV_INUSE bit
-// clear in the header of the block after it. The key is learnt by freeing a block
+// clear in the header of the block after it. The key is learned by freeing a block
 // of our own; 0 when that block did not go to the thread cache, and then the
 // first test is skipped. Anything that does not look like a malloc header keeps
 // the object counted.

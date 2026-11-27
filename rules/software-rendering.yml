@@ -1,0 +1,21 @@
+id: software-rendering
+language: Rust
+severity: error
+message: Ask big_os_kit::subprocess::software_rendering_requested whether the environment asks for software rendering
+note: The owner reads LIBGL_ALWAYS_SOFTWARE as Mesa does, so every program agrees with Mesa on values such as "true" or "0".
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '(^|::)var(_os)?$'
+    - has:
+        field: arguments
+        has:
+          kind: string_literal
+          regex: '^"LIBGL_ALWAYS_SOFTWARE"$'
+ignores:
+  - shared/big-os-kit/src/subprocess.rs

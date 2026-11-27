@@ -1,0 +1,13 @@
+id: file-name-stem
+language: Rust
+severity: error
+message: Find where a file name's extension starts with big_os_kit::file_kinds::stem_len
+note: The owner keeps a compressed tarball's two-part extension together and treats a leading dot as part of the name.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: call_expression
+  pattern: $NAME.rfind('.')
+ignores:
+  - shared/big-os-kit/src/file_kinds.rs
