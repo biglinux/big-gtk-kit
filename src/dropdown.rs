@@ -8,7 +8,7 @@
 //! choice row and drop-down of the suite through [`build`] and
 //! [`build_drop_down`].
 
-use crate::widget_tree::{children, descendants};
+use crate::widget_tree::{children, descendants, subtree};
 use adw::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -247,6 +247,23 @@ fn first_descendant<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Option<T> {
     descendants(widget).find_map(|widget| widget.downcast::<T>().ok())
 }
 
+/// The text `item` shows: its factory's label, which the drop-down's
+/// expression filled, else a [`gtk::StringObject`]'s string.
+fn shown_text(item: &gtk::ListItem) -> Option<String> {
+    let label = item
+        .child()
+        .into_iter()
+        .flat_map(|child| subtree(&child))
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .map(|label| label.label().to_string())
+        .find(|text| !text.is_empty());
+    label.or_else(|| {
+        item.item()
+            .and_downcast::<gtk::StringObject>()
+            .map(|value| value.string().into())
+    })
+}
+
 /// Name each item the button's and the popup's factories make after the string
 /// it shows. GTK's and libadwaita's default factories draw a label and a check
 /// mark but leave the list item unnamed, so a screen reader reads an empty
@@ -270,8 +287,8 @@ fn name_list_items(
             let named = item
                 .property::<Option<gtk::glib::GString>>("accessible-label")
                 .is_some_and(|name| !name.is_empty());
-            if !named && let Some(value) = item.item().and_downcast::<gtk::StringObject>() {
-                item.set_accessible_label(&value.string());
+            if !named && let Some(shown) = shown_text(item) {
+                item.set_accessible_label(&shown);
             }
         });
         // A reused item starts unnamed, so the name above never outlives its choice.
@@ -381,6 +398,33 @@ mod tests {
                 .map(|model| gtk::NoSelection::new(Some(model))),
             dropdown.factory(),
         )
+    }
+
+    /// Items of a model shown through the drop-down's expression are named by
+    /// the text they show.
+    #[test]
+    fn expression_choices_are_named() {
+        big_testkit::harness::require_gtk_test(|| {
+            let choices = gtk::gio::ListStore::new::<gtk::Label>();
+            for name in ["Front", "Rear"] {
+                choices.append(&gtk::Label::new(Some(name)));
+            }
+            let dropdown = build_drop_down(gtk::DropDown::builder().model(&choices).expression(
+                gtk::PropertyExpression::new(
+                    gtk::Label::static_type(),
+                    None::<gtk::Expression>,
+                    "label",
+                ),
+            ));
+            let window = gtk::Window::builder().child(&dropdown).build();
+            window.present();
+            big_testkit::harness::pump();
+            gtk::prelude::WidgetExt::activate(&dropdown);
+            let popover = first_descendant::<gtk::Popover>(dropdown.upcast_ref()).expect("popup");
+            let list = first_descendant::<gtk::ListView>(popover.upcast_ref()).expect("list");
+            assert_named(&list, &[c"Front", c"Rear"]);
+            window.destroy();
+        });
     }
 
     /// A factory that names its items keeps its names.

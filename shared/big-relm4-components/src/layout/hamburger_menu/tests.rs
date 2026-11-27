@@ -165,6 +165,49 @@ fn flat_population_exposes_named_buttons() {
     });
 }
 
+/// The context is held from the click on: the popover's `closed` handlers,
+/// which run as it closes, may drop its last other reference.
+#[test]
+fn row_acts_on_context_released_at_close() {
+    big_testkit::harness::require_gtk_test(|| {
+        let action_context = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let actions = gio::SimpleActionGroup::new();
+        let action = gio::SimpleAction::new("export", None);
+        let activations = Rc::new(std::cell::Cell::new(0));
+        action.connect_activate({
+            let activations = Rc::clone(&activations);
+            move |_, _| activations.set(activations.get() + 1)
+        });
+        actions.add_action(&action);
+        action_context.insert_action_group("win", Some(&actions));
+
+        let anchor = gtk::Button::new();
+        let window = gtk::Window::builder().child(&anchor).build();
+        window.present();
+        let popover = build_flat_action_popover(
+            &action_context,
+            &[BigMenuActionItem::new("Export", "win.export")],
+        );
+        popover.set_parent(&anchor);
+        let held = Rc::new(std::cell::RefCell::new(Some(action_context)));
+        popover.connect_closed({
+            let held = Rc::clone(&held);
+            move |_| drop(held.borrow_mut().take())
+        });
+        popover.popup();
+        assert!(big_testkit::harness::pump_until(|| popover.is_mapped()));
+        let child = popover.child().expect("flat popover owns its list");
+        let button = find_button_with_label(&child, "Export").expect("named action button exists");
+
+        button.emit_clicked();
+
+        assert!(held.borrow().is_none(), "closing released the context");
+        assert_eq!(activations.get(), 1);
+        popover.unparent();
+        window.destroy();
+    });
+}
+
 #[test]
 fn flat_population_uses_explicit_context() {
     big_testkit::harness::require_gtk_test(|| {

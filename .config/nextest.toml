@@ -16,7 +16,7 @@ command = { command-line = "tools/headless-gate.sh", relative-to = "workspace-ro
 
 [[profile.default.scripts]]
 filter = """
-(package(big-relm4-components) & test(/::context_menu::tests::.*$/))
+(package(big-relm4-components) & test(/::(context_menu::tests::.*|row_acts_on_context_released_at_close)$/))
 | (package(big-app-kit) & test(/::(focused_window_takes_its_keys|own_popover_is_no_activation)$/))
 | (package(big-gtk-kit) & test(/::(focus_held_in_inactive_window|choice_popup_focuses_current_item)$/))
 """
