@@ -945,6 +945,10 @@ mod tests {
                     turn_until(&|| asked.get()),
                     "the request reached the portal"
                 );
+                // The reply on the bus before the portal leaves it, so the call
+                // succeeds and only the name watch can answer: a reply lost
+                // with the connection is an error, never a fallback.
+                portal.flush_sync(gio::Cancellable::NONE).expect("flushed");
                 // Unowned first: gio-rs unwraps the connection GIO hands a
                 // closed one's `name_lost` as NULL.
                 gio::bus_unown_name(owner);
