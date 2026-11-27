@@ -46,7 +46,13 @@ pub fn expose_links(label: &gtk::Label) {
 fn link_texts(markup: &str) -> Vec<String> {
     let mut texts = Vec::new();
     let mut rest = markup;
-    while let Some(open) = rest.find("<a ") {
+    // Any white space may part the name from the attributes, a line break too.
+    let start_tag = |text: &str| {
+        text.match_indices("<a")
+            .map(|(at, _)| at)
+            .find(|at| text[at + "<a".len()..].starts_with(|ch: char| ch.is_ascii_whitespace()))
+    };
+    while let Some(open) = start_tag(rest) {
         // The start tag ends at the first `>` outside a quoted attribute.
         let mut quote = None;
         let Some(tag_end) = rest[open..].char_indices().find_map(|(index, ch)| {
@@ -90,6 +96,10 @@ mod tests {
                 "<a href=\"a>b\" title='x'>the <b>docs</b> &amp; more</a> and <a href=\"c\">notes</a>"
             ),
             ["the docs & more", "notes"]
+        );
+        assert_eq!(
+            link_texts("<a\nhref=\"a\">Docs</a> <b>x</b> <a\thref=\"b\">Notes</a>"),
+            ["Docs", "Notes"]
         );
         big_testkit::harness::require_gtk_test(|| {
             let label = gtk::Label::new(None);
