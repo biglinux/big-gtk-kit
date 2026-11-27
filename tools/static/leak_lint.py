@@ -448,30 +448,64 @@ def top_level_index(text: str, start: int, stop: int, token: str) -> int:
     return -1
 
 
-def closure_end(text: str, start: int) -> int:
-    """Where the closure whose body starts at `start` ends: at a `,` or `;` outside
-    brackets, or at the bracket that closes the one around it."""
-    depth = 0
+def expression_end(text: str, start: int) -> int:
+    """Where the expression that starts at `start` ends: at a `,` or `;` outside
+    brackets and turbofish generics (`::<A, B>`), or at the bracket that closes
+    the one around it."""
+    depth = generics = 0
     for i in range(start, len(text)):
         c = text[i]
-        if c in "([{":
+        if c == "<" and (generics or text[i - 2 : i] == "::"):
+            generics += 1
+        elif c == ">" and generics and text[i - 1] != "-":  # not `->` in `fn() -> T`
+            generics -= 1
+        elif c in "([{":
             depth += 1
         elif c in ")]}":
             depth -= 1
             if depth < 0:
                 return i
-        elif depth == 0 and c in ",;":
+        elif depth == 0 and not generics and c in ",;":
             return i
     return len(text)
 
 
-def match_arms_brace(body: str, start: int) -> int:
-    """Where the `{` that opens the arms of the `match` whose scrutinee starts at
-    `start` is, or -1: past a block scrutinee and past braces inside brackets."""
+def pattern_end(text: str, start: int, stop: int) -> int:
+    """Where the pattern of a `let` head in `text[start:stop]` ends: at the colon of
+    its type annotation, the first single `:` outside brackets, or at `stop`."""
+    depth = 0
+    for i in range(start, stop):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == ":" and depth == 0 and ":" not in (text[i - 1], text[i + 1]):
+            return i
+    return stop
+
+
+def block_end(text: str, start: int) -> int:
+    """Where the block around `start` closes, or the end of `text`."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+            if depth < 0:
+                return i
+    return len(text)
+
+
+def head_block_brace(body: str, start: int) -> int:
+    """Where the `{` that opens the block after the head starting at `start` (a
+    `match` scrutinee, an `if let` value, a `for` iterator) is, or -1: past a block
+    head and past braces inside brackets."""
     i = start
     while i < len(body) and body[i].isspace():
         i += 1
-    if body.startswith("{", i):  # a block as the scrutinee
+    if body.startswith("{", i):  # a block as the head
         i += len(call_argument(body, i)) + 2
     depth = 0
     for j in range(i, len(body)):
@@ -492,7 +526,7 @@ def match_arm_patterns(body: str) -> list[tuple[int, int, int]]:
     (the guard reads names, it binds none), and where the arm ends."""
     spans = []
     for m in re.finditer(r"\bmatch\b", body):
-        brace = match_arms_brace(body, m.end())
+        brace = head_block_brace(body, m.end())
         if brace < 0:
             continue
         close = brace + len(call_argument(body, brace)) + 1
@@ -544,7 +578,7 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     # (start, end, where its names start and stop shadowing the outer ones).
     patterns = [(lo, hi, lo, end) for lo, hi, end in match_arm_patterns(body)]
     binders = [
-        r"\blet\s+([^=;]+?)\s*(?::[^=;]*)?=(?!=)",
+        r"\blet\s+([^=;]+?)\s*=(?!=)",
         r"\bfor\s+(.+?)\s+in\b",
         # a closure's `|`, not a pattern's or a flag set's: it opens an argument,
         # a value or a statement
@@ -552,23 +586,27 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     ]
     for binder in binders:
         for m in re.finditer(binder, body):
-            # a `let` binds after its statement: its right-hand side still sees the outer name
-            where, until = m.start(1), len(body)
-            if binder is binders[2]:
-                until = closure_end(body, m.end())
+            hi, where, until = m.end(1), m.start(1), len(body)
             if binder is binders[0]:
-                conditional = re.search(r"\b(if|while)\s*$|&&\s*$", body[: m.start()])
-                if conditional:  # `if let`, `while let`, and a let chain's `&& let`
-                    ends = [
-                        e
-                        for e in (body.find("{", m.end()), body.find("&&", m.end()))
-                        if e >= 0
-                    ]
-                    end = min(ends) if ends else -1
-                else:
-                    end = body.find(";", m.end())
-                where = end if end >= 0 else len(body)
-            patterns.append((m.start(1), m.end(1), where, until))
+                hi = pattern_end(body, m.start(1), m.end(1))
+            if binder is binders[2]:
+                until = expression_end(body, m.end())
+            elif binder is binders[1] or re.search(
+                r"\b(if|while)\s*$|&&\s*$", body[: m.start()]
+            ):
+                # `for`, `if let`, `while let` and a let chain's `&& let` bind in the
+                # block their head opens; the head still sees the outer name
+                brace = head_block_brace(body, m.end())
+                where = until = len(body)  # no block found: it binds nothing
+                if brace >= 0:
+                    chain = body.find("&&", m.end()) if binder is binders[0] else -1
+                    where = chain if 0 <= chain < brace else brace
+                    until = brace + len(call_argument(body, brace)) + 1
+            else:
+                # a `let` binds after its statement, to the end of the block it is in
+                where = m.end() + len(statement_after(body, m.end()))
+                until = block_end(body, m.start())
+            patterns.append((m.start(1), hi, where, until))
     shadowed: dict[str, list[tuple[int, int]]] = {}
     for lo, hi, where, until in patterns:
         pattern = body[lo:hi]
@@ -792,17 +830,40 @@ REPEATING_SOURCE = re.compile(
 )
 
 
-def none_arm_continues(closure: str) -> bool:
-    """Whether a `None` arm, a failed upgrade, can return `Continue` and so keep the
-    source after its target is gone."""
-    for m in re.finditer(r"\bNone\s*=>\s*", closure):
-        if closure.startswith("{", m.end()):
-            arm = call_argument(closure, m.end())
+def failed_upgrade_continues(closure: str) -> bool:
+    """Whether the branch a failed upgrade takes can return `Continue` and so keep the
+    source after its target is gone: a `None` arm, the `_` arm of a `match` on an
+    upgrade, or the `else` block of a let-else or an `if let` on one. A failure met
+    any other way (`map_or(Continue, …)`, `is_none()`, falling out of an `if let`
+    with no `else`) is not seen."""
+    branches = []
+    arms = [m.end() for m in re.finditer(r"\bNone\s*=>\s*", closure)]
+    for m in re.finditer(r"\bmatch\b", closure):
+        brace = head_block_brace(closure, m.end())
+        if brace >= 0 and ".upgrade()" in closure[m.end() : brace]:
+            close = brace + len(call_argument(closure, brace)) + 1
+            arms += [
+                brace + a.end()
+                for a in re.finditer(r"\b_\s*=>\s*", closure[brace:close])
+            ]
+    for start in arms:
+        if closure.startswith("{", start):
+            branches.append(call_argument(closure, start))
         else:
-            arm = closure[m.end() : closure_end(closure, m.end())]
-        if re.search(r"\bContinue\b", arm):
-            return True
-    return False
+            branches.append(closure[start : expression_end(closure, start)])
+    for m in re.finditer(r"\blet\b[^;{]*?\.upgrade\(\)", closure):
+        brace = head_block_brace(closure, m.end())
+        if brace < 0:
+            continue  # a plain `let`: the failure is met later, if at all
+        if not re.search(r"\belse\s*$", closure[m.end() : brace]):
+            # an `if let`: its `else` follows the block
+            after = brace + len(call_argument(closure, brace)) + 2
+            other = re.match(r"\s*else\s*\{", closure[after:])
+            if not other:
+                continue
+            brace = after + other.end() - 1
+        branches.append(call_argument(closure, brace))
+    return any(re.search(r"\bContinue\b", branch) for branch in branches)
 
 
 def rule_repeating_source_without_weak_exit(src: Source):
@@ -822,13 +883,19 @@ def rule_repeating_source_without_weak_exit(src: Source):
             if not local:
                 continue  # a fn item captures nothing
             closure = statement_after(src.text, local[-1].end())
-        closure = re.sub(r'"(?:\\.|[^"\\])*"', '""', closure)  # words in strings
+        # words in strings and block comments are not code
+        closure = re.sub(
+            r'"(?:\\.|[^"\\])*"|/\*.*?\*/',
+            lambda m: '""' if m.group().startswith('"') else " ",
+            closure,
+            flags=re.DOTALL,
+        )
         if "Continue" not in closure:
             continue  # returns Break every time: it runs once
         if (
             "Break" in closure
             and re.search(r"\.upgrade\(\)|#\[upgrade_or", closure)
-            and not none_arm_continues(closure)
+            and not failed_upgrade_continues(closure)
         ):
             continue
         yield (
