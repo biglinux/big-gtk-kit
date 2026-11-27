@@ -8,6 +8,23 @@ fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("big-image-secure-{}-{name}", std::process::id()))
 }
 
+/// A request cancelled before it starts says so, without staging its source.
+#[test]
+fn cancelled_texture_request_stages_nothing() {
+    let cancellable = gio::Cancellable::new();
+    cancellable.cancel();
+    let missing = BigImageSpec::bounded(temp_path("never-written.png"), 16, 16);
+    let texture = glib::MainContext::new().block_on(crate::load_sandboxed_texture_cancellable(
+        missing,
+        BigImageFit::Contain,
+        cancellable,
+    ));
+    assert!(
+        matches!(texture, Err(BigImageError::Cancelled)),
+        "{texture:?}"
+    );
+}
+
 #[test]
 fn strict_request_stages_regular_file() {
     use std::os::unix::fs::PermissionsExt;
