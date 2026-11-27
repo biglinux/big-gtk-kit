@@ -54,6 +54,15 @@ pub fn build_drop_down(builder: gtk::builders::DropDownBuilder) -> gtk::DropDown
     )]
     let dropdown = builder.build();
     name_list_items(dropdown.factory(), dropdown.list_factory());
+    // GTK makes new default factories when the expression changes; each new
+    // one is named too. Setting the same factory again notifies nothing.
+    dropdown.connect_factory_notify(|dropdown| name_list_items(dropdown.factory(), None));
+    dropdown.connect_list_factory_notify(|dropdown| {
+        let list = dropdown
+            .list_factory()
+            .filter(|list| Some(list) != dropdown.factory().as_ref());
+        name_list_items(None, list);
+    });
     focus_chosen_item_on_open(&dropdown, gtk::DropDown::selected);
     dropdown
 }
@@ -416,6 +425,28 @@ mod tests {
                     "label",
                 ),
             ));
+            let window = gtk::Window::builder().child(&dropdown).build();
+            window.present();
+            big_testkit::harness::pump();
+            gtk::prelude::WidgetExt::activate(&dropdown);
+            let popover = first_descendant::<gtk::Popover>(dropdown.upcast_ref()).expect("popup");
+            let list = first_descendant::<gtk::ListView>(popover.upcast_ref()).expect("list");
+            assert_named(&list, &[c"Front", c"Rear"]);
+            window.destroy();
+        });
+    }
+
+    /// The default factories GTK makes again for a new expression name their
+    /// items too.
+    #[test]
+    fn new_expression_keeps_names() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dropdown = from_strings(&["Front", "Rear"]);
+            dropdown.set_expression(Some(gtk::PropertyExpression::new(
+                gtk::StringObject::static_type(),
+                None::<gtk::Expression>,
+                "string",
+            )));
             let window = gtk::Window::builder().child(&dropdown).build();
             window.present();
             big_testkit::harness::pump();
