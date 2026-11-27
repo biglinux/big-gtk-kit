@@ -965,11 +965,15 @@ pub fn give_back_limits(cmd: &mut std::process::Command) {
 }
 
 /// Give `pid`, a program this process started, the soft limits this process
-/// inherited, where it changed them.
+/// inherited, where it changed them. PID 0, which `prlimit` reads as this
+/// process, changes nothing.
 pub fn restore_limits(pid: u32) {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return;
     };
+    if pid == 0 {
+        return;
+    }
     for (resource, inherited) in inherited_limits() {
         let Some(inherited) = inherited else {
             continue;
