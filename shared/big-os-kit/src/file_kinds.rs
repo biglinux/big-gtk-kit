@@ -33,14 +33,16 @@ pub(crate) const IMAGE_EXTENSIONS: &[&str] = &[
     "pgm", "png", "pnm", "ppm", "qoi", "svg", "tga", "tif", "tiff", "webp",
 ];
 
-/// True when `path` ends in one of `extensions`, whatever its capitalization.
+/// True when `path` ends in one of `extensions`, whatever the capitalization
+/// of either.
 #[must_use]
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            let extension = extension.to_ascii_lowercase();
-            extensions.contains(&extension.as_str())
+            extensions
+                .iter()
+                .any(|wanted| wanted.eq_ignore_ascii_case(extension))
         })
 }
 
@@ -100,6 +102,15 @@ pub fn stem_len(name: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_case_never_matters() {
+        let photo = Path::new("photo.JPG");
+        assert!(has_extension(photo, &["jpg"]));
+        assert!(has_extension(photo, &["JPG"]));
+        assert!(has_extension(Path::new("photo.jpg"), &["Jpg"]));
+        assert!(!has_extension(photo, &["png"]));
+    }
 
     #[test]
     fn stem_keeps_whole_extension() {
