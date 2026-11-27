@@ -448,6 +448,23 @@ def top_level_index(text: str, start: int, stop: int, token: str) -> int:
     return -1
 
 
+def closure_end(text: str, start: int) -> int:
+    """Where the closure whose body starts at `start` ends: at a `,` or `;` outside
+    brackets, or at the bracket that closes the one around it."""
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth < 0:
+                return i
+        elif depth == 0 and c in ",;":
+            return i
+    return len(text)
+
+
 def match_arms_brace(body: str, start: int) -> int:
     """Where the `{` that opens the arms of the `match` whose scrutinee starts at
     `start` is, or -1: past a block scrutinee and past braces inside brackets."""
@@ -536,7 +553,9 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     for binder in binders:
         for m in re.finditer(binder, body):
             # a `let` binds after its statement: its right-hand side still sees the outer name
-            where = m.start(1)
+            where, until = m.start(1), len(body)
+            if binder is binders[2]:
+                until = closure_end(body, m.end())
             if binder is binders[0]:
                 conditional = re.search(r"\b(if|while)\s*$|&&\s*$", body[: m.start()])
                 if conditional:  # `if let`, `while let`, and a let chain's `&& let`
@@ -549,7 +568,7 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
                 else:
                     end = body.find(";", m.end())
                 where = end if end >= 0 else len(body)
-            patterns.append((m.start(1), m.end(1), where, len(body)))
+            patterns.append((m.start(1), m.end(1), where, until))
     shadowed: dict[str, list[tuple[int, int]]] = {}
     for lo, hi, where, until in patterns:
         for name in re.findall(r"\b([a-z_]\w*)\b", body[lo:hi]):
