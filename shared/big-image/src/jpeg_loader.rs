@@ -170,32 +170,44 @@ fn loaders_base() -> PathBuf {
     gtk::glib::user_runtime_dir().join("big-image")
 }
 
-/// Whether a glycin `conf.d` directory names a loader for `mime_type`, read
-/// as glycin reads it: a `.conf` file's group `loader:<type>`, anything after
-/// a further `:` ignored, with an `Exec`.
+/// Whether a glycin `conf.d` directory names a loader for `mime_type`.
 fn claims(conf_d: &Path, mime_type: &str) -> bool {
-    std::fs::read_dir(conf_d)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|suffix| suffix == "conf")
-        })
-        .any(|entry| {
-            let keys = gtk::glib::KeyFile::new();
-            keys.load_from_file(entry.path(), gtk::glib::KeyFileFlags::NONE)
-                .is_ok()
-                && keys.groups().iter().any(|group| {
-                    let group = group.as_str().trim();
-                    let mut parts = group.split(':');
-                    parts.next() == Some("loader")
-                        && parts.next() == Some(mime_type)
-                        && keys.string(group, "Exec").is_ok()
-                })
-        })
+    loader_types(conf_d)
+        .iter()
+        .any(|claimed| claimed == mime_type)
+}
+
+/// The types a glycin `conf.d` directory names a loader for, read as glycin
+/// reads it: a `.conf` file's group `loader:<type>`, anything after a further
+/// `:` ignored, with an `Exec`.
+pub(crate) fn loader_types(conf_d: &Path) -> Vec<String> {
+    let mut types = Vec::new();
+    let lists = std::fs::read_dir(conf_d).into_iter().flatten().flatten();
+    for list in lists.filter(|entry| {
+        entry
+            .path()
+            .extension()
+            .is_some_and(|suffix| suffix == "conf")
+    }) {
+        let keys = gtk::glib::KeyFile::new();
+        if keys
+            .load_from_file(list.path(), gtk::glib::KeyFileFlags::NONE)
+            .is_err()
+        {
+            continue;
+        }
+        for group in keys.groups() {
+            let group = group.as_str().trim();
+            let mut parts = group.split(':');
+            if parts.next() == Some("loader")
+                && let Some(mime_type) = parts.next()
+                && keys.string(group, "Exec").is_ok()
+            {
+                types.push(mime_type.to_owned());
+            }
+        }
+    }
+    types
 }
 
 /// The loader binary: beside this executable (a dev build), else `installed`.

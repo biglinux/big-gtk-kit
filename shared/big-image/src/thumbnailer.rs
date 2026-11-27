@@ -101,10 +101,11 @@ pub fn registry() -> &'static [Thumbnailer] {
 
 /// Whether the installed image loaders decode `mime` themselves.
 ///
-/// Asked of glycin, which answers from the loader lists it decodes with: a
+/// Read from the loader lists glycin decodes with, as glycin finds them: a
 /// picture type they do not claim (DjVu, Photoshop, a camera's raw format) goes
 /// to a thumbnailer instead of failing in the decoder and being remembered as
-/// a file with no picture. Blocking the first time: glycin reads its lists.
+/// a file with no picture. Read without glycin's own query, which waits on a
+/// lock that a decode running on the calling thread's main loop may hold.
 #[must_use]
 pub fn image_decoder_claims(mime: &str) -> bool {
     image_decoder_types().iter().any(|claimed| claimed == mime)
@@ -113,12 +114,20 @@ pub fn image_decoder_claims(mime: &str) -> bool {
 fn image_decoder_types() -> &'static [String] {
     static CLAIMED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     CLAIMED.get_or_init(|| {
-        crate::glycin_threads();
-        glib::MainContext::new()
-            .block_on(glycin::Loader::supported_mime_types())
-            .into_iter()
-            .map(|mime| mime.as_str().to_owned())
-            .collect()
+        // With GLYCIN_DATA_DIR set, glycin reads that directory alone.
+        let data_dirs = match std::env::var_os("GLYCIN_DATA_DIR") {
+            Some(dir) => vec![std::path::PathBuf::from(dir)],
+            None => std::iter::once(glib::user_data_dir())
+                .chain(glib::system_data_dirs())
+                .collect(),
+        };
+        let mut claimed: Vec<String> = data_dirs
+            .iter()
+            .flat_map(|dir| crate::jpeg_loader::loader_types(&dir.join("glycin-loaders/2+/conf.d")))
+            .collect();
+        claimed.sort();
+        claimed.dedup();
+        claimed
     })
 }
 
