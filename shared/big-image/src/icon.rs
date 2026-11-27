@@ -19,10 +19,10 @@ use gtk::{gdk, gio, glib};
 /// memory and fewer adds wall clock.
 const MAX_IN_FLIGHT: usize = 8;
 
-/// Ceilings on the speculative decode queue, so a burst of icon requests cannot
-/// grow it without bound. `MAX_IN_FLIGHT` limits concurrency, not admission:
-/// without these, `PENDING` and the retained SVG bytes in it, plus `WAITERS`,
-/// climb with every queued request.
+/// Ceilings on the decode queue for SVG bytes handed in ([`svg_texture`]), so a
+/// burst of them cannot grow it without bound. `MAX_IN_FLIGHT` limits
+/// concurrency, not admission. An icon file is always queued: it holds no bytes
+/// until its decode starts, and only icons something draws are asked for.
 const MAX_PENDING_JOBS: usize = 256;
 const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 /// Pixel ceiling for a rasterised SVG side. The height comes from the icon size,
@@ -57,8 +57,15 @@ type Waiter = Box<dyn FnOnce(Option<gdk::Texture>)>;
 
 struct PendingSvg {
     key: String,
-    bytes: glib::Bytes,
+    source: SvgSource,
     height_px: i32,
+}
+
+/// Where a queued SVG comes from.
+enum SvgSource {
+    Bytes(glib::Bytes),
+    /// Read when its decode starts.
+    File(PathBuf),
 }
 
 thread_local! {
@@ -95,7 +102,7 @@ enum Resolved {
     /// A local file for the sandbox, and its cache key.
     File(PathBuf, String),
     /// Nothing the sandbox reads here and GTK must not decode: a remote file,
-    /// bytes, a texture.
+    /// bytes.
     Refused,
 }
 
@@ -116,6 +123,11 @@ fn resolve(display: &gdk::Display, gicon: &gio::Icon, size: i32, scale: i32) -> 
     if !WATCHING_THEME.replace(true) {
         theme.connect_changed(|_| RESOLVED.with(|memo| memo.borrow_mut().clear()));
     }
+    // GTK draws an emblemed icon's own icon and leaves the emblems out.
+    let base = gicon
+        .downcast_ref::<gio::EmblemedIcon>()
+        .map(gio::EmblemedIcon::icon);
+    let gicon = base.as_ref().unwrap_or(gicon);
     // Themed icons only: a file icon's file can change under the same name, and
     // its key has to see the new modification time.
     let themed = gicon.downcast_ref::<gio::ThemedIcon>();
@@ -127,12 +139,17 @@ fn resolve(display: &gdk::Display, gicon: &gio::Icon, size: i32, scale: i32) -> 
     {
         return answer;
     }
-    // GTK cannot draw a file icon without a local path (it logs criticals).
-    if gicon
+    // Not asked of GTK, which logs criticals for a file icon without a path.
+    if let Some(file) = gicon
         .downcast_ref::<gio::FileIcon>()
-        .is_some_and(|icon| icon.file().path().is_none())
+        .map(gio::FileIcon::file)
+        && file.path().is_none()
     {
-        return Resolved::Refused;
+        return if file.has_uri_scheme("resource") {
+            Resolved::Gtk
+        } else {
+            Resolved::Refused
+        };
     }
     // Only the first name: GLib appends a `-symbolic` twin of every name.
     let asks_symbolic = themed
@@ -146,8 +163,9 @@ fn resolve(display: &gdk::Display, gicon: &gio::Icon, size: i32, scale: i32) -> 
     let paintable = theme.lookup_by_gicon(gicon, size, scale, gtk::TextDirection::None, flags);
     let answer = match paintable.file() {
         Some(file) => match file.path() {
-            // A file icon named like a symbolic one is still a file from anywhere.
-            Some(path) if themed.is_some() && symbolic_file(&path) => Resolved::Gtk,
+            // Only when asked for: a symbolic file GTK settles on for a regular
+            // name, or a file icon named like one, is drawn by the sandbox.
+            Some(path) if asks_symbolic && symbolic_file(&path) => Resolved::Gtk,
             Some(path) => {
                 let key = source_key(&path, (size * scale).max(1), "");
                 Resolved::File(path, key)
@@ -355,16 +373,7 @@ pub fn gicon_texture(
             deliver(Some(texture));
             return;
         }
-        let Ok(Some(bytes)) = gio::spawn_blocking(move || {
-            big_os_kit::file_io::read_bounded(&path, MAX_ICON_FILE_BYTES).ok()
-        })
-        .await
-        else {
-            record_failure(key);
-            deliver(None);
-            return;
-        };
-        svg_answer(key, glib::Bytes::from_owned(bytes), px, deliver);
+        svg_answer(key, SvgSource::File(path), px, deliver);
     });
 }
 
@@ -565,17 +574,18 @@ pub fn svg_texture(
     height_px: i32,
     deliver: impl FnOnce(gdk::Texture) + 'static,
 ) {
-    svg_answer(key, bytes, height_px, |texture| {
+    svg_answer(key, SvgSource::Bytes(bytes), height_px, |texture| {
         if let Some(texture) = texture {
             deliver(texture);
         }
     });
 }
 
-/// [`svg_texture`], answering `None` when the sandbox could not draw it.
+/// [`svg_texture`] from `source`, answering `None` when the sandbox could not
+/// draw it.
 fn svg_answer(
     key: String,
-    bytes: glib::Bytes,
+    source: SvgSource,
     height_px: i32,
     deliver: impl FnOnce(Option<gdk::Texture>) + 'static,
 ) {
@@ -595,21 +605,21 @@ fn svg_answer(
     if !join_waiters(&key, Box::new(deliver)) {
         return;
     }
-    // Bound the speculative queue: under a flood of icon requests, refuse to
-    // enqueue past the job or byte ceiling rather than growing PENDING and the
-    // SVG bytes it holds without limit. The refusal is not remembered, so a
-    // later request decodes it.
-    let over_budget = PENDING.with(|pending| pending.borrow().len()) >= MAX_PENDING_JOBS
-        || PENDING_BYTES.with(Cell::get).saturating_add(bytes.len()) > MAX_PENDING_BYTES;
-    if over_budget {
-        answer_waiters(&key, None);
-        return;
+    if let SvgSource::Bytes(bytes) = &source {
+        // Refused past either ceiling, and not remembered: a later request
+        // decodes it.
+        let over_budget = PENDING.with(|pending| pending.borrow().len()) >= MAX_PENDING_JOBS
+            || PENDING_BYTES.with(Cell::get).saturating_add(bytes.len()) > MAX_PENDING_BYTES;
+        if over_budget {
+            answer_waiters(&key, None);
+            return;
+        }
+        PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
     }
-    PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
     PENDING.with(|pending| {
         pending.borrow_mut().push_back(PendingSvg {
             key,
-            bytes,
+            source,
             height_px,
         });
     });
@@ -624,10 +634,25 @@ fn start_pending_decodes() {
         let Some(job) = PENDING.with(|pending| pending.borrow_mut().pop_front()) else {
             return;
         };
-        PENDING_BYTES.with(|total| total.set(total.get().saturating_sub(job.bytes.len())));
+        if let SvgSource::Bytes(bytes) = &job.source {
+            PENDING_BYTES.with(|total| total.set(total.get().saturating_sub(bytes.len())));
+        }
         IN_FLIGHT.with(|count| count.set(count.get() + 1));
         glib::MainContext::default().spawn_local(async move {
-            let texture = decode_svg(job.bytes, job.height_px).await;
+            let bytes = match job.source {
+                SvgSource::Bytes(bytes) => Some(bytes),
+                SvgSource::File(path) => gio::spawn_blocking(move || {
+                    big_os_kit::file_io::read_bounded(&path, MAX_ICON_FILE_BYTES).ok()
+                })
+                .await
+                .ok()
+                .flatten()
+                .map(glib::Bytes::from_owned),
+            };
+            let texture = match bytes {
+                Some(bytes) => decode_svg(bytes, job.height_px).await,
+                None => None,
+            };
             IN_FLIGHT.with(|count| count.set(count.get().saturating_sub(1)));
             match &texture {
                 Some(texture) => {
@@ -992,6 +1017,8 @@ mod tests {
             let (answer_themed, at_once) = answer(&themed);
             assert!(at_once);
             assert_eq!(answer_themed.err().as_ref(), Some(&themed));
+            let emblemed: gio::Icon = gio::EmblemedIcon::new(&themed, None).upcast();
+            assert_eq!(answer(&emblemed).0.err().as_ref(), Some(&emblemed));
 
             let dir = scratch("symbolic");
             let named = dir.join("trap-symbolic.svg");
@@ -1001,8 +1028,62 @@ mod tests {
             )
             .unwrap();
             let (from_file, _) = answer(&file_icon(&named));
-            let _ = std::fs::remove_dir_all(&dir);
             assert!(from_file.is_ok(), "{from_file:?}");
+
+            // A regular name the theme has only a symbolic file for.
+            let display = gdk::Display::default().expect("a display");
+            gtk::IconTheme::for_display(&display).add_search_path(&dir);
+            std::fs::copy(&named, dir.join("big-icon-trap-symbolic.svg")).unwrap();
+            let regular: gio::Icon = gio::ThemedIcon::new("big-icon-trap").upcast();
+            let (from_theme, _) = answer(&regular);
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(from_theme.is_ok(), "{from_theme:?}");
+
+            let compiled: gio::Icon = gio::FileIcon::new(&gio::File::for_uri(
+                "resource:///org/gtk/libgtk/icons/16x16/status/image-missing.png",
+            ))
+            .upcast();
+            assert_eq!(answer(&compiled).0.err().as_ref(), Some(&compiled));
+        });
+    }
+
+    /// More icon files than the decode queue holds for handed-in bytes are all
+    /// drawn: a file waits for its turn instead of being refused.
+    #[test]
+    fn crowded_queue_draws_every_file() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dir = scratch("crowded");
+            let display = gdk::Display::default().expect("a display");
+            let count = MAX_PENDING_JOBS + MAX_IN_FLIGHT + 8;
+            let answers = std::rc::Rc::new(RefCell::new(Vec::new()));
+            for index in 0..count {
+                let path = dir.join(format!("{index}.svg"));
+                std::fs::write(
+                    &path,
+                    format!(
+                        r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="{}" height="8"/></svg>"#,
+                        index % 8 + 1
+                    ),
+                )
+                .unwrap();
+                let sink = answers.clone();
+                gicon_texture(&display, &file_icon(&path), 16, 1, move |answer| {
+                    sink.borrow_mut().push(answer.is_ok());
+                });
+            }
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while answers.borrow().len() < count {
+                assert!(
+                    Instant::now() < deadline,
+                    "{} answers",
+                    answers.borrow().len()
+                );
+                glib::MainContext::default().iteration(false);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            let drawn = answers.borrow().iter().filter(|drawn| **drawn).count();
+            assert_eq!(drawn, count);
         });
     }
 
