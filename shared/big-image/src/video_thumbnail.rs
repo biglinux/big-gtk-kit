@@ -339,10 +339,8 @@ mod tests {
         if !Path::new(FFMPEG_PATH).exists() || !Path::new(FFPROBE_PATH).exists() {
             return;
         }
-        if std::env::var_os(WITHOUT_SANDBOX).is_none() {
-            if !Path::new(big_os_kit::confinement::BWRAP).exists() {
-                return;
-            }
+        // Where bubblewrap cannot run, this process already is the place.
+        if std::env::var_os(WITHOUT_SANDBOX).is_none() && crate::thumbnailer::sandbox_works() {
             // Run this test again in a namespace that may not make another,
             // where bubblewrap fails the way it does with user namespaces off.
             let out = BigSubprocessSpec::builder()
