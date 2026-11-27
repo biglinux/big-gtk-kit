@@ -45,8 +45,9 @@ pub fn handed_file() -> PathBuf {
 /// main context, which this thread must own (GTK's main thread does).
 ///
 /// A session unlocked without a password (`loginctl unlock-session`) waits on
-/// until a password unlocks it; a watch that cannot be made runs `then` at
-/// once, since a password window beats a program that never asks. A thread
+/// until a password unlocks it; a watch that cannot be made, or that ends
+/// with its folder removed, runs `then` at once, since a password window
+/// beats a program that never asks. A thread
 /// that cannot start drops `then` unrun, which the log says.
 pub fn when_handed(then: impl FnOnce() + 'static) {
     wait_in(&glib::user_runtime_dir(), then);
@@ -88,9 +89,14 @@ fn wait_in(runtime: &Path, then: impl FnOnce() + 'static) {
             let mut buffer = [MaybeUninit::uninit(); 4096];
             let mut events = inotify::Reader::new(&watch, &mut buffer);
             while !handed.exists() {
-                if let Err(error) = events.next() {
-                    log::warn!("keyring: the hand-off is not waited for: {error}");
-                    break;
+                match events.next() {
+                    // The folder went, the mark with it: nothing is awaited.
+                    Ok(event) if event.events().contains(inotify::ReadFlags::IGNORED) => break,
+                    Ok(_) => {}
+                    Err(error) => {
+                        log::warn!("keyring: the hand-off is not waited for: {error}");
+                        break;
+                    }
                 }
             }
             glib::MainContext::default().invoke(move || (then.into_inner())());
@@ -182,5 +188,21 @@ mod tests {
         scratch.leave(HANDED);
         settle(&context, &runs, 1);
         assert_eq!(runs.get(), 1, "made again");
+    }
+
+    /// A folder removed under the wait takes its watch and the mark with it:
+    /// no hand-off is coming to wake it, and none is awaited any more.
+    #[test]
+    fn removed_folder_ends_the_wait() {
+        let context = glib::MainContext::default();
+        let _owned = context.acquire().expect("the default context");
+        let scratch = Scratch::new("removed");
+        scratch.leave(MARK);
+        let runs = counted(&scratch.0);
+        settle(&context, &runs, 0);
+        assert_eq!(runs.get(), 0, "ran before the folder went");
+        std::fs::remove_dir_all(scratch.0.join("bigshell")).expect("removed");
+        settle(&context, &runs, 1);
+        assert_eq!(runs.get(), 1, "after the folder went");
     }
 }
