@@ -230,21 +230,31 @@ fn tiff_reader(tiff: &[u8]) -> Option<Reader<'_>> {
 /// GPS arrives as four independent tags in any order, so the hemisphere is
 /// remembered beside the magnitude instead of being folded into it as it
 /// arrives: a reference tag read before its value has nothing to negate.
+/// EXIF has no default hemisphere, so a reference missing or other than its
+/// two letters gives no location.
 #[derive(Default)]
 struct GpsScratch {
     latitude: Option<f64>,
     longitude: Option<f64>,
-    south: bool,
-    west: bool,
+    latitude_ref: Option<u8>,
+    longitude_ref: Option<u8>,
 }
 
 impl GpsScratch {
     fn into_location(self) -> Option<BigExifLocation> {
-        let latitude = self.latitude?;
-        let longitude = self.longitude?;
+        let latitude = match self.latitude_ref? {
+            b'N' => self.latitude?,
+            b'S' => -self.latitude?,
+            _ => return None,
+        };
+        let longitude = match self.longitude_ref? {
+            b'E' => self.longitude?,
+            b'W' => -self.longitude?,
+            _ => return None,
+        };
         (latitude.is_finite() && longitude.is_finite()).then_some(BigExifLocation {
-            latitude: if self.south { -latitude } else { latitude },
-            longitude: if self.west { -longitude } else { longitude },
+            latitude,
+            longitude,
         })
     }
 }
@@ -329,8 +339,8 @@ fn read_entry(
                 pending.push(at);
             }
         }
-        0x0001 => gps.south = reader.bytes.get(data_offset) == Some(&b'S'),
-        0x0003 => gps.west = reader.bytes.get(data_offset) == Some(&b'W'),
+        0x0001 => gps.latitude_ref = reader.bytes.get(data_offset).copied(),
+        0x0003 => gps.longitude_ref = reader.bytes.get(data_offset).copied(),
         0x0002 => gps.latitude = degrees_from_rationals(reader, data_offset),
         0x0004 => gps.longitude = degrees_from_rationals(reader, data_offset),
         _ => {}
@@ -437,14 +447,26 @@ mod tests {
 
     #[test]
     fn a_southern_western_location_is_negative() {
-        let mut blob = read_exif(&gps_blob());
+        let mut blob = read_exif(&gps_blob(b'S', b'W'));
         let location = blob.location.take().expect("gps parsed");
         assert!((location.latitude + 23.5).abs() < 0.01, "{location:?}");
         assert!((location.longitude + 46.6).abs() < 0.01, "{location:?}");
+        let location = read_exif(&gps_blob(b'N', b'E'))
+            .location
+            .expect("gps parsed");
+        assert!((location.latitude - 23.5).abs() < 0.01, "{location:?}");
+        assert!((location.longitude - 46.6).abs() < 0.01, "{location:?}");
     }
 
-    /// IFD0 with a GPS pointer, and a GPS IFD with S/W references.
-    fn gps_blob() -> Vec<u8> {
+    #[test]
+    fn unknown_hemisphere_gives_no_location() {
+        assert!(read_exif(&gps_blob(0, b'W')).location.is_none());
+        assert!(read_exif(&gps_blob(b'S', b'x')).location.is_none());
+    }
+
+    /// IFD0 with a GPS pointer, and a GPS IFD with `latitude_ref` and
+    /// `longitude_ref` references.
+    fn gps_blob(latitude_ref: u8, longitude_ref: u8) -> Vec<u8> {
         let mut bytes = b"II".to_vec();
         bytes.extend_from_slice(&42u16.to_le_bytes());
         bytes.extend_from_slice(&8u32.to_le_bytes());
@@ -467,9 +489,9 @@ mod tests {
             bytes.extend_from_slice(&count.to_le_bytes());
             bytes.extend_from_slice(&value);
         };
-        push(0x0001, 2, 2, [b'S', 0, 0, 0]);
+        push(0x0001, 2, 2, [latitude_ref, 0, 0, 0]);
         push(0x0002, 5, 3, (values_start as u32).to_le_bytes());
-        push(0x0003, 2, 2, [b'W', 0, 0, 0]);
+        push(0x0003, 2, 2, [longitude_ref, 0, 0, 0]);
         push(0x0004, 5, 3, ((values_start + 24) as u32).to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
 
@@ -538,7 +560,7 @@ mod tests {
     fn reader_survives_any_bytes() {
         // A valid blob, mutated every way this reader could be walked off the
         // end of.
-        let valid = gps_blob();
+        let valid = gps_blob(b'S', b'W');
         let mut state = 0x5eed_1234_9876_abcdu64;
         for round in 0..2_000 {
             let mut bytes = valid.clone();
