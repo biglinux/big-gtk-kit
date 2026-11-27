@@ -148,51 +148,63 @@ fn destroyed_primary_fails_without_windows() {
     assert_eq!(error.message(), NO_WINDOW_PRESENTATION_ERROR);
 }
 
+/// A root that fails the test if `AppShell` gets as far as building it.
+struct NeverBuilt;
+
+impl relm4::SimpleComponent for NeverBuilt {
+    type Init = ();
+    type Input = ();
+    type Output = ();
+    type Root = gtk::Window;
+    type Widgets = ();
+
+    fn init_root() -> Self::Root {
+        panic!("the root must not be built");
+    }
+
+    fn init(
+        (): Self::Init,
+        _root: Self::Root,
+        _sender: relm4::ComponentSender<Self>,
+    ) -> relm4::ComponentParts<Self> {
+        panic!("the root must not be built");
+    }
+}
+
+impl AppShellComponent for NeverBuilt {
+    fn init_for_activation(
+        _context: &AppShellContext,
+        _request: AppShellActivationRequest,
+    ) -> Result<Self::Init, AppShellActivationError> {
+        panic!("the root must not be activated");
+    }
+
+    fn input_for_activation(
+        _request: AppShellActivationRequest,
+    ) -> Result<Self::Input, AppShellActivationError> {
+        panic!("the root must not be activated");
+    }
+}
+
 #[test]
 fn early_cli_runs_before_validation() {
-    struct NeverBuilt;
-
-    impl relm4::SimpleComponent for NeverBuilt {
-        type Init = ();
-        type Input = ();
-        type Output = ();
-        type Root = gtk::Window;
-        type Widgets = ();
-
-        fn init_root() -> Self::Root {
-            panic!("early CLI must return before GTK and window creation");
-        }
-
-        fn init(
-            (): Self::Init,
-            _root: Self::Root,
-            _sender: relm4::ComponentSender<Self>,
-        ) -> relm4::ComponentParts<Self> {
-            panic!("early CLI must return before component initialization");
-        }
-    }
-
-    impl AppShellComponent for NeverBuilt {
-        fn init_for_activation(
-            _context: &AppShellContext,
-            _request: AppShellActivationRequest,
-        ) -> Result<Self::Init, AppShellActivationError> {
-            panic!("early CLI must return before activation parsing");
-        }
-
-        fn input_for_activation(
-            _request: AppShellActivationRequest,
-        ) -> Result<Self::Input, AppShellActivationError> {
-            panic!("early CLI must return before activation parsing");
-        }
-    }
-
     let exit = run_root_with_args::<NeverBuilt, &str>(
         AppShellSpec::new("invalid id").early_cli(early_cli_success),
         vec!["demo", "--version"],
     );
 
     assert_eq!(exit, glib::ExitCode::from(17));
+}
+
+/// The test harness runs each test on a thread of its own, so `run` sees a
+/// second thread and refuses before the early answer, which would give 17.
+#[test]
+fn run_refused_beside_thread() {
+    let exit = AppShell::run::<NeverBuilt>(
+        AppShellSpec::new("br.com.biglinux.Demo").early_cli(|_| Some(glib::ExitCode::from(17))),
+    );
+
+    assert_eq!(exit, glib::ExitCode::FAILURE);
 }
 
 #[cfg(unix)]

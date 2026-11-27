@@ -397,7 +397,8 @@ impl AppShell {
     /// application loop returns.
     ///
     /// Call it from `main` before starting any thread: it sets the process
-    /// environment and locale, which no other thread may read meanwhile.
+    /// environment and locale, which no other thread may read meanwhile. It
+    /// returns failure, starting nothing, when another thread already runs.
     ///
     /// This registers the preconfigured application through
     /// `RelmApp::from_app`, but drives GTK through a native-argument
@@ -419,6 +420,14 @@ impl AppShell {
         C: AppShellComponent + 'static,
         C::Root: IsA<glib::Object>,
     {
+        match big_os_kit::set_locale_from_environment() {
+            Ok(true) => {}
+            Ok(false) => log::warn!("app shell: the locale the environment names is not installed"),
+            Err(error) => {
+                log::error!("app shell: cannot set the locale: {error}");
+                return glib::ExitCode::FAILURE;
+            }
+        }
         run_root_with_args::<C, OsString>(spec, process_args())
     }
 }

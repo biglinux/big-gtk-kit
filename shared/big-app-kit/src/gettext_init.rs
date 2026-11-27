@@ -48,7 +48,7 @@ impl GettextInit {
 
     /// Create the standard gettext binding for `domain` and `locale_dir`.
     ///
-    /// During AppShell boot this calls gettext-rs `setlocale(LC_ALL, "")`,
+    /// During AppShell boot, after it sets the locale, this calls
     /// `bindtextdomain(domain, locale_dir)`,
     /// `bind_textdomain_codeset(domain, "UTF-8")`, and `textdomain(domain)`.
     ///
@@ -132,9 +132,6 @@ fn bind_standard_gettext(init: &GettextInit) -> Result<(), String> {
     let locale_dir = init
         .locale_dir()
         .ok_or_else(|| format!("gettext domain {domain} is missing a locale dir"))?;
-    // SAFETY: AppShell binds the catalog at boot, before any other thread
-    // starts (`AppShell::run`'s contract).
-    unsafe { gettextrs::setlocale(gettextrs::LocaleCategory::LcAll, "") };
     gettextrs::bindtextdomain(domain, locale_dir)
         .map_err(|error| format!("bindtextdomain({domain}, {locale_dir}): {error}"))?;
     gettextrs::bind_textdomain_codeset(domain, "UTF-8")
