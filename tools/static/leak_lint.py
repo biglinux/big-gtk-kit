@@ -362,7 +362,7 @@ def bindings(text: str) -> tuple[dict[str, str], dict[str, str]]:
 
 
 def top_level_arguments(arguments: str) -> list[str]:
-    """`a, f(b, c), d` -> [`a`, `f(b, c)`, `d`]."""
+    """`a, f(b, c), d` and `a, f(b, c), d,` -> [`a`, `f(b, c)`, `d`]."""
     parts, depth, current = [], 0, []
     for c in arguments:
         if c in "([{":
@@ -374,7 +374,9 @@ def top_level_arguments(arguments: str) -> list[str]:
             current = []
         else:
             current.append(c)
-    parts.append("".join(current))
+    tail = "".join(current)
+    if tail.strip() or not parts:
+        parts.append(tail)
     return parts
 
 

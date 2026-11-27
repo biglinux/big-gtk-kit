@@ -759,6 +759,21 @@ class RepeatingSources(unittest.TestCase):
             }
         """),
         )
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: &gtk::Label) {
+                let label = label.clone();
+                glib::timeout_add_seconds_local(
+                    600,
+                    move || {
+                        label.set_text("checked");
+                        glib::ControlFlow::Continue
+                    },
+                );
+            }
+        """),
+        )
 
     def test_typed_local_callback_warns(self):
         self.assertIn(
