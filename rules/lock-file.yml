@@ -7,8 +7,8 @@ note: The owner refuses a symlink, a FIFO, another user's file and a second link
 files:
   - shared/**
 # The whole function: the opened file reaches the lock through a let, a
-# let-else, an if let, a match, a builder variable or a field, which no one
-# binding follows. A function that also locks a mutex fails too; split it.
+# let-else, an if let, a match, a builder variable or a field, which no single
+# binding pattern follows. A function that also locks a mutex fails too; split it.
 rule:
   kind: function_item
   all:
