@@ -53,6 +53,7 @@ fn main() -> ExitCode {
         let rows: Vec<u8> = frame
             .buf_slice()
             .chunks(stride)
+            .take(frame.height() as usize)
             .flat_map(|line| &line[..row])
             .copied()
             .collect();
