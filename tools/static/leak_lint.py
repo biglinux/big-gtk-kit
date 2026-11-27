@@ -470,6 +470,21 @@ def expression_end(text: str, start: int) -> int:
     return len(text)
 
 
+def pattern_end(text: str, start: int, stop: int) -> int:
+    """Where the pattern of a `let` head in `text[start:stop]` ends: at the colon of
+    its type annotation, the first single `:` outside brackets, or at `stop`."""
+    depth = 0
+    for i in range(start, stop):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == ":" and depth == 0 and ":" not in (text[i - 1], text[i + 1]):
+            return i
+    return stop
+
+
 def match_arms_brace(body: str, start: int) -> int:
     """Where the `{` that opens the arms of the `match` whose scrutinee starts at
     `start` is, or -1: past a block scrutinee and past braces inside brackets."""
@@ -549,7 +564,7 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     # (start, end, where its names start and stop shadowing the outer ones).
     patterns = [(lo, hi, lo, end) for lo, hi, end in match_arm_patterns(body)]
     binders = [
-        r"\blet\s+([^=;]+?)\s*(?::[^=;]*)?=(?!=)",
+        r"\blet\s+([^=;]+?)\s*=(?!=)",
         r"\bfor\s+(.+?)\s+in\b",
         # a closure's `|`, not a pattern's or a flag set's: it opens an argument,
         # a value or a statement
@@ -558,10 +573,11 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     for binder in binders:
         for m in re.finditer(binder, body):
             # a `let` binds after its statement: its right-hand side still sees the outer name
-            where, until = m.start(1), len(body)
+            hi, where, until = m.end(1), m.start(1), len(body)
             if binder is binders[2]:
                 until = expression_end(body, m.end())
             if binder is binders[0]:
+                hi = pattern_end(body, m.start(1), m.end(1))
                 conditional = re.search(r"\b(if|while)\s*$|&&\s*$", body[: m.start()])
                 if conditional:  # `if let`, `while let`, and a let chain's `&& let`
                     ends = [
@@ -573,7 +589,7 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
                 else:
                     end = body.find(";", m.end())
                 where = end if end >= 0 else len(body)
-            patterns.append((m.start(1), m.end(1), where, until))
+            patterns.append((m.start(1), hi, where, until))
     shadowed: dict[str, list[tuple[int, int]]] = {}
     for lo, hi, where, until in patterns:
         pattern = body[lo:hi]
