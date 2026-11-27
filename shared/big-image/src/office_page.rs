@@ -131,11 +131,10 @@ fn overlay_mounts(template: &Path) -> Vec<std::ffi::OsString> {
 /// costs little against LibreOffice's own run.
 fn read_page(page: &Path, bound: i32) -> Option<crate::BigRgbaImage> {
     let file = big_os_kit::file_io::open_regular_no_follow(page).ok()?;
-    let reader = png::Decoder::new(std::io::BufReader::new(file))
-        .read_info()
-        .ok()?;
-    let png_info = reader.info();
-    if png_info.width > MAX_PAGE_SIDE || png_info.height > MAX_PAGE_SIDE {
+    // The header alone: the rest is for the sandboxed decoder.
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let header = decoder.read_header_info().ok()?;
+    if header.width > MAX_PAGE_SIDE || header.height > MAX_PAGE_SIDE {
         return None;
     }
     let image =
