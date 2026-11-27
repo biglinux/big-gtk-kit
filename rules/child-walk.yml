@@ -9,12 +9,27 @@ rule:
     - pattern: $PENDING.extend($W.first_child())
     - all:
         - pattern: let mut $C = $W.first_child();
+        # A `while let` over the binding, labeled or not, later in the block or
+        # nested in a later statement.
         - precedes:
             stopBy: end
             any:
-              - pattern: while let Some($X) = $C { $$$ }
+              - kind: while_expression
+                has:
+                  field: condition
+                  kind: let_condition
+                  has:
+                    field: value
+                    pattern: $C
               - has:
-                  pattern: while let Some($X) = $C { $$$ }
+                  stopBy: end
+                  kind: while_expression
+                  has:
+                    field: condition
+                    kind: let_condition
+                    has:
+                      field: value
+                      pattern: $C
 ignores:
   - src/widget_tree.rs
   # focus_first_control leaves out what is hidden, and the whole subtree under it.

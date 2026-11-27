@@ -6,30 +6,18 @@ note: The owner refuses a symlink, a FIFO, another user's file and a second link
 # The owners live in the shared crates; the kit's own crates sit below them.
 files:
   - shared/**
-# The file a `let` opens with `OpenOptions::new()` is the one locked.
+# The whole function: the opened file reaches the lock through a let, a
+# let-else, an if let, a match, a builder variable or a field, which no one
+# binding follows. A function that also locks a mutex fails too; split it.
 rule:
   kind: function_item
   all:
     - has:
         stopBy: end
-        kind: let_declaration
-        all:
-          - has:
-              field: pattern
-              any:
-                - kind: mut_pattern
-                  has:
-                    kind: identifier
-                    pattern: $FILE
-                - kind: identifier
-                  pattern: $FILE
-          - has:
-              field: value
-              stopBy: end
-              kind: call_expression
-              has:
-                field: function
-                regex: '(^|::)OpenOptions::new$'
+        kind: call_expression
+        has:
+          field: function
+          regex: '(^|::)OpenOptions::new$'
     - has:
         stopBy: end
         any:
