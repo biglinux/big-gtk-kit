@@ -608,8 +608,8 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
                         if e >= 0
                     ]
                     end = min(ends) if ends else -1
-                else:
-                    end = body.find(";", m.end())
+                else:  # after the whole initializer, blocks and calls included
+                    end = expression_end(body, m.end())
                 where = end if end >= 0 else len(body)
             patterns.append((m.start(1), hi, where, until))
     shadowed: dict[str, list[tuple[int, int]]] = {}
