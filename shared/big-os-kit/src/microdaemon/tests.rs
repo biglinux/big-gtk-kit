@@ -323,6 +323,9 @@ fn progress_clamps_to_known_total() {
             total_units: Some(100),
         }
     );
+    let decoded: JobProgress = serde_json::from_str(r#"{"completed_units":120,"total_units":100}"#)
+        .expect("decode progress");
+    assert_eq!(decoded, JobProgress::new(100, Some(100)));
 }
 
 #[test]

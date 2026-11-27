@@ -133,13 +133,26 @@ pub struct DurableJobJournalRecord {
     pub restart_spec: Option<DurableJobSpec>,
 }
 
-/// Bounded progress report.
+/// Bounded progress report; decoding clamps it as [`JobProgress::new`] does.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(from = "DecodedJobProgress")]
 pub struct JobProgress {
     /// Completed work units.
     pub completed_units: u64,
     /// Total work units when known.
     pub total_units: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct DecodedJobProgress {
+    completed_units: u64,
+    total_units: Option<u64>,
+}
+
+impl From<DecodedJobProgress> for JobProgress {
+    fn from(decoded: DecodedJobProgress) -> Self {
+        Self::new(decoded.completed_units, decoded.total_units)
+    }
 }
 
 impl JobProgress {
