@@ -324,10 +324,9 @@ impl SideCards {
             .into_iter()
             .find(|tile| tile.is_active())
         {
-            Some(chosen) => {
-                chosen.grab_focus();
-            }
-            None => {
+            Some(chosen) if chosen.grab_focus() => {}
+            // None chosen, or the chosen one cannot take the focus.
+            _ => {
                 card.child_focus(gtk::DirectionType::TabForward);
             }
         }
@@ -410,7 +409,9 @@ pub fn card(description: &str, choices: &impl IsA<gtk::Widget>) -> gtk::Scrolled
 pub(crate) fn scrolling_card(content: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .child(content)
-        .hscrollbar_policy(gtk::PolicyType::Never)
+        // Natural width while the content fits; narrower, as `place_beside`
+        // makes it on a small overlay, it scrolls instead of spilling out.
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
         .propagate_natural_width(true)
         .propagate_natural_height(true)
         .css_classes(["side-card"])
@@ -850,6 +851,45 @@ mod tests {
                 opened[1].0 >= row.x() + row.width(),
                 "{opened:?} over {row:?}"
             );
+            fixture.window.destroy();
+        });
+    }
+
+    /// A card may be given less than its content's width, and scrolls then:
+    /// its minimum is not the content's.
+    #[test]
+    fn wide_card_can_be_narrowed() {
+        big_testkit::harness::require_gtk_test(|| {
+            let wide = gtk::Label::new(Some(&"wide ".repeat(40)));
+            let (content_minimum, ..) = wide.measure(gtk::Orientation::Horizontal, -1);
+            let (card_minimum, card_natural, ..) =
+                scrolling_card(&wide).measure(gtk::Orientation::Horizontal, -1);
+            assert!(card_minimum < content_minimum);
+            assert!(
+                card_natural >= content_minimum,
+                "natural width while it fits"
+            );
+        });
+    }
+
+    /// When the chosen tile cannot take the focus, the focus still enters the
+    /// card instead of staying on the row.
+    #[test]
+    fn unfocusable_choice_leaves_focus_in_card() {
+        big_testkit::harness::require_gtk_test(|| {
+            let mut fixture = Fixture::new();
+            fixture.tiles[1].set_can_focus(false);
+            // Out of the group, whose Tab stop is its chosen tile alone, so the
+            // card has another control to take the focus.
+            fixture.tiles[0].set_group(None::<&gtk::CheckButton>);
+            let card = fixture.tiles[0]
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .expect("the card");
+            fixture.row.row.grab_focus();
+            fixture.cards.handle(CardEvent::Activated(0));
+            assert!(big_testkit::harness::pump_until(|| fixture
+                .focus()
+                .is_ancestor(&card)));
             fixture.window.destroy();
         });
     }
