@@ -56,8 +56,8 @@ pub struct FileRequest {
     pub title: String,
     /// Where to start. `None` starts wherever the desktop last was.
     pub start_in: Option<PathBuf>,
-    /// A file to start on: selected in the toolkit's dialog, its folder in
-    /// the portal's.
+    /// A file whose folder to start in when `start_in` names none. Neither
+    /// dialog selects it: an open dialog takes a folder, not a file.
     pub select: Option<PathBuf>,
     /// The word on the confirming button. `None` asks for the desktop's.
     pub accept_label: Option<String>,
@@ -117,7 +117,7 @@ impl FileRequest {
         self
     }
 
-    /// Start on `file`, selected where the dialog can select it.
+    /// Start in the folder of `file`, unless [`Self::starting_in`] names one.
     #[must_use]
     pub fn selecting(mut self, file: impl Into<PathBuf>) -> Self {
         self.select = Some(file.into());
