@@ -471,6 +471,23 @@ fn rgb_over_white_pixbuf(image: &BigRgbaImage) -> Option<gtk::gdk_pixbuf::Pixbuf
 mod tests {
     use super::*;
 
+    /// Pixels already in sRGB come back only when their buffer matches
+    /// their size.
+    #[test]
+    fn malformed_srgb_refused() {
+        let short = BigRgbaImage {
+            rgba: vec![0; 3],
+            width: 1,
+            height: 1,
+            cicp: None,
+            opaque: true,
+        };
+        assert!(matches!(
+            short.into_srgb(),
+            Err(BigImageError::InvalidBytePixels)
+        ));
+    }
+
     /// A fully transparent picture saved as JPEG is white, not black.
     #[test]
     fn alpha_is_flattened_over_white() {
