@@ -91,7 +91,8 @@ pub fn install_window_quit(window: &adw::ApplicationWindow) {
 /// does both directions. The window can leave full screen without the action
 /// (the compositor, or the Escape the shell offers), and the state follows it.
 pub fn install_fullscreen_action(window: &adw::ApplicationWindow) {
-    let action = gio::SimpleAction::new_stateful("fullscreen", None, &false.to_variant());
+    let action =
+        gio::SimpleAction::new_stateful("fullscreen", None, &window.is_fullscreen().to_variant());
     let window_weak = window.downgrade();
     action.connect_activate(move |action, _| {
         let Some(window) = window_weak.upgrade() else {
@@ -106,4 +107,30 @@ pub fn install_fullscreen_action(window: &adw::ApplicationWindow) {
     window.connect_fullscreened_notify(move |window| {
         action_for_window.set_state(&window.is_fullscreen().to_variant());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A window that already fills the screen, as a restored one may, shows
+    /// so in the menu before it changes.
+    #[test]
+    fn fullscreen_state_starts_from_window() {
+        big_testkit::harness::require_gtk_test(|| {
+            let window = adw::ApplicationWindow::builder().build();
+            window.set_fullscreened(true);
+            window.present();
+            let filled = big_testkit::harness::pump_until(|| window.is_fullscreen());
+            install_fullscreen_action(&window);
+            let state = window
+                .lookup_action("fullscreen")
+                .and_then(|action| action.state())
+                .and_then(|state| state.get::<bool>());
+            window.destroy();
+
+            assert!(filled, "the compositor did not fill the screen");
+            assert_eq!(state, Some(true));
+        });
+    }
 }
