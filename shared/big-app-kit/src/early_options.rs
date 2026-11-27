@@ -38,7 +38,7 @@ pub struct ProductOptions<'a> {
     /// The product's `CARGO_PKG_VERSION`.
     pub version: &'a str,
     /// Whether the arguments that are not options name files to open. A product
-    /// that opens none refuses them, so its options take no value.
+    /// that opens none refuses them.
     pub accepts_files: bool,
     /// The msgid of what the product does, under the usage, in place of the
     /// line `accepts_files` picks.
