@@ -133,14 +133,17 @@ pub(super) fn thumbnail_span(reader: &Reader<'_>, second: usize) -> Option<Range
 }
 
 /// Whether the directory at `second` keeps its thumbnail as pixels in strips
-/// or tiles (EXIF's uncompressed thumbnail), which no JPEG span names.
+/// or tiles (EXIF's uncompressed thumbnail), which no JPEG span names. The
+/// tag alone decides, whatever its format and count: several strips list
+/// several offsets.
 pub(super) fn in_strips(reader: &Reader<'_>, second: usize) -> bool {
-    let mut found = false;
-    scan(reader, second, |tag, _| {
-        found |= matches!(tag, TAG_STRIP_OFFSETS | TAG_TILE_OFFSETS);
-        Some(())
-    });
-    found
+    let count = reader.u16_at(second).map_or(0, usize::from);
+    (0..count).any(|index| {
+        second
+            .checked_add(2 + index * 12)
+            .and_then(|entry| reader.u16_at(entry))
+            .is_some_and(|tag| matches!(tag, TAG_STRIP_OFFSETS | TAG_TILE_OFFSETS))
+    })
 }
 
 /// Hand every single SHORT or LONG entry of the directory at `at` to `each`
