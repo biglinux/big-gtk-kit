@@ -6,6 +6,9 @@
 //! Rows are grouped by section in the order the sections first appear:
 //! editable rows first, then the fixed rows a widget owns.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use adw::prelude::*;
 use big_gtk_kit::tooltip::name_control;
 use gtk::{gdk, glib};
@@ -228,7 +231,7 @@ pub enum BigShortcutEditorInput {
     ReplaceConflict,
     /// Cancel the active keyboard capture.
     CancelCapture,
-    /// The capture dialog closed, by whatever way.
+    /// The capture dialog closed other than by the editor ending the capture.
     CaptureClosed,
 }
 
@@ -281,6 +284,8 @@ pub struct BigShortcutEditorWidgets {
     conflict_label: gtk::Label,
     replace_button: gtk::Button,
     capture_content: gtk::Box,
+    /// Set while [`close_capture`] closes the dialog.
+    closing_itself: Rc<Cell<bool>>,
 }
 
 impl Component for BigShortcutEditor {
@@ -375,7 +380,7 @@ impl Component for BigShortcutEditor {
             }
             BigShortcutEditorInput::CancelCapture => {
                 if self.end_capture(&sender) {
-                    widgets.dialog.close();
+                    close_capture(widgets);
                 }
             }
             BigShortcutEditorInput::CaptureClosed => {
@@ -549,11 +554,17 @@ fn capture_dialog(
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&content));
     dialog.set_child(Some(&toolbar));
-    // However the dialog goes (Cancel, Escape, a click outside), the capture
-    // ends with it; a commit has already cleared it by then.
+    // However else the dialog goes (its Cancel, a click outside), the capture
+    // ends with it. `closed` is emitted inside `close()`, so a close the editor
+    // made itself, having ended its capture, sends nothing that a capture
+    // begun after it could take for its own.
+    let closing_itself = Rc::new(Cell::new(false));
     let input = sender.input_sender().clone();
+    let closed_itself = Rc::clone(&closing_itself);
     dialog.connect_closed(move |_| {
-        let _ = input.send(BigShortcutEditorInput::CaptureClosed);
+        if !closed_itself.get() {
+            let _ = input.send(BigShortcutEditorInput::CaptureClosed);
+        }
     });
 
     let key = gtk::EventControllerKey::new();
@@ -593,7 +604,15 @@ fn capture_dialog(
         conflict_label,
         replace_button,
         capture_content: content,
+        closing_itself,
     }
+}
+
+/// Close the capture dialog for a capture the editor has already ended.
+fn close_capture(widgets: &BigShortcutEditorWidgets) {
+    widgets.closing_itself.set(true);
+    widgets.dialog.close();
+    widgets.closing_itself.set(false);
 }
 
 impl BigShortcutEditor {
@@ -650,7 +669,7 @@ impl BigShortcutEditor {
             accel: accel.to_owned(),
             default_accel: row.default_accel.clone(),
         }));
-        refresh_conflicts(&self.rows);
+        refresh_conflicts(&self.rows, &self.reservations, &self.labels.conflict);
     }
 
     fn commit_capture(
@@ -665,6 +684,10 @@ impl BigShortcutEditor {
         let Some(index) = self.rows.iter().position(|row| row.action == action) else {
             return;
         };
+        if !accel.is_empty() && gtk::accelerator_parse(&accel).is_none() {
+            log::warn!("shortcut editor: {accel:?} is no GTK accelerator; capture kept open");
+            return;
+        }
         self.contested_accel = None;
         // Hiding a focused Replace would leave no widget to capture the next key.
         widgets.replace_button.set_visible(false);
@@ -694,7 +717,7 @@ impl BigShortcutEditor {
             return;
         }
         self.active_action = None;
-        widgets.dialog.close();
+        close_capture(widgets);
         self.set_accel(sender, index, &accel);
     }
 
@@ -714,7 +737,7 @@ impl BigShortcutEditor {
             self.set_accel(sender, owner, "");
         }
         self.active_action = None;
-        widgets.dialog.close();
+        close_capture(widgets);
         self.set_accel(sender, index, &accel);
     }
 
@@ -763,10 +786,14 @@ fn capture_requirement<'a>(
     }
 }
 
-/// Whether `accel` is written with a modifier; `<Shift>` counts only where
-/// [`key_accel`] kept it, so Shift+? (`question`) types text and is no shortcut.
+/// Whether `accel` is written with Ctrl, Alt or Shift, the modifiers
+/// [`key_accel`] captures; `<Shift>` counts only where it kept it, so Shift+?
+/// (`question`) types text and is no shortcut.
 fn accel_has_modifiers(accel: &str) -> bool {
-    parse_accel(accel).is_some_and(|(_, modifiers)| !modifiers.is_empty())
+    let captured = gdk::ModifierType::CONTROL_MASK
+        | gdk::ModifierType::ALT_MASK
+        | gdk::ModifierType::SHIFT_MASK;
+    parse_accel(accel).is_some_and(|(_, modifiers)| modifiers.intersects(captured))
 }
 
 fn accelerator_label(accel: &str, labels: &BigShortcutEditorLabels) -> String {
@@ -791,10 +818,20 @@ fn conflict_message(template: &str, owner: &str) -> String {
     template.replace("{owner}", owner)
 }
 
-fn refresh_conflicts(rows: &[BigShortcutRow]) {
-    for row in rows {
-        if conflict_action_for_rows(rows, &row.action, &row.current_accel).is_none() {
-            clear_conflict_text(row);
+/// Keep each refused reset's line while the row's default is still taken,
+/// naming whoever holds it now.
+fn refresh_conflicts(
+    rows: &[BigShortcutRow],
+    reservations: &[BigShortcutReservation],
+    template: &str,
+) {
+    let refused = rows
+        .iter()
+        .filter(|row| row.row.subtitle().is_some_and(|line| !line.is_empty()));
+    for row in refused {
+        match conflict_title(rows, reservations, &row.action, &row.default_accel) {
+            Some(owner) => set_conflict_text(row, template, &owner),
+            None => clear_conflict_text(row),
         }
     }
 }
@@ -1116,6 +1153,10 @@ mod tests {
             );
             assert_eq!(capture_requirement(modified, "<Ctrl>f", &labels), None);
             assert_eq!(capture_requirement(modified, "<Shift>Z", &labels), None);
+            assert_eq!(
+                capture_requirement(modified, "<Super>k", &labels),
+                Some("Press a modified key")
+            );
         });
     }
 
@@ -1257,6 +1298,31 @@ mod tests {
         });
     }
 
+    /// The close of a cancelled capture's dialog leaves the next capture be.
+    #[test]
+    fn cancel_spares_next_capture() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, outputs) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::CancelCapture);
+            editor.emit(BigShortcutEditorInput::BeginCapture("play".to_owned()));
+            big_testkit::harness::pump();
+            editor.emit(BigShortcutEditorInput::CommitCapture("p".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(
+                *outputs.borrow(),
+                [
+                    BigShortcutEditorOutput::CaptureCancelled {
+                        action: "next".to_owned()
+                    },
+                    changed("play", "p"),
+                ]
+            );
+            window.destroy();
+        });
+    }
+
     #[test]
     fn replace_disables_the_other() {
         big_testkit::harness::require_gtk_test(|| {
@@ -1314,6 +1380,27 @@ mod tests {
             );
             assert!(!editor.widgets().replace_button.is_visible());
             assert_eq!(editor.model().rows[1].current_accel, "n");
+            window.destroy();
+        });
+    }
+
+    /// Text GTK reads no key from is never handed on to be saved; the capture
+    /// waits for a key.
+    #[test]
+    fn unparsable_commit_is_refused() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, outputs) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture(
+                "not-a-key".to_owned(),
+            ));
+            big_testkit::harness::pump();
+            assert!(outputs.borrow().is_empty());
+            assert_eq!(editor.model().rows[1].current_accel, "n");
+            editor.emit(BigShortcutEditorInput::CommitCapture("m".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(*outputs.borrow(), [changed("next", "m")]);
             window.destroy();
         });
     }
@@ -1388,6 +1475,33 @@ mod tests {
                 next.row.subtitle().as_deref(),
                 Some("“Play” already uses this shortcut.")
             );
+            window.destroy();
+        });
+    }
+
+    /// A refused reset stays explained while another row changes, and clears
+    /// once its default is free.
+    #[test]
+    fn reset_refusal_outlives_unrelated_edit() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, _) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("play".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("n".to_owned()));
+            editor.emit(BigShortcutEditorInput::ReplaceConflict);
+            editor.emit(BigShortcutEditorInput::Reset("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::BeginCapture("zoom-in".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("<Ctrl>z".to_owned()));
+            big_testkit::harness::pump();
+            let subtitle = || editor.model().rows[1].row.subtitle();
+            assert_eq!(
+                subtitle().as_deref(),
+                Some("“Play” already uses this shortcut.")
+            );
+            editor.emit(BigShortcutEditorInput::BeginCapture("play".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("p".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(subtitle().as_deref(), Some(""));
             window.destroy();
         });
     }

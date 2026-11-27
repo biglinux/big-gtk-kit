@@ -36,9 +36,16 @@ impl ShortcutSearch {
         let mut modifiers = ModifierType::empty();
         let mut key = None;
         let mut only_keys = true;
-        for word in text
+        // A `+` after the one joining keys is the Plus key, as GTK writes Ctrl++.
+        let joined = text
+            .strip_suffix('+')
+            .map(str::trim_end)
+            .filter(|rest| rest.ends_with('+'));
+        for word in joined
+            .unwrap_or(&text)
             .split(|letter: char| letter == '+' || letter.is_whitespace())
             .filter(|word| !word.is_empty())
+            .chain(joined.map(|_| "plus"))
         {
             match modifier(word) {
                 Some(named) => modifiers |= named,
@@ -134,6 +141,7 @@ mod tests {
             );
             let unbound = ("Zoom in", "Disabled", vec![]);
             let zoom_out = ("Shrink text", "Ctrl+-", vec![(control, "minus")]);
+            let zoom_in = ("Enlarge text", "Ctrl++", vec![(control, "plus")]);
             let page = ("Previous page", "Ctrl+Page Up", vec![(control, "Page_Up")]);
             let switch = (
                 "Switch window",
@@ -153,6 +161,7 @@ mod tests {
                 &terminal,
                 &unbound,
                 &zoom_out,
+                &zoom_in,
                 &page,
                 &switch,
                 &open_terminal,
@@ -168,6 +177,7 @@ mod tests {
                         "Terminal",
                         "Zoom in",
                         "Shrink text",
+                        "Enlarge text",
                         "Previous page",
                         "Switch window",
                         "Open terminal",
@@ -191,6 +201,7 @@ mod tests {
                         "Reopen closed tab",
                         "Close window",
                         "Shrink text",
+                        "Enlarge text",
                         "Previous page",
                         "Switch window",
                         "Open terminal",
@@ -203,6 +214,10 @@ mod tests {
                 ("zoom", vec!["Zoom in"]),
                 ("ctrl -", vec!["Shrink text"]),
                 ("ctrl minus", vec!["Shrink text"]),
+                // GTK writes Ctrl and the Plus key "Ctrl++".
+                ("Ctrl++", vec!["Enlarge text"]),
+                ("ctrl + +", vec!["Enlarge text"]),
+                ("ctrl plus", vec!["Enlarge text"]),
                 ("ctrl page up", vec!["Previous page"]),
                 (
                     "+",
@@ -212,6 +227,7 @@ mod tests {
                         "Close window",
                         "Terminal",
                         "Shrink text",
+                        "Enlarge text",
                         "Previous page",
                         "Switch window",
                         "Open terminal",
