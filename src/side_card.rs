@@ -499,8 +499,12 @@ pub(crate) fn place_beside(
     };
     let (x, y) = (bounds.x() as i32, bounds.y() as i32);
     let (width, height) = (bounds.width() as i32, bounds.height() as i32);
-    // Hidden, a card would measure 0.
+    // Hidden, a card would measure 0; a measure counts the margins, which
+    // still place it where it last opened.
     card.set_visible(true);
+    card.set_margin_start(0);
+    card.set_margin_end(0);
+    card.set_margin_top(0);
     // Margins count from the start edge, which is the right one in a
     // right-to-left layout.
     let rtl = layer.direction() == gtk::TextDirection::Rtl;
@@ -799,6 +803,48 @@ mod tests {
                 .compute_bounds(&layer)
                 .expect("the row's bounds");
             assert!(card.y() + card.height() <= row.y(), "{card:?} over {row:?}");
+            fixture.window.destroy();
+        });
+    }
+
+    /// A card opened again lands where it opened the first time, beside its
+    /// row.
+    #[test]
+    fn reopened_card_keeps_place() {
+        big_testkit::harness::require_gtk_test(|| {
+            let mut fixture = Fixture::new();
+            let layer = fixture
+                .row
+                .row
+                .ancestor(gtk::Overlay::static_type())
+                .expect("the layer");
+            layer.set_halign(gtk::Align::Start);
+            layer.set_size_request(450, -1);
+            let list = fixture.row.row.parent().expect("the list");
+            list.set_halign(gtk::Align::Start);
+            list.set_size_request(200, -1);
+            assert!(big_testkit::harness::pump_frame(&fixture.window));
+            let mut opened = Vec::new();
+            for _ in 0..2 {
+                fixture.cards.handle(CardEvent::Activated(0));
+                assert!(big_testkit::harness::pump_frame(&fixture.window));
+                let card = fixture.cards.cards[0]
+                    .compute_bounds(&layer)
+                    .expect("the card's bounds");
+                opened.push((card.x(), card.y(), card.width(), card.height()));
+                fixture.cards.close();
+                assert!(big_testkit::harness::pump_frame(&fixture.window));
+            }
+            assert_eq!(opened[0], opened[1]);
+            let row = fixture
+                .row
+                .row
+                .compute_bounds(&layer)
+                .expect("the row's bounds");
+            assert!(
+                opened[1].0 >= row.x() + row.width(),
+                "{opened:?} over {row:?}"
+            );
             fixture.window.destroy();
         });
     }
