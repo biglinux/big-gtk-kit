@@ -328,6 +328,7 @@ fn group_kill_outlives_exited_leader() {
     while state(&leader) != Some('Z') && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
+    let leader_exited = state(&leader) == Some('Z');
 
     child.kill().expect("kill the group");
     let _ = child.wait();
@@ -337,6 +338,10 @@ fn group_kill_outlives_exited_leader() {
     while state(sleeper).is_some_and(|state| state != 'Z') && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(
+        leader_exited,
+        "the leader never exited, so the kill met it alive"
+    );
     assert!(
         state(sleeper).is_none_or(|state| state == 'Z'),
         "the backgrounded sleep outlived the group kill"
@@ -726,51 +731,79 @@ fn software_request_read_as_mesa() {
     }
 }
 
+/// Set by the desktop-GPU test for its child runs, so a runner that has the
+/// desktop's variables itself still runs both cases.
+const CHILD_DESKTOP_GPU: &str = "BIG_OS_KIT_CHILD_DESKTOP_GPU";
+
 #[test]
 #[cfg_attr(miri, ignore)]
 fn desktop_gpu_variables_stay_desktop_only() {
-    if std::env::var_os(DESKTOP_GPU).is_some() {
-        let env = BigSubprocessSpec::builder()
-            .program("env")
-            .timeout(Duration::from_secs(5))
-            .build()
-            .run()
-            .expect("env runs")
-            .stdout_lossy();
-        for name in [
-            "__EGL_VENDOR_LIBRARY_FILENAMES=",
-            "VK_LOADER_DRIVERS_DISABLE=",
-            "BIG_DESKTOP_GPU=",
-        ] {
-            assert!(!env.contains(name), "{env}");
+    match std::env::var_os(CHILD_DESKTOP_GPU)
+        .as_deref()
+        .and_then(std::ffi::OsStr::to_str)
+    {
+        Some("unset") => {
+            assert!(desktop_gpu_environment().is_empty());
+            return;
         }
-        let handed = desktop_gpu_environment();
-        assert_eq!(handed.len(), 3, "{handed:?}");
-        return;
+        Some(_) => {}
+        None => {
+            for case in ["unset", "set"] {
+                desktop_gpu_child(case);
+            }
+            return;
+        }
     }
-    assert!(desktop_gpu_environment().is_empty());
-    // The variables have to be in this process's environment: run this test
-    // again in a child that has them.
-    let out = BigSubprocessSpec::builder()
+    let env = BigSubprocessSpec::builder()
+        .program("env")
+        .timeout(Duration::from_secs(5))
+        .build()
+        .run()
+        .expect("env runs")
+        .stdout_lossy();
+    for name in [
+        "__EGL_VENDOR_LIBRARY_FILENAMES=",
+        "VK_LOADER_DRIVERS_DISABLE=",
+        "BIG_DESKTOP_GPU=",
+    ] {
+        assert!(!env.contains(name), "{env}");
+    }
+    let handed = desktop_gpu_environment();
+    assert_eq!(handed.len(), 3, "{handed:?}");
+}
+
+/// [`desktop_gpu_variables_stay_desktop_only`] again in a child whose
+/// environment holds the three variables (`set`) or none of them (`unset`).
+fn desktop_gpu_child(case: &str) {
+    let mut child = BigSubprocessSpec::builder()
         .program(std::env::current_exe().expect("test binary"))
         .args([
             "--exact",
             "subprocess::tests::desktop_gpu_variables_stay_desktop_only",
             "--quiet",
         ])
-        .env(
-            "__EGL_VENDOR_LIBRARY_FILENAMES",
-            "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
-        )
-        .env("VK_LOADER_DRIVERS_DISABLE", "*nvidia*")
-        .env(DESKTOP_GPU, "mesa")
+        .env_inherit(false)
+        .env(CHILD_DESKTOP_GPU, case);
+    if let Some(path) = std::env::var_os("PATH") {
+        child = child.env("PATH", path);
+    }
+    if case == "set" {
+        child = child
+            .env(
+                "__EGL_VENDOR_LIBRARY_FILENAMES",
+                "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+            )
+            .env("VK_LOADER_DRIVERS_DISABLE", "*nvidia*")
+            .env(DESKTOP_GPU, "mesa");
+    }
+    let out = child
         .timeout(Duration::from_secs(60))
         .build()
         .run()
         .expect("child test runs");
     assert!(
         out.status.success() && out.stdout_lossy().contains("1 passed"),
-        "{}",
+        "{case}: {}",
         out.stdout_lossy()
     );
 }
@@ -995,7 +1028,7 @@ fn unread_large_stdin_never_hangs() {
 fn grandchild_stdin_ends_at_deadline() {
     let hand_on = "exec 3<&0; sleep 8 <&3 >/dev/null 2>&1 & exit 0";
     let started = std::time::Instant::now();
-    let _ = BigSubprocessSpec::builder()
+    let output = BigSubprocessSpec::builder()
         .program("sh")
         .args(["-c", hand_on])
         .stdin(vec![b'x'; 256 * 1024])
@@ -1003,11 +1036,16 @@ fn grandchild_stdin_ends_at_deadline() {
         .timeout(std::time::Duration::from_secs(1))
         .build()
         .run();
+    let elapsed = started.elapsed();
 
+    // A shell that never started would return at once, too.
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
-        "returned after {:?}",
-        started.elapsed()
+        output.as_ref().is_ok_and(|output| output.status.success()),
+        "{output:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "returned after {elapsed:?}"
     );
 }
 
@@ -1020,6 +1058,7 @@ fn grandchild_stdin_ends_at_deadline() {
 /// launch a helper on every "open with" or "set as wallpaper".
 #[test]
 fn detached_helper_is_reaped() {
+    let before = children();
     BigSubprocessSpec::builder()
         .program("true")
         .allow_list(["true"])
@@ -1028,13 +1067,14 @@ fn detached_helper_is_reaped() {
         .expect("spawn the helper");
 
     // The reaper runs on its own thread; give it a moment, then ask the kernel.
+    // A helper still running counts as much as a zombie: neither was reaped.
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(20));
-        if children_in_state_zombie() == 0 {
+        if children().is_subset(&before) {
             return;
         }
     }
-    panic!("a detached helper is still a zombie after a second");
+    panic!("a detached helper is still there after a second");
 }
 
 /// The reaper sleeps while a detached child is alive, and still reaps it.
@@ -1043,6 +1083,7 @@ fn detached_helper_is_reaped() {
 /// terminal daemon runs.
 #[test]
 fn reaper_sleeps_while_child_lives() {
+    let before = children();
     BigSubprocessSpec::builder()
         .program("sleep")
         .arg("2")
@@ -1051,18 +1092,22 @@ fn reaper_sleeps_while_child_lives() {
         .spawn_detached()
         .expect("spawn the helper");
     std::thread::sleep(std::time::Duration::from_millis(100));
-    let before = reaper_switches();
+    let switches = reaper_switches();
     std::thread::sleep(std::time::Duration::from_secs(1));
-    let woken = reaper_switches() - before;
+    let woken = reaper_switches() - switches;
     // A little room for the other tests of this binary, which launch detached
     // children of their own in parallel.
     assert!(
         woken <= 3,
         "the reaper woke {woken} times with nothing to reap"
     );
+    assert!(
+        !children().is_subset(&before),
+        "the child ended before the reaper's sleep was measured"
+    );
     for _ in 0..150 {
         std::thread::sleep(std::time::Duration::from_millis(20));
-        if children_in_state_zombie() == 0 && reaper_switches() > before {
+        if children().is_subset(&before) {
             return;
         }
     }
@@ -1091,25 +1136,24 @@ fn reaper_switches() -> u64 {
         .sum()
 }
 
-/// Zombie children of this process, counted from `/proc`.
-fn children_in_state_zombie() -> usize {
+/// The children of this process, running or zombies, from `/proc`.
+fn children() -> std::collections::HashSet<std::ffi::OsString> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
-        return 0;
+        return std::collections::HashSet::new();
     };
     entries
         .filter_map(Result::ok)
         .filter(|entry| {
-            let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
-                return false;
-            };
-            let mine = status
-                .lines()
-                .find_map(|line| line.strip_prefix("PPid:"))
-                .and_then(|ppid| ppid.trim().parse::<u32>().ok())
-                == Some(std::process::id());
-            mine && status.contains("State:\tZ")
+            std::fs::read_to_string(entry.path().join("status")).is_ok_and(|status| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix("PPid:"))
+                    .and_then(|ppid| ppid.trim().parse::<u32>().ok())
+                    == Some(std::process::id())
+            })
         })
-        .count()
+        .map(|entry| entry.file_name())
+        .collect()
 }
 
 /// A child asked to stop on SIGINT does, even from a process that ignores it,
@@ -1393,7 +1437,8 @@ fn child_runs_at_asked_niceness() {
             .expect("a niceness")
     };
     let own = rustix::process::getpriority_process(None).expect("own niceness");
-    assert_eq!(niceness(own + 5), own + 5);
+    // Linux holds niceness at 19.
+    assert_eq!(niceness(own + 5), (own + 5).min(19));
     assert_eq!(niceness(own - 1), own, "never made less nice");
 }
 
