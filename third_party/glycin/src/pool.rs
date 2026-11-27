@@ -318,7 +318,7 @@ mod tests {
             ..PoolConfig::default()
         });
         let cancellable = gio::Cancellable::new();
-        let (pooled, process) = glib::MainContext::new().block_on(async {
+        let (pooled, process) = crate::util::block_on(async {
             let mut loader = crate::Loader::new_bytes(glib::Bytes::from_static(SVG));
             loader.pool(pool.clone()).cancellable(cancellable.clone());
             let image = loader.load().await.expect("load");
@@ -350,7 +350,7 @@ mod tests {
             loader_retention_time: retention,
             ..PoolConfig::default()
         });
-        let process = glib::MainContext::new().block_on(async {
+        let process = crate::util::block_on(async {
             let editor = crate::api_common::spin_up_encoder(
                 crate::MimeType::PNG,
                 pool.clone(),
@@ -375,7 +375,7 @@ mod tests {
         });
         // A caller that keeps its cancellable after the load finished.
         let cancellable = gio::Cancellable::new();
-        let process = glib::MainContext::new().block_on(async {
+        let process = crate::util::block_on(async {
             let mut loader = crate::Loader::new_bytes(glib::Bytes::from_static(SVG));
             loader.pool(pool.clone()).cancellable(cancellable.clone());
             let image = loader.load().await.expect("load");
