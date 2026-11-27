@@ -79,6 +79,37 @@ fn storage(path: &str, name: &str) -> Storage {
     }
 }
 
+/// A phone that sends no `multiPaths` gets the keys KDE Connect's sftp plugin
+/// builds for it: the mount point as "All files", and its camera folder.
+#[test]
+fn whole_phone_storage_holds_plain_folders() {
+    let named = |key: &str, name: &str| {
+        (
+            key.to_owned(),
+            OwnedValue::try_from(Value::from(name)).expect("a string value"),
+        )
+    };
+    let storages = storages_at(
+        Path::new("/m"),
+        HashMap::from([
+            named("/m", "All files"),
+            named("/m/DCIM/Camera", "Camera pictures"),
+            named("/m/../etc", "Climbs out"),
+        ]),
+    );
+    assert_eq!(
+        storages,
+        [
+            storage("/m", "All files"),
+            storage("/m/DCIM/Camera", "Camera pictures")
+        ]
+    );
+    assert_eq!(
+        place(&storages, Path::new("Music")),
+        Some(PathBuf::from("/m/Music"))
+    );
+}
+
 #[test]
 fn storage_name_selects_its_storage() {
     let storages = [
