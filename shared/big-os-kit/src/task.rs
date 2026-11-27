@@ -178,8 +178,8 @@ impl BigTaskSignal {
 
     /// Register the hard-cancel hook fired after the deadline.
     ///
-    /// If the token is already cancelled, the hook is still honored and is
-    /// scheduled from this call.
+    /// If the token is already cancelled, the hook still fires: when the
+    /// deadline already running passes, else one deadline after this call.
     ///
     /// # Examples
     ///
