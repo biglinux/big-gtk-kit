@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  # The author cannot approve or resolve by command; another reviewer can.
+  auto_approvals:
+    enabled: true
+    allow_author_approval: false

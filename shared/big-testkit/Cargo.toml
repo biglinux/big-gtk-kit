@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 BigLinux contributors
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "big-testkit"
+version = "0.1.0"
+publish = false # dev-only leak/harness helpers; consumed via dev-dependency, never crates.io
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Test harness: finalization census in the private session, RSS-slope leak verdicts, main-loop stall checks and the AT-SPI view of the process"
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+adw = { workspace = true }
+gtk = { workspace = true }
+glib = { workspace = true }
+big-os-kit = { workspace = true }
+big-relm4-components = { workspace = true }
+
+[lints]
+workspace = true
