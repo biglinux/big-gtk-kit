@@ -30,9 +30,10 @@ thread_local! {
 ///
 /// # Safety
 ///
-/// The connection and every object made through it are used only while
-/// `display` is open: closing it disconnects the `wl_display` the connection
-/// wraps, and a clone kept past that reaches freed memory.
+/// The connection and every object made through it are dropped before
+/// `display` closes: closing it disconnects the `wl_display` the connection
+/// wraps, and a clone kept past that reaches freed memory. The copy this
+/// module keeps goes on the display's `closed` signal.
 #[must_use]
 pub unsafe fn connection(display: &WaylandDisplay) -> Option<Connection> {
     let raw = display.wl_display_raw()?.as_ptr();
@@ -48,6 +49,9 @@ pub unsafe fn connection(display: &WaylandDisplay) -> Option<Connection> {
             unsafe { wayland_backend::sys::client::Backend::from_foreign_display(raw.cast()) };
         let connection = Connection::from_backend(backend);
         *kept = Some((raw as usize, connection.clone()));
+        // GTK says `closed` before it disconnects the display: the backend
+        // must not outlive the `wl_display` it wraps.
+        display.connect_closed(|_, _| CONNECTION.with_borrow_mut(|kept| *kept = None));
         Some(connection)
     })
 }
@@ -69,4 +73,26 @@ pub unsafe fn surface(surface: &WaylandSurface) -> Option<WlSurface> {
     // caller uses the proxy only while it lives.
     let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), raw.as_ptr().cast()) }.ok()?;
     WlSurface::from_id(&connection, id).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The connection this module keeps goes when its display closes, before
+    /// GTK disconnects the `wl_display` it wraps.
+    #[test]
+    fn closed_display_drops_kept_connection() {
+        big_testkit::harness::require_gtk_test(|| {
+            let name = std::env::var("WAYLAND_DISPLAY").expect("a Wayland session");
+            let display = gtk::gdk::Display::open(Some(&name))
+                .and_downcast::<WaylandDisplay>()
+                .expect("a second Wayland display");
+            // SAFETY: the connection is dropped before the display closes.
+            drop(unsafe { connection(&display) }.expect("a connection"));
+            assert!(CONNECTION.with_borrow(Option::is_some));
+            display.close();
+            assert!(CONNECTION.with_borrow(Option::is_none));
+        });
+    }
 }
