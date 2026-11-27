@@ -1,0 +1,41 @@
+[package]
+name = "big-relm4-components"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reusable Relm4/libadwaita components for BigLinux applications"
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["relm4", "gtk4", "libadwaita", "components", "biglinux"]
+categories = ["gui"]
+
+[dependencies]
+big-gtk-kit = { workspace = true }
+# The same cairo GTK already uses, declared here only for its `png` feature:
+cairo-rs = { workspace = true, features = ["png"] }
+qrcodegen = { workspace = true }
+# GTK's Wayland display and surfaces, as wayland-client objects (`wayland`).
+gdk4-wayland = { workspace = true, features = ["v4_12"] }
+# Objects on GTK's display through a connection of this module's own (`wayland`).
+wayland-client = { workspace = true }
+wayland-backend = { workspace = true, features = ["client_system"] }
+log = { workspace = true }
+adw.workspace = true
+gtk.workspace = true
+relm4.workspace = true
+# Icons and illustrations decoded in the image sandbox.
+big-image = { workspace = true }
+big-os-kit = { workspace = true }
+
+[dev-dependencies]
+big-testkit = { workspace = true }
+
+[package.metadata.cargo-machete]
+# Declared only for its `png` feature; the code reaches it as `gtk::cairo`.
+ignored = ["cairo-rs"]
+
+[lints]
+workspace = true
