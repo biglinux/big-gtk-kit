@@ -789,7 +789,8 @@ PROCESS_OBJECT = (
 def dropped_result(text: str, line_start: int, call_end: int) -> bool:
     """Whether a statement starts at `line_start` and ends after the call that
     ends at `call_end`: what the call returns goes nowhere."""
-    before = text[:line_start].rstrip()
+    # the statement's own outer attributes (`#[cfg(unix)]`) come before its start
+    before = re.sub(r"(?:#\[[^\[\]]*\]\s*)+\Z", "", text[:line_start]).rstrip()
     starts_here = not before or before[-1] in ";{}"
     return starts_here and text[call_end:].lstrip().startswith(";")
 

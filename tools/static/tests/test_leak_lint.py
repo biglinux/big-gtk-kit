@@ -700,6 +700,16 @@ class ProcessObjectHandlers(unittest.TestCase):
             }
         """),
         )
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn install(parent: &gtk::Widget) {
+                #[cfg(unix)]
+                #[allow(unused)]
+                parent.clipboard().connect_changed(|_| {});
+            }
+        """),
+        )
 
     def test_kept_id_and_main_are_fine(self):
         self.assertEqual(
@@ -715,6 +725,10 @@ class ProcessObjectHandlers(unittest.TestCase):
                 let handler =
                     gio::NetworkMonitor::default().connect_network_changed(move |_, _| {});
                 self.once_online.replace(Some(handler));
+            }
+            fn indexed(parent: &gtk::Widget, handlers: &mut [SignalHandlerId]) {
+                handlers[0] = parent.widgets()[0]
+                    .clipboard().connect_changed(|_| {});
             }
             fn init(sender: Sender) -> Model {
                 Model {
