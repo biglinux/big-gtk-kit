@@ -558,8 +558,14 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     if not closure:
         return set()  # a function path: captures nothing
     pre, body = arg[: closure.start()], arg[closure.end() :]
-    body = re.sub(r'"(?:\\.|[^"\\])*"', '""', body)  # words in strings are not names
-    body = re.sub(r"/\*.*?\*/|//[^\n]*", " ", body, flags=re.DOTALL)  # nor in comments
+    # Words in strings and comments are not names; one pass, so a quote inside
+    # a comment opens no string.
+    body = re.sub(
+        r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*',
+        lambda m: '""' if m.group().startswith('"') else " ",
+        body,
+        flags=re.DOTALL,
+    )
     params = set(re.findall(r"\b([a-z_]\w*)\b", closure.group(2)))
     # Each pattern inside the body (let, for, inner closure, match arm) as
     # (start, end, where its names start and stop shadowing the outer ones).
