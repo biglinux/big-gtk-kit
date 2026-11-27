@@ -76,9 +76,10 @@ pub struct HoverCards {
     hovered: Option<usize>,
     /// What the running timer does: open this row's card, or close.
     settle_to: Option<usize>,
-    /// Whether a timer runs, or fired and its [`CardEvent::Settled`] waits: an
-    /// owner that queues events may hand one over after a cancel, or after the
-    /// next timer was armed, which [`OnceTimer::is_pending`] tells.
+    /// True from arming until the timer's [`CardEvent::Settled`] is acted on or
+    /// the timer is cancelled. An owner that queues events may hand one over
+    /// late, and [`OnceTimer::is_pending`] alone cannot tell a fired timer whose
+    /// event waits from a cancelled one.
     settling: bool,
     timer: OnceTimer,
     emit: Rc<dyn Fn(CardEvent)>,

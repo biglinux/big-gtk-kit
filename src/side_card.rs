@@ -12,7 +12,7 @@
 //!
 //! The widgets' handlers only report [`CardEvent`]s; the owner passes them
 //! back to [`SideCards::handle`] once the handler that reported one returns,
-//! so no handler holds a widget: a choice is reported before the tile's own
+//! so no handler holds a widget. A choice is reported before the tile's own
 //! click picks it. Callers pass every string already translated.
 
 use std::rc::Rc;

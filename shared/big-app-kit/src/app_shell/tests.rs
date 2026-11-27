@@ -599,7 +599,7 @@ fn boot_leaves_toolkit_alone() {
 fn command_line_keeps_double_dash() {
     for arguments in [
         vec!["appkit-dash", "--", "echo", "x"],
-        vec!["appkit-dash", "-e", "echo", "--", "-x"],
+        vec!["appkit-dash", "file", "--", "echo"],
         vec!["appkit-dash", "-e", "echo", "x"],
     ] {
         let received = Rc::new(RefCell::new(Vec::<OsString>::new()));
