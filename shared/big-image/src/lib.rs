@@ -204,13 +204,13 @@ pub enum BigImageFit {
     ScaleDown,
 }
 
-/// One load request: a file plus an optional pixel bound.
+/// One load request: a file plus the pixel bound it is decoded within.
 #[derive(Debug, Clone)]
 pub struct BigImageSpec {
     /// Source file.
     pub path: PathBuf,
-    /// Bounding box in device pixels (aspect preserved). `None` = natural
-    /// size. Multiply logical size by the widget's `scale_factor()` for
+    /// Bounding box in device pixels (aspect preserved). Every decode refuses
+    /// `None`. Multiply logical size by the widget's `scale_factor()` for
     /// crisp HiDPI output.
     pub bound: Option<(i32, i32)>,
     /// Source sub-rectangle to decode, in natural pixels `(x, y, w, h)`. `None`
@@ -230,17 +230,6 @@ pub struct BigImageSpec {
 pub(crate) const THUMBNAIL_NICE: i32 = 10;
 
 impl BigImageSpec {
-    /// Load `path` at its natural size.
-    #[must_use]
-    pub fn natural(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            bound: None,
-            clip: None,
-            thumbnail: false,
-        }
-    }
-
     /// Load `path` bounded by `width`×`height` device pixels.
     #[must_use]
     pub fn bounded(path: impl Into<PathBuf>, width: i32, height: i32) -> Self {

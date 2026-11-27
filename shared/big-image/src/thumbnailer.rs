@@ -101,10 +101,10 @@ pub fn registry() -> &'static [Thumbnailer] {
 
 /// Whether the installed image loaders decode `mime` themselves.
 ///
-/// Read from glycin's own `conf.d` lists, in every data directory: a picture
-/// type they do not claim (DjVu, Photoshop, a camera's raw format) goes to a
-/// thumbnailer instead of failing in the decoder and being remembered as a
-/// file with no picture.
+/// Asked of glycin, which answers from the loader lists it decodes with: a
+/// picture type they do not claim (DjVu, Photoshop, a camera's raw format) goes
+/// to a thumbnailer instead of failing in the decoder and being remembered as
+/// a file with no picture. Blocking the first time: glycin reads its lists.
 #[must_use]
 pub fn image_decoder_claims(mime: &str) -> bool {
     image_decoder_types().iter().any(|claimed| claimed == mime)
@@ -113,30 +113,12 @@ pub fn image_decoder_claims(mime: &str) -> bool {
 fn image_decoder_types() -> &'static [String] {
     static CLAIMED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     CLAIMED.get_or_init(|| {
-        let mut claimed = Vec::new();
-        for base in glib::system_data_dirs() {
-            let Ok(versions) = std::fs::read_dir(base.join("glycin-loaders")) else {
-                continue;
-            };
-            for version in versions.flatten() {
-                let Ok(lists) = std::fs::read_dir(version.path().join("conf.d")) else {
-                    continue;
-                };
-                for list in lists.flatten() {
-                    let Ok(text) = std::fs::read_to_string(list.path()) else {
-                        continue;
-                    };
-                    claimed.extend(text.lines().filter_map(|line| {
-                        line.strip_prefix("[loader:")?
-                            .strip_suffix(']')
-                            .map(str::to_owned)
-                    }));
-                }
-            }
-        }
-        claimed.sort();
-        claimed.dedup();
-        claimed
+        crate::glycin_threads();
+        glib::MainContext::new()
+            .block_on(glycin::Loader::supported_mime_types())
+            .into_iter()
+            .map(|mime| mime.as_str().to_owned())
+            .collect()
     })
 }
 
@@ -336,9 +318,13 @@ pub fn sandbox_works() -> bool {
         let Some(staging) = private_staging() else {
             return false;
         };
+        // Mounted by descriptor, as every render mounts its file.
+        let Some(source) = open_source(Path::new("/usr/bin/true")) else {
+            return false;
+        };
         sandboxed_command(
             &["/usr/bin/true"],
-            SandboxSource::Path(Path::new("/usr/bin/true")),
+            SandboxSource::Descriptor(source),
             staging.path(),
         )
         .run()
@@ -451,6 +437,46 @@ pub(crate) mod tests {
         TryExec=/usr/bin/true\n\
         Exec=/usr/bin/true -s %s %u %o\n\
         MimeType=application/pdf;image/vnd.djvu;\n";
+
+    /// The image types counted as decoded are those of the lists glycin
+    /// reads: with `GLYCIN_DATA_DIR` set, that directory's alone.
+    #[test]
+    fn decoder_claims_follow_glycin() {
+        const CHILD: &str = "BIG_IMAGE_CHILD_GLYCIN_CLAIMS";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(image_decoder_claims("image/webp"));
+            assert!(!image_decoder_claims("image/png"));
+            return;
+        }
+        let glycin_data =
+            std::env::temp_dir().join(format!("big-image-claims-{}", std::process::id()));
+        let lists = glycin_data.join("glycin-loaders/2+/conf.d");
+        std::fs::create_dir_all(&lists).unwrap();
+        std::fs::write(
+            lists.join("webp.conf"),
+            "[loader:image/webp]\nExec=/usr/bin/true\n",
+        )
+        .unwrap();
+        let out = big_os_kit::subprocess::BigSubprocessSpec::builder()
+            .program(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "thumbnailer::tests::decoder_claims_follow_glycin",
+                "--quiet",
+            ])
+            .env(CHILD, "1")
+            .env("GLYCIN_DATA_DIR", &glycin_data)
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .run();
+        std::fs::remove_dir_all(&glycin_data).unwrap();
+        let out = out.unwrap();
+        assert!(
+            out.status.success() && out.stdout_lossy().contains("1 passed"),
+            "{}",
+            out.stdout_lossy()
+        );
+    }
 
     #[test]
     fn entry_fills_its_placeholders() {
