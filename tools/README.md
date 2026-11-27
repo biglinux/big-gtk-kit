@@ -26,21 +26,32 @@ accessibility bus and a throwaway HOME, which is what the sweep needs.
 
     static/leak_lint.py [--json] [--no-icons] [--errors-only | --strict] PATH...
 
-Errors (exit 1): `unparent()` inside the popover's own `closed` handler,
-closing a window by watching `destroy`, `set_parent` without `unparent`, a
-`teardown` that reads the list item's child, an icon with an embedded image (in
-the themes installed on the machine running the checker). Warnings: a handler
-that holds its own widget or an ancestor (also through a closure kept in an
-`Rc`, a child set by a builder, or a controller), siblings that hold each
-other, follower lists pruned too late, a handler on an object that lives as
-long as the process (the display clipboard, `VolumeMonitor`, the application
-seen from a component) with its id thrown away, a repeating GLib source
-(`timeout_add*`, `idle_add*`, not `_once`) whose id is thrown away and whose
-closure can return `Continue` but never `Break` when a weak reference fails to
-upgrade. `--strict` fails on warnings too, which is what a gate runs: a warning
-is fixed or waived. Reads `.rs` files only; test code is ignored and an
-unreadable file is skipped with a warning. A path that is neither a `.rs` file
-nor a directory is a usage error (exit 2), so a mistyped path fails the gate.
+Errors (exit 1):
+
+- `unparent()` inside the popover's own `closed` handler;
+- closing a window by watching `destroy`;
+- `set_parent` without `unparent`;
+- a `teardown` that reads the list item's child;
+- an icon with an embedded image (in the themes installed on the machine
+  running the checker).
+
+Warnings:
+
+- a handler that holds its own widget or an ancestor (also through a closure
+  kept in an `Rc`, a child set by a builder, or a controller);
+- siblings that hold each other;
+- follower lists pruned too late;
+- a handler on an object that lives as long as the process (the display
+  clipboard, `VolumeMonitor`, the application seen from a component) with its
+  id thrown away;
+- a repeating GLib source (`timeout_add*`, `idle_add*`, not `_once`) whose id
+  is thrown away and whose closure can return `Continue` but never `Break` when
+  a weak reference fails to upgrade.
+
+`--strict` fails on warnings too, which is what a gate runs: a warning is fixed
+or waived. Reads `.rs` files only; test code is ignored and an unreadable file
+is skipped with a warning. A path that is neither a `.rs` file nor a directory
+is a usage error (exit 2), so a mistyped path fails the gate.
 
 A finding is waived with a reason; a waiver without one is an error:
 
@@ -53,21 +64,26 @@ A finding is waived with a reason; a waiver without one is an error:
 
 The driver starts the program with the census preloaded, waits for the app on
 the accessibility bus and, for each surface: warms up, takes census A, opens
-and closes it N times, takes census B and confirms with a second round. A type
-that gained at least one instance per cycle is a leak, unless an `[[allow]]`
-with a per-cycle ceiling and a reason covers it (in the file or in the
-surface). The process's threads (`Threads:` in `/proc/PID/status`) and open
-file descriptors are read with each census; they are exact, so any growth the
-second round repeats is a leak (`process threads`, `process file
-descriptors`). A surface whose open steps bring up no new window or dialog
-(within `open_timeout`, 5 s) is reported as not opened, and one whose count of
-windows and dialogs does not come back down (within `close_timeout`, 5 s) as not
-closed; their growth is listed, not judged. A surface that changes in place,
-opening no window or dialog, says `in_place = true`. A step that fails (a
-command's exit status, a D-Bus error, nothing to click) reports the surface as
-ERROR. Exit 0 clean; 1 leak, surface not opened or not closed, or ERROR; 2 did
-not run (incomplete file, missing program or `gdbus`); `LEAK_SWEEP_DIR` chooses
-where the censuses and the program log go.
+and closes it N times, takes census B and confirms with a second round.
+
+- A type that gained at least one instance per cycle is a leak, unless an
+  `[[allow]]` with a per-cycle ceiling and a reason covers it (in the file or in
+  the surface).
+- The process's threads (`Threads:` in `/proc/PID/status`) and open file
+  descriptors are read with each census; they are exact, so any growth the
+  second round repeats is a leak (`process threads`, `process file
+  descriptors`).
+- A surface whose open steps bring up no new window or dialog (within
+  `open_timeout`, 5 s) is reported as not opened, and one whose count of windows
+  and dialogs does not come back down (within `close_timeout`, 5 s) as not
+  closed; their growth is listed, not judged. A surface that changes in place,
+  opening no window or dialog, says `in_place = true`.
+- A step that fails (a command's exit status, a D-Bus error, nothing to click)
+  reports the surface as ERROR.
+
+Exit 0 clean; 1 leak, surface not opened or not closed, or ERROR; 2 did not run
+(incomplete file, missing program or `gdbus`). `LEAK_SWEEP_DIR` chooses where
+the censuses and the program log go.
 
 `command` must execute the GTK program itself: the driver asks the process it
 started for a census by signal, and an intermediate script would receive the
