@@ -108,6 +108,10 @@ fn orientation_offset(tiff: &[u8]) -> Option<usize> {
             u32::from_le_bytes(quad)
         })
     };
+    // The magic 42 is what tells a TIFF header from two coincidental letters.
+    if u16_at(2)? != 42 {
+        return None;
+    }
     let directory = usize::try_from(u32_at(4)?).ok()?;
     let count = usize::from(u16_at(directory)?).min(MAX_ENTRIES);
     // One SHORT is held in the entry itself; more are elsewhere, at an offset.
@@ -253,6 +257,18 @@ mod tests {
         );
         jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
         assert_eq!(turned_jpeg(&jpeg, 1, false), None);
+    }
+
+    #[test]
+    fn exif_without_tiff_magic_refused() {
+        let once = turned_jpeg(&plain_jpeg(), 1, false).expect("rewritten");
+        let magic = once
+            .windows(4)
+            .position(|window| window == b"II\x2a\0")
+            .expect("a TIFF header");
+        let mut broken = once;
+        broken[magic + 2] = 43;
+        assert_eq!(turned_jpeg(&broken, 1, false), None);
     }
 
     /// What is not a JPEG, or is cut short, is refused; it never panics.
