@@ -262,17 +262,29 @@ fn abandoned_staging_on_share_stays() {
         .set_modified(left)
         .unwrap();
     fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+    let id = rustix::fs::statx(
+        rustix::fs::CWD,
+        &parent,
+        AtFlags::empty(),
+        rustix::fs::StatxFlags::MNT_ID,
+    )
+    .unwrap()
+    .stx_mnt_id;
     let point = fs::canonicalize(&parent)
         .unwrap()
         .to_string_lossy()
         .replace(' ', "\\040");
-    let share = format!("36 25 0:53 / {point} rw,relatime - nfs4 server:/export rw\n");
+    let share = format!("{id} 25 0:53 / {point} rw,relatime - nfs4 server:/export rw\n");
 
     remove_abandoned(&parent, ".stage", &share);
     let kept = staging.exists();
     remove_abandoned(&parent, ".stage", "");
     let kept_unread = staging.exists();
-    remove_abandoned(&parent, ".stage", "22 1 0:21 / / rw - btrfs /dev/sda2 rw\n");
+    remove_abandoned(
+        &parent,
+        ".stage",
+        &format!("{id} 1 0:21 / / rw - btrfs /dev/sda2 rw\n"),
+    );
 
     assert!(kept);
     assert!(
