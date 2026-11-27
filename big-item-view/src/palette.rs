@@ -140,9 +140,12 @@ itemheader > button:active > box { color: currentColor; }
 /// Between the settings (400) and the application (600).
 const DEFAULT_PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_APPLICATION - 100;
 
-/// Give the display the defaults, once.
+/// Give every open display the defaults, once each: a view constructed before
+/// it joins a window may be realized on any of them.
 pub(crate) fn install_defaults() {
-    big_gtk_kit::css::install(DEFAULT_CSS, DEFAULT_PRIORITY);
+    for display in gdk::DisplayManager::get().list_displays() {
+        big_gtk_kit::css::install_for_display(&display, DEFAULT_CSS, DEFAULT_PRIORITY);
+    }
 }
 
 /// The colors read on one frame.
@@ -273,5 +276,41 @@ impl Probe {
         probe.set_can_target(false);
         probe.set_can_focus(false);
         probe
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    struct Blank;
+
+    impl crate::ItemPresenter for Blank {
+        fn content(&self, _position: u32, _item: &glib::Object, _out: &mut crate::ItemContent) {}
+    }
+
+    /// A view on a second display draws with the defaults there too.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn defaults_reach_the_views_display() {
+        let name = gdk::Display::default().expect("a display").name();
+        let other = gdk::Display::open(Some(&name)).expect("a second display");
+        let view = crate::ItemView::new(Rc::new(Blank), crate::Geometry::grid(100, 48));
+        let window = gtk::Window::builder().display(&other).child(&view).build();
+        window.present();
+        let probes = Probes::new(&view);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let context = glib::MainContext::default();
+        while probes.read().get(Role::TextDim).alpha() > 0.9 && Instant::now() < deadline {
+            while context.iteration(false) {}
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!((probes.read().get(Role::TextDim).alpha() - 0.7).abs() < 0.01);
+        probes.unparent();
+        window.destroy();
+        other.close();
     }
 }
