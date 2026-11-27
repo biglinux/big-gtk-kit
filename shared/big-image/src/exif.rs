@@ -546,6 +546,10 @@ mod tests {
         tiff[28..30].copy_from_slice(&0x0111u16.to_le_bytes());
         tiff[40..42].copy_from_slice(&0x0117u16.to_le_bytes());
         assert_eq!(upright(&tiff), None);
+        // Two strips: the entries list their offsets and counts elsewhere.
+        tiff[32..36].copy_from_slice(&2u32.to_le_bytes());
+        tiff[44..48].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
     }
 
     /// Deterministic xorshift: enough randomness for a mutation sweep.
