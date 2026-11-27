@@ -115,8 +115,15 @@ fn show_whole(label: &gtk::Label) {
 }
 
 /// Wrapped in the open list, one line on the row: the same factory draws both.
+/// The list is the popover inside the row, not one the row itself sits in.
 fn fit_where_shown(label: &gtk::Label) {
-    let in_list = label.ancestor(gtk::Popover::static_type()).is_some();
+    let in_list = match (
+        label.ancestor(gtk::Popover::static_type()),
+        label.ancestor(adw::ComboRow::static_type()),
+    ) {
+        (Some(popover), Some(row)) => popover.is_ancestor(&row),
+        _ => false,
+    };
     label.set_wrap(in_list);
     if in_list {
         label.set_ellipsize(gtk::pango::EllipsizeMode::None);
@@ -266,6 +273,44 @@ mod tests {
                 assert_named(&list, &[c"Light", c"Dark"]);
                 window.destroy();
             }
+        });
+    }
+
+    /// A row inside another popover still shows its choice on one line; only
+    /// its own open list wraps.
+    #[test]
+    fn row_in_popover_keeps_one_line() {
+        big_testkit::harness::require_gtk_test(|| {
+            let long = "A choice far longer than the row's twenty characters";
+            let row = choice_row("Theme", &[long]);
+            let list = gtk::ListBox::new();
+            list.append(&row);
+            let outer = gtk::Popover::builder().child(&list).build();
+            let button = gtk::MenuButton::builder().popover(&outer).build();
+            let window = gtk::Window::builder().child(&button).build();
+            window.present();
+            big_testkit::harness::pump();
+            let label_in = |popover: &gtk::Widget| {
+                descendants(row.upcast_ref::<gtk::Widget>())
+                    .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                    .find(|label| {
+                        label.label().as_str() == long
+                            && label.ancestor(gtk::Popover::static_type()).as_ref()
+                                == Some(popover)
+                    })
+            };
+            let shown = label_in(outer.upcast_ref()).expect("the chosen label on the row");
+            assert!(!shown.wraps());
+            assert_eq!(shown.ellipsize(), gtk::pango::EllipsizeMode::End);
+
+            button.popup();
+            assert!(big_testkit::harness::pump_until(|| outer.is_mapped()));
+            gtk::prelude::WidgetExt::activate(&row);
+            let own = first_descendant::<gtk::Popover>(row.upcast_ref()).expect("popup");
+            let own = own.upcast::<gtk::Widget>();
+            assert!(big_testkit::harness::pump_until(|| label_in(&own).is_some()));
+            assert!(label_in(&own).is_some_and(|label| label.wraps()));
+            window.destroy();
         });
     }
 
