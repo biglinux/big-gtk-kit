@@ -60,11 +60,11 @@ disallowed-methods = [
     { path = "gtk4::builders::ScaleBuilder::build", reason = "takes every wheel turn over it, so scrolling a page moves the slider; pass the builder to `big_gtk_kit::slider::build`" },
     # The default factories of a choice list leave each choice unnamed for a
     # screen reader, and libadwaita's cuts each one at 20 characters.
-    { path = "libadwaita::ComboRow::new", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass `adw::ComboRow::builder()` to `big_relm4_components::input::dropdown::build`" },
-    { path = "libadwaita::builders::ComboRowBuilder::build", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass the builder to `big_relm4_components::input::dropdown::build`" },
-    { path = "gtk4::DropDown::new", reason = "leaves every choice unnamed for a screen reader; pass `gtk::DropDown::builder()` to `big_relm4_components::input::dropdown::build_drop_down`" },
-    { path = "gtk4::DropDown::from_strings", reason = "leaves every choice unnamed for a screen reader; use `big_relm4_components::input::dropdown::from_strings`" },
-    { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_relm4_components::input::dropdown::build_drop_down`" },
+    { path = "libadwaita::ComboRow::new", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass `adw::ComboRow::builder()` to `big_gtk_kit::dropdown::build`" },
+    { path = "libadwaita::builders::ComboRowBuilder::build", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build`" },
+    { path = "gtk4::DropDown::new", reason = "leaves every choice unnamed for a screen reader; pass `gtk::DropDown::builder()` to `big_gtk_kit::dropdown::build_drop_down`" },
+    { path = "gtk4::DropDown::from_strings", reason = "leaves every choice unnamed for a screen reader; use `big_gtk_kit::dropdown::from_strings`" },
+    { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build_drop_down`" },
     # An insensitive button cannot be picked, so a double-click on it lands on
     # the handle around it and maximizes the window.
     { path = "gtk4::WindowHandle::new", reason = "a double-click on an insensitive button inside it maximizes the window; pass `gtk::WindowHandle::builder()` to `big_relm4_components::layout::window_handle::build`" },

@@ -36,11 +36,11 @@ disallowed-methods = [
     { path = "gtk4::CssProvider::new", reason = "answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` as light and no preference whatever the system says; use `big_gtk_kit::css::provider`" },
     { path = "gtk4::style_context_add_provider_for_display", reason = "the display keeps every provider it is given; add a fixed sheet once with `big_gtk_kit::css::install`, one that changes with `big_gtk_kit::css::DisplaySheet`, or one tied to a widget with `big_gtk_kit::css::add_provider_for_widget_lifetime`" },
     { path = "gio::Menu::append_section", reason = "GTK 4.22's menu tracker keeps every section it shows; use `big_gtk_kit::menu::append_shared_section`, or `append_refilled_section` for items that vary per build" },
-    { path = "libadwaita::ComboRow::new", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass `adw::ComboRow::builder()` to `big_relm4_components::input::dropdown::build`" },
-    { path = "libadwaita::builders::ComboRowBuilder::build", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass the builder to `big_relm4_components::input::dropdown::build`" },
-    { path = "gtk4::DropDown::new", reason = "leaves every choice unnamed for a screen reader; pass `gtk::DropDown::builder()` to `big_relm4_components::input::dropdown::build_drop_down`" },
-    { path = "gtk4::DropDown::from_strings", reason = "leaves every choice unnamed for a screen reader; use `big_relm4_components::input::dropdown::from_strings`" },
-    { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_relm4_components::input::dropdown::build_drop_down`" },
+    { path = "libadwaita::ComboRow::new", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass `adw::ComboRow::builder()` to `big_gtk_kit::dropdown::build`" },
+    { path = "libadwaita::builders::ComboRowBuilder::build", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build`" },
+    { path = "gtk4::DropDown::new", reason = "leaves every choice unnamed for a screen reader; pass `gtk::DropDown::builder()` to `big_gtk_kit::dropdown::build_drop_down`" },
+    { path = "gtk4::DropDown::from_strings", reason = "leaves every choice unnamed for a screen reader; use `big_gtk_kit::dropdown::from_strings`" },
+    { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build_drop_down`" },
 ]
 disallowed-types = [
     { path = "libadwaita::InlineViewSwitcher", reason = "leaks a widget tree per page (libadwaita 1.9); use `big_gtk_kit::view_switcher::toggles_for` over a `gtk::Stack`" },

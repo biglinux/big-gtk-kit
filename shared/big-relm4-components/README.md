@@ -95,5 +95,6 @@ row of a setting or form. Pass translated plain-text labels;
 use the returned `AdwComboRow` directly for selection and change notifications.
 Its explicit combo-box role exposes the selector to AT-SPI. Every choice row and
 drop-down of the suite is built by `input::dropdown::build`,
-`build_drop_down` or `from_strings`, which name each choice for a screen reader;
-`clippy.toml` bans the stock constructors.
+`build_drop_down`, `from_strings` or `named_drop_down`, which name each choice
+for a screen reader; they live in `big_gtk_kit::dropdown`, so a program without
+this crate builds them too, and `clippy.toml` bans the stock constructors.

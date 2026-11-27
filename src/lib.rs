@@ -12,6 +12,7 @@ pub mod breakpoint;
 pub mod css;
 pub mod dialog;
 pub mod directory;
+pub mod dropdown;
 pub mod file_dialog;
 pub mod focus;
 pub mod hover_card;
