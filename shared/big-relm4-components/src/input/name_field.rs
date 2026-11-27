@@ -3,6 +3,7 @@
 
 //! A new name for a file or folder, typed into an entry.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -26,7 +27,11 @@ pub fn refuse_name_as_typed(
 ) {
     let current = current.to_owned();
     let (refusal, taken, acceptable) = (refusal.clone(), Rc::new(taken), Rc::new(acceptable));
+    // Counts the edits, so a lookup answers only for the last one.
+    let edits = Rc::new(Cell::new(0_u64));
     entry.connect_changed(move |entry| {
+        let edit = edits.get() + 1;
+        edits.set(edit);
         let wanted = entry.text().trim().to_owned();
         let refused = big_os_kit::file_name::file_name_refusal(&wanted)
             .map(|refused| refused.words(&translate));
@@ -41,8 +46,8 @@ pub fn refuse_name_as_typed(
             return;
         };
         let child = folder.child(&wanted);
-        let (entry, refusal, taken, acceptable) = (
-            entry.downgrade(),
+        let (edits, refusal, taken, acceptable) = (
+            Rc::clone(&edits),
             refusal.clone(),
             Rc::clone(&taken),
             Rc::clone(&acceptable),
@@ -56,11 +61,7 @@ pub fn refuse_name_as_typed(
                 )
                 .await
                 .is_ok();
-            // Only for the name still in the field.
-            if !entry
-                .upgrade()
-                .is_some_and(|entry| entry.text().trim() == wanted)
-            {
+            if edits.get() != edit {
                 return;
             }
             // Only a file found refuses the name: a lookup failing otherwise
@@ -75,7 +76,6 @@ pub fn refuse_name_as_typed(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::path::{Path, PathBuf};
 
     use super::*;
@@ -117,15 +117,38 @@ mod tests {
                 Some(false),
                 "usable before the folder answered"
             );
+            let usable = || heard.get() == Some(true);
+            assert!(big_testkit::harness::pump_until(usable));
+            entry.set_text("taken.txt");
+            let refused = || refusal.line().is_visible();
+            assert!(big_testkit::harness::pump_until(refused));
+            assert_eq!(refusal.line().label(), "taken.txt is taken");
+            assert_eq!(heard.get(), Some(false));
+            std::fs::remove_dir_all(folder).unwrap();
+        });
+    }
+
+    /// An answer for an earlier edit of the same name, asked before the file
+    /// went away, does not refuse the name typed again.
+    #[test]
+    fn superseded_lookup_is_ignored() {
+        big_testkit::harness::require_gtk_test(|| {
+            let folder = scratch_folder("big-name-superseded");
+            std::fs::write(folder.join("a.txt"), "").unwrap();
+            let (entry, refusal, heard) = field_in(&folder);
+            entry.set_text("a.txt");
+            // The first lookup starts and finds the file, its answer not yet read.
+            glib::MainContext::default().iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            entry.set_text("b.txt");
+            std::fs::remove_file(folder.join("a.txt")).unwrap();
+            entry.set_text("a.txt");
             assert!(big_testkit::harness::pump_until(
                 || heard.get() == Some(true)
             ));
-            entry.set_text("taken.txt");
-            assert!(big_testkit::harness::pump_until(|| refusal
-                .line()
-                .is_visible()));
-            assert_eq!(refusal.line().label(), "taken.txt is taken");
-            assert_eq!(heard.get(), Some(false));
+            big_testkit::harness::pump();
+            assert!(!refusal.line().is_visible());
+            assert_eq!(heard.get(), Some(true));
             std::fs::remove_dir_all(folder).unwrap();
         });
     }
