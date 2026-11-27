@@ -650,7 +650,7 @@ impl BigShortcutEditor {
             accel: accel.to_owned(),
             default_accel: row.default_accel.clone(),
         }));
-        refresh_conflicts(&self.rows);
+        refresh_conflicts(&self.rows, &self.reservations, &self.labels.conflict);
     }
 
     fn commit_capture(
@@ -799,10 +799,20 @@ fn conflict_message(template: &str, owner: &str) -> String {
     template.replace("{owner}", owner)
 }
 
-fn refresh_conflicts(rows: &[BigShortcutRow]) {
-    for row in rows {
-        if conflict_action_for_rows(rows, &row.action, &row.current_accel).is_none() {
-            clear_conflict_text(row);
+/// Keep each refused reset's line while the row's default is still taken,
+/// naming whoever holds it now.
+fn refresh_conflicts(
+    rows: &[BigShortcutRow],
+    reservations: &[BigShortcutReservation],
+    template: &str,
+) {
+    let refused = rows
+        .iter()
+        .filter(|row| row.row.subtitle().is_some_and(|line| !line.is_empty()));
+    for row in refused {
+        match conflict_title(rows, reservations, &row.action, &row.default_accel) {
+            Some(owner) => set_conflict_text(row, template, &owner),
+            None => clear_conflict_text(row),
         }
     }
 }
@@ -1421,6 +1431,33 @@ mod tests {
                 next.row.subtitle().as_deref(),
                 Some("“Play” already uses this shortcut.")
             );
+            window.destroy();
+        });
+    }
+
+    /// A refused reset stays explained while another row changes, and clears
+    /// once its default is free.
+    #[test]
+    fn reset_refusal_outlives_unrelated_edit() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, _) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("play".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("n".to_owned()));
+            editor.emit(BigShortcutEditorInput::ReplaceConflict);
+            editor.emit(BigShortcutEditorInput::Reset("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::BeginCapture("zoom-in".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("<Ctrl>z".to_owned()));
+            big_testkit::harness::pump();
+            let subtitle = || editor.model().rows[1].row.subtitle();
+            assert_eq!(
+                subtitle().as_deref(),
+                Some("“Play” already uses this shortcut.")
+            );
+            editor.emit(BigShortcutEditorInput::BeginCapture("play".to_owned()));
+            editor.emit(BigShortcutEditorInput::CommitCapture("p".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(subtitle().as_deref(), Some(""));
             window.destroy();
         });
     }
