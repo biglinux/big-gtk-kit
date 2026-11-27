@@ -1227,8 +1227,8 @@ mod tests {
                 dir.join("secret"),
                 std::os::unix::fs::PermissionsExt::from_mode(0o777)
             )
-                .unwrap_err()
-                .kind(),
+            .unwrap_err()
+            .kind(),
             denied
         );
         assert_eq!(
