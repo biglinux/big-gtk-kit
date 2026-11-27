@@ -121,12 +121,16 @@ pub use {
     window_set::{BigSecondaryWindow, BigWindowSet, BigWorkspaceWindow},
 };
 
-/// Bind a product's own message catalog inside a shared host process.
+/// Look a product's messages up in its own catalog inside a shared host process.
 ///
 /// `setlocale` and `textdomain` are process-global, so in a multicall host the
 /// last product to claim the domain would answer for every other one. Resolving
 /// through `dgettext` keeps each product reading its own catalog no matter who
 /// booted the process, and costs nothing in a standalone binary.
+///
+/// The generated functions only look messages up: a hosted product binds its
+/// domain to its locale directory first, with [`GettextInit::bind_catalog`] or
+/// [`AppShellSpec::apply_to_running_process`].
 ///
 /// Invoke in the product's `i18n` module with the path to its domain constant,
 /// and add `, plural` when the product also counts things:
