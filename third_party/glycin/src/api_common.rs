@@ -47,16 +47,18 @@ impl SandboxMechanism {
 pub enum SandboxSelector {
     #[default]
     /// This mode selects `bwrap` outside of Flatpaks and usually
-    /// `flatpak-spawn` inside of Flatpaks. The sandbox is disabled
-    /// automatically inside of Flatpak development environments. See
-    /// details below.
+    /// `flatpak-spawn` inside of Flatpaks. Where neither can be used, it
+    /// selects [`SandboxMechanism::NotSandboxed`], whose loader confines itself
+    /// with seccomp and Landlock; without Landlock ABI 6 (Linux 6.12) the load
+    /// fails with [`Error::SandboxUnavailable`]. See details below.
     ///
     /// Inside of Flatpaks, `flatpak-spawn` is used to create the sandbox. This
     /// mechanism starts an installed Flatpak with the same app id. For
     /// development, Flatpak are usually not installed and the sandbox can
     /// therefore not be used. If the sandbox has been started via
     /// `flatpak-builder --run` (i.e. without installed Flatpak) and the app id
-    /// ends with `Devel`, the sandbox is disabled.
+    /// ends with `Devel`, the self-confined loader is used, and its Landlock
+    /// rules leave out the loaders under `/app`: no image loads.
     Auto,
     Bwrap,
     FlatpakSpawn,
