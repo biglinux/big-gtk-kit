@@ -18,7 +18,7 @@ looks glyphs up at `MAX (scale.width, scale.height)`, and
 Only under rotations and other transforms that are not a scale do they round
 the scale, up to the next power of two.
 
-`scale-animation-cache.patch` (5 files, +270 −14) applies on 4.24.1, alone or
+`scale-animation-cache.patch` (5 files, +371 −24) applies on 4.24.1, alone or
 after the other held patches. After glyph-scaled-font-leak it needs a three-way
 apply (`git apply -3` or `git am -3`, as the package uses), because both add the
 same include to `testsuite/gsk/misc.c`. It does not apply on main (b9cd9290d5
@@ -45,6 +45,14 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
   grid, so a mask made on the quarter pixel grid is never taken for a phase on
   the 1/32 one. Under rotations, where masks are rendered at the next power of
   two, they are snapped to that scale too instead of the frame's.
+- A fill or stroke too large for the atlas (over 254 pixels across at the scale
+  it is rendered at) is not cached and is rendered for its clipped bounds only.
+  Those bounds are snapped to the same grid as a cached mask. Taken as given,
+  as 4.24.1 does, they are aligned to the frame's pixels, not to the scale the
+  mask is rendered at, so between multiples the mask would be rendered at a
+  slightly different scale than it is placed at, and its far side would drift.
+  At a multiple of 1/120 it lands on the same pixels as before and can be one
+  pixel larger.
 - `testsuite/gsk/misc.c` gains `/renderer/gl/scaled-text`: "Abc" in the test
   suite's Cantarell, hinted as in the compare tests, renders the same pixels
   under a 1.003 scale as without it. It fails without the change. It opens a
@@ -57,6 +65,11 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
   when 1.006 fills it first, and filled at 121/120 after 1.003 as when 121/120
   fills it first. Each half fails without the change it checks. It opens a
   second display for the same reason.
+- `/renderer/gl/scaled-large-mask`: two circles 376 pixels apart at 1.003, and
+  378 apart in the mask rendered at 121/120, too large together for the atlas,
+  render the same pixels, filled and stroked. It fails without the snap of
+  uncached masks, in the fill and in the stroke. It opens a second display for
+  the same reason.
 
 Which scales count as at rest is decided by the scale alone, not by watching it
 change: the renderer draws only on damage, so the last frame of an animation
@@ -72,7 +85,7 @@ loaded through `LD_LIBRARY_PATH` and checked in `/proc/PID/maps`.
 `GDK_DEBUG=frames`. Memory from `smaps_rollup` in KiB, VRAM from `nvidia-smi`
 in MiB, the cache at the last periodic collection.
 
-These runs, and those under Same results, used this patch without the mask snap
+These runs, and those under Same results, used this patch without the mask snaps
 and cache key described under Change; with them, the fill, stroke and atlas
 counts and the pixel differences between steps can differ. They were not
 repeated.
@@ -140,6 +153,11 @@ outside the `clip` variant in both, among them `fill-subpixel-offsets-*-nocairo`
 in every variant but `opaque`, `rotate` included. 4 fail in the `clip` variant
 in each, which GTK marks failing; rerun alone, those differ from run to run
 with the change.
+
+`/renderer/gl/scaled-large-mask` passes on 4.24.1 with the four held patches,
+on the GTX 1660 Ti and on Mesa llvmpipe, and fails without the snap in
+`gskgpucachedfill.c` or in `gskgpucachedstroke.c` ("assertion failed": 20/255
+and 17/255 at the first differing byte); the rest of `misc` passes with it.
 
 ## Costs and risks
 
