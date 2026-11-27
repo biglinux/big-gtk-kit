@@ -94,7 +94,7 @@ pub fn render(
     if !output.status.success() || !page.is_file() {
         return Err(OfficePageFailure::Document);
     }
-    read_page(&page, bound).ok_or(OfficePageFailure::Document)
+    read_page(&page, bound)
 }
 
 /// LibreOffice's argv with `arguments` after the options every run shares.
@@ -128,23 +128,30 @@ fn overlay_mounts(template: &Path) -> Vec<std::ffi::OsString> {
 /// The page LibreOffice wrote, refused past [`MAX_PAGE_SIDE`], decoded in the
 /// image sandbox with no in-process fallback, and scaled to fit `bound`. The
 /// page came out of a process that read an untrusted file, and the sandbox
-/// costs little against LibreOffice's own run.
-fn read_page(page: &Path, bound: i32) -> Option<crate::BigRgbaImage> {
-    let file = big_os_kit::file_io::open_regular_no_follow(page).ok()?;
+/// costs little against LibreOffice's own run. A decoder that could not run
+/// says nothing of the document.
+fn read_page(page: &Path, bound: i32) -> Result<crate::BigRgbaImage, OfficePageFailure> {
+    let document = OfficePageFailure::Document;
+    let file = big_os_kit::file_io::open_regular_no_follow(page).map_err(|_| document)?;
     // The header alone: the rest is for the sandboxed decoder.
     let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
-    let header = decoder.read_header_info().ok()?;
+    let header = decoder.read_header_info().map_err(|_| document)?;
     if header.width > MAX_PAGE_SIDE || header.height > MAX_PAGE_SIDE {
-        return None;
+        return Err(document);
     }
-    let image =
-        crate::decode_rgba_sandboxed(&crate::BigImageSpec::thumbnail(page, bound, bound)).ok()?;
+    let image = crate::decode_rgba_sandboxed(&crate::BigImageSpec::thumbnail(page, bound, bound))
+        .map_err(|error| match error {
+        crate::BigImageError::ResourceLimit
+        | crate::BigImageError::SandboxUnavailable
+        | crate::BigImageError::WorkerGone => OfficePageFailure::Unavailable,
+        _ => document,
+    })?;
     // The bound is a hint the PNG decoder does not take.
     let (width, height) = crate::fit_within((image.width, image.height), (bound, bound));
     if (width, height) == (image.width, image.height) {
-        return Some(image);
+        return Ok(image);
     }
-    crate::resize_rgba(&image, width, height).ok()
+    crate::resize_rgba(&image, width, height).map_err(|_| document)
 }
 
 /// The profile and font cache every render starts from, made on first use.
@@ -247,7 +254,7 @@ mod tests {
     #[test]
     fn fifo_page_is_refused() {
         assert!(crate::thumbnailer::tests::refuses_fifo(|path| {
-            read_page(path, 128).is_some()
+            read_page(path, 128).is_ok()
         }));
     }
 
