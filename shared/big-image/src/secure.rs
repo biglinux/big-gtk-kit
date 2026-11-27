@@ -234,6 +234,9 @@ async fn sandboxed_frame(
     cancellable: &gio::Cancellable,
     hdr: bool,
 ) -> Result<(glycin::Frame, (i32, i32)), BigImageError> {
+    if cancellable.is_cancelled() {
+        return Err(BigImageError::Cancelled);
+    }
     // Opening/stat'ing a user-selected path can block on FUSE or a slow mount.
     // GIO's blocking pool is the correct place for that synchronous, fd-pinning
     // staging work; Glycin itself is asynchronous after this point.
