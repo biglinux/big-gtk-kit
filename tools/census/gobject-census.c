@@ -35,6 +35,7 @@
 #include <glib-object.h>
 #include <glib-unix.h>
 #include <glib.h>
+#include <pthread.h>
 #include <dlfcn.h>
 #include <signal.h>
 #include <stdint.h>
@@ -453,27 +454,19 @@ on_signal (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
-// A request that came before the main loop ran, kept until it runs. Atomic: the
-// signal may land on another thread while the main one reads it.
-static int early_request;
-
-static void
-note_early_request (int signum)
-{
-  (void) signum;
-  __atomic_store_n (&early_request, 1, __ATOMIC_RELEASE);
-}
-
 static gboolean
 install_signal (gpointer data)
 {
   (void) data;
   // Dispatched by the default main context, on the main thread, between events:
-  // never GLib inside a raw signal handler. Added first, so a request after the
-  // check below is GLib's to deliver.
+  // never GLib inside a raw signal handler. A request that came earlier is
+  // still pending, held by the mask; unblocked here, after the source exists,
+  // it is delivered to this thread at once and served by GLib.
   g_unix_signal_add (SIGUSR2, on_signal, NULL);
-  if (__atomic_load_n (&early_request, __ATOMIC_ACQUIRE))
-    on_signal (NULL);
+  sigset_t census;
+  sigemptyset (&census);
+  sigaddset (&census, SIGUSR2);
+  pthread_sigmask (SIG_UNBLOCK, &census, NULL);
   return G_SOURCE_REMOVE;
 }
 
@@ -486,10 +479,12 @@ install (void)
   census_prefix = g_strdup (prefix);
   // g_unix_signal_add starts GLib's worker thread, and a program may refuse to
   // start with a thread already running (it sets the locale first). The source
-  // is added once the main loop runs; a request before that is noted and
-  // answered then.
-  struct sigaction early = { .sa_handler = note_early_request, .sa_flags = SA_RESTART };
-  sigemptyset (&early.sa_mask);
-  sigaction (SIGUSR2, &early, NULL);
+  // is added once the main loop runs. Until then the signal is blocked, in this
+  // thread and every thread it starts, so a request stays pending instead of
+  // ending the program or being lost.
+  sigset_t census;
+  sigemptyset (&census);
+  sigaddset (&census, SIGUSR2);
+  pthread_sigmask (SIG_BLOCK, &census, NULL);
   g_idle_add (install_signal, NULL);
 }
