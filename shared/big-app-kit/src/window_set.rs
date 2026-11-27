@@ -185,7 +185,8 @@ where
         self.secondary.values()
     }
 
-    /// Run `f` on the window state that owns `workspace`, if it is live.
+    /// Run `f` on the window state that owns `workspace`: the primary's, kept
+    /// after [`Self::close_primary`], or a live secondary's.
     ///
     /// Returns `None` when no window owns `workspace`.
     pub fn with_window<R>(&self, workspace: P::Id, f: impl FnOnce(&P) -> R) -> Option<R> {
@@ -231,8 +232,9 @@ where
     /// secondary branch calls `on_secondary` with the retained controller (so
     /// it can read [`BigSecondaryWindow::window`] or
     /// [`ComponentController::emit`]). `payload` moves into whichever branch
-    /// runs, so a single owned value can be consumed by either side. Nothing
-    /// runs when `workspace` names no live window.
+    /// runs, so a single owned value can be consumed by either side. The
+    /// primary branch also runs after [`Self::close_primary`]; nothing runs
+    /// when `workspace` names neither the primary nor a live secondary.
     pub fn dispatch<T>(
         &self,
         workspace: P::Id,
