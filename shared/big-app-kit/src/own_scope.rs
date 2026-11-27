@@ -29,6 +29,14 @@ use gtk::{gdk, gio, glib};
 /// No program handles `uri`, or it could not be started.
 pub async fn open_uri(uri: &str, token: Option<&str>) -> Result<(), glib::Error> {
     let context = launch_context(Renderer::DefaultGpu, token, None);
+    // As in `launch`: a D-Bus-activated handler would not get the token.
+    if token.is_some() {
+        let file = gio::File::for_uri(uri);
+        let handler = file
+            .query_default_handler_future(glib::Priority::DEFAULT)
+            .await?;
+        return start(&handler, &[file], context.as_ref());
+    }
     gio::AppInfo::launch_default_for_uri_future(uri, context.as_ref()).await
 }
 
