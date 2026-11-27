@@ -29,6 +29,9 @@ pub struct SessionRuntime {
 impl SessionRuntime {
     /// Join the existing runtime or create it without activating any product.
     /// If pressure monitoring is unavailable the resource limits still apply.
+    /// A module's copy, where another copy watches for the process, hears its
+    /// pressure once it calls this, or registers a cache, after the host's
+    /// application exists.
     #[must_use]
     pub fn acquire() -> Rc<Self> {
         acquire_with(&RUNTIME, || {
