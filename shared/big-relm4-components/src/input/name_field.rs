@@ -46,7 +46,8 @@ pub fn refuse_name_as_typed(
             return;
         };
         let child = folder.child(&wanted);
-        let (edits, refusal, taken, acceptable) = (
+        let (entry, edits, refusal, taken, acceptable) = (
+            entry.downgrade(),
             Rc::clone(&edits),
             refusal.clone(),
             Rc::clone(&taken),
@@ -61,7 +62,8 @@ pub fn refuse_name_as_typed(
                 )
                 .await
                 .is_ok();
-            if edits.get() != edit {
+            // A later edit, or a dialog closed meanwhile, has no use for it.
+            if edits.get() != edit || entry.upgrade().is_none() {
                 return;
             }
             // Only a file found refuses the name: a lookup failing otherwise
