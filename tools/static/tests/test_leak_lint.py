@@ -526,22 +526,26 @@ class WarningRules(unittest.TestCase):
                     lint(case.replace("INNER", inner)),
                 )
 
-    def test_turbofish_comma_inside_inner_closure(self):
-        # `A, B` is one turbofish: the inner closure's `widget` reaches `(widget)`.
-        self.assertEqual(
-            lint("""
+    def test_inner_closure_binding_holds_to_its_end(self):
+        # The inner closure's `widget` reaches its last use: no capture.
+        case = """
             fn attach(widget: &gtk::Widget) {
                 let widget = widget.clone();
                 let keys = gtk::EventControllerKey::new();
                 keys.connect_key_pressed(move |controller, _, _, _| {
-                    controller.widget().map(|widget| cast::<A, B>(widget));
+                    controller.widget().map(INNER);
                     Stop
                 });
                 widget.add_controller(keys);
             }
-        """),
-            [],
-        )
+        """
+        for inner in (
+            "|widget| cast::<A, B>(widget)",  # one turbofish, not two arguments
+            "|widget| /* , */ widget.grab_focus()",
+            "|widget| // ,\n widget.grab_focus()",
+        ):
+            with self.subTest(inner=inner):
+                self.assertEqual(lint(case.replace("INNER", inner)), [])
 
     def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
