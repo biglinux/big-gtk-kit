@@ -834,7 +834,7 @@ def none_arm_continues(closure: str) -> bool:
     source after its target is gone. Only a `None` arm is read: a let-else, an
     `if let` with an `else`, a `_` arm, `map_or` or `is_none()` that continues on
     a failed upgrade is not seen."""
-    for m in re.finditer(r"\bNone\s*=>\s*", closure):
+    for m in re.finditer(r"\bNone\s*(?:if\b[^;{}]*?)?=>\s*", closure):
         if closure.startswith("{", m.end()):
             arm = call_argument(closure, m.end())
         else:

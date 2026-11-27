@@ -932,6 +932,27 @@ class RepeatingSources(unittest.TestCase):
             with self.subTest(arm=arm):
                 self.assertIn(self.RULE, lint(case.replace("ARM", arm)))
 
+    def test_guarded_none_arm_is_read(self):
+        case = """
+            fn watch(label: &gtk::Label) {
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => {
+                        label.set_text("x");
+                        glib::ControlFlow::Continue
+                    }
+                    None if retry() => ARM,
+                    None => glib::ControlFlow::Break,
+                });
+            }
+        """
+        for arm, expected in (
+            ("glib::ControlFlow::Continue", [self.RULE]),
+            ("glib::ControlFlow::Break", []),
+        ):
+            with self.subTest(arm=arm):
+                self.assertEqual(lint(case.replace("ARM", arm)), expected)
+
     def test_bounded_sources_are_fine(self):
         self.assertEqual(
             lint("""
