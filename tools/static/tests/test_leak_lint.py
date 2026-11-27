@@ -445,6 +445,30 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
+    def test_inner_closure_binding_ends_with_it(self):
+        # After the inner closure, `widget` is the function's again: it is captured.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| {
+                    controller.widget().map(INNER);
+                    widget.grab_focus();
+                    Stop
+                });
+                widget.add_controller(keys);
+            }
+        """
+        for inner in (
+            "|widget| widget.grab_focus()",
+            "|widget| { widget.grab_focus() }",
+        ):
+            with self.subTest(inner=inner):
+                self.assertIn(
+                    ("handler-holds-owner", "warning"),
+                    lint(case.replace("INNER", inner)),
+                )
+
     def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
             ("lazy-followers", "warning"),
