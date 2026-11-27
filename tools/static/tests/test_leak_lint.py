@@ -470,6 +470,38 @@ class WarningRules(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertEqual(lint(case.replace("PATTERN", pattern)), expected)
 
+    def test_let_field_label_binds_nothing(self):
+        # A `let` pattern ends at its type annotation's colon, not at a field label's.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| {
+                    BODY
+                    widget.grab_focus();
+                    Stop
+                });
+                widget.add_controller(keys);
+            }
+        """
+        warns = [("handler-holds-owner", "warning")]
+        for body, expected in (
+            ("let Event { widget: w } = controller.event();", warns),
+            (
+                "if let Some(Event { widget: w }) = controller.event() { w.show(); }",
+                warns,
+            ),
+            (
+                "let Some(Event { widget: w }) = controller.event() else { return Stop; };",
+                warns,
+            ),
+            ("let Event { source: widget } = controller.event();", []),
+            ("let widget: gtk::Widget = controller.widget();", []),
+            ("let (widget, _): (gtk::Widget, u32) = controller.pair();", []),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(lint(case.replace("BODY", body)), expected)
+
     def test_inner_closure_binding_ends_with_it(self):
         # After the inner closure, `widget` is the function's again: it is captured.
         case = """
