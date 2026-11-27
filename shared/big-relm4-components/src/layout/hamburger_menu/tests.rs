@@ -1549,6 +1549,61 @@ fn verb_strip_is_one_row() {
     });
 }
 
+/// Down passes over a strip whose buttons are all off, which the focus cannot
+/// enter, instead of stopping on it for good.
+#[test]
+fn down_skips_strip_all_off() {
+    big_testkit::harness::require_gtk_test(|| {
+        let actions = gio::SimpleActionGroup::new();
+        for name in ["open", "cut", "close"] {
+            let action = gio::SimpleAction::new(name, None);
+            action.set_enabled(name != "cut");
+            actions.add_action(&action);
+        }
+        let menu = gio::Menu::new();
+        menu.append(Some("Open"), Some("view.open"));
+        let cut = described_item("Cut", None, Some("edit-cut-symbolic"), "view.cut");
+        append_strip_section(&menu, None, &[cut]);
+        menu.append(Some("Close"), Some("view.close"));
+
+        let anchor = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let window = gtk::Window::builder().child(&anchor).build();
+        window.present();
+        assert!(big_testkit::harness::pump_until(|| window.is_mapped()));
+        let popover = gtk::Popover::new();
+        popover.set_parent(&anchor);
+        popover.set_autohide(false);
+        populate_menu_model_action_popover(
+            &popover,
+            &anchor,
+            &menu,
+            &popover_labels(),
+            &[BigMenuActionGroupBinding::new("view", &actions)],
+        );
+        popover.popup();
+        assert!(big_testkit::harness::pump_until(|| popover.is_visible()));
+        let cut = find_button_with_label(popover.upcast_ref(), "Cut").expect("the strip");
+        assert!(big_testkit::harness::pump_until(|| !cut.is_sensitive()));
+        let open = find_button_with_label(popover.upcast_ref(), "Open").expect("first row");
+        let close = find_button_with_label(popover.upcast_ref(), "Close").expect("last row");
+        assert!(open.grab_focus());
+        let page = find_stack(popover.upcast_ref())
+            .and_then(|stack| stack.visible_child())
+            .expect("the root page");
+
+        assert!(big_testkit::harness::press_key(
+            &page,
+            Some(gtk::PropagationPhase::Capture),
+            gtk::gdk::Key::Down,
+            gtk::gdk::ModifierType::empty(),
+        ));
+        assert!(close.is_focus(), "Down stopped on the strip");
+        popover.popdown();
+        popover.unparent();
+        window.close();
+    });
+}
+
 /// `hidden-when="action-missing"` leaves the row out while its action is not
 /// there, with the line its section would have drawn; without the attribute
 /// a missing action is a row that is off.
