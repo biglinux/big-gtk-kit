@@ -685,6 +685,11 @@ class HeldThroughShapes(unittest.TestCase):
             ("{ let refresh = make_refresh(); refresh() }", []),
             ("match pick() { Some(refresh) => refresh(), None => () }", []),
             ("{ refresh(); let refresh = make_refresh(); refresh() }", [self.HOLDS]),
+            # The initializer's block still calls the outer `refresh`.
+            (
+                "{ let refresh = make_refresh({ log(); refresh(); }); refresh() }",
+                [self.HOLDS],
+            ),
         ):
             with self.subTest(body=body):
                 self.assertEqual(lint(case.replace("BODY", body)), expected)
