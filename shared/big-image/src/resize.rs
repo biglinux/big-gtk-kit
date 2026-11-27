@@ -49,8 +49,7 @@ pub fn resize_rgba(
         || height <= 0
         || u64::try_from(i64::from(width) * i64::from(height))
             .map_or(true, |pixels| pixels > crate::secure::MAX_SOURCE_PIXELS)
-        || image.width <= 0
-        || image.height <= 0
+        || crate::texture_stride(image).is_none()
     {
         return Err(BigImageError::InvalidBytePixels);
     }
