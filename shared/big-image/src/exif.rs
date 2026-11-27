@@ -198,8 +198,12 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
     };
     for index in 0..count {
         let entry = first + 2 + index * 12;
-        // Orientation is one SHORT, held in the entry itself.
-        if reader.u16_at(entry)? == 0x0112 && reader.u16_at(entry + 2)? == 3 {
+        if reader.u16_at(entry)? == 0x0112 {
+            // Orientation is one SHORT, held in the entry itself; any other
+            // shape holds an offset, which a rewrite would break.
+            if reader.u16_at(entry + 2)? != 3 || reader.u32_at(entry + 4)? != 1 {
+                return None;
+            }
             out[entry + 8..entry + 10].copy_from_slice(&short(1));
         }
     }
@@ -554,6 +558,15 @@ mod tests {
         // Two strips: the entries list their offsets and counts elsewhere.
         tiff[32..36].copy_from_slice(&2u32.to_le_bytes());
         tiff[44..48].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
+    }
+
+    /// An orientation of several values holds an offset, never rewritten.
+    #[test]
+    fn upright_refuses_non_scalar_orientation() {
+        let mut tiff = thumbnail::tests::camera_tiff(6, None);
+        // The count of the first directory's Orientation entry.
+        tiff[14..18].copy_from_slice(&3u32.to_le_bytes());
         assert_eq!(upright(&tiff), None);
     }
 
