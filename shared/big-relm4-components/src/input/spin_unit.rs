@@ -86,9 +86,11 @@ impl BigSpinUnit {
 /// Widest text this unit ever shows, in characters.
 ///
 /// A spin field is sized from the digits its adjustment allows, and the suffix
-/// is not a digit. One spare character covers the caret.
-fn width_chars_for(unit: BigSpinUnit, upper: f64) -> i32 {
-    let widest = unit.display(upper).chars().count();
+/// is not a digit; either bound can be the wider, as a negative one with its
+/// sign. One spare character covers the caret.
+fn width_chars_for(unit: BigSpinUnit, lower: f64, upper: f64) -> i32 {
+    let width = |bound: f64| unit.display(bound).chars().count();
+    let widest = width(lower).max(width(upper));
     i32::try_from(widest).unwrap_or(i32::MAX).saturating_add(1)
 }
 
@@ -104,10 +106,12 @@ pub fn install_spin_unit(spin: &gtk::SpinButton, unit: BigSpinUnit) {
     // with `numeric` left on, writing "100%" empties the field and zeroes the value.
     spin.set_numeric(false);
     spin.set_digits(0);
-    spin.set_width_chars(
-        spin.width_chars()
-            .max(width_chars_for(unit, spin.adjustment().upper())),
-    );
+    let range = spin.adjustment();
+    spin.set_width_chars(spin.width_chars().max(width_chars_for(
+        unit,
+        range.lower(),
+        range.upper(),
+    )));
     spin.connect_output(move |spin| {
         spin.set_text(&unit.display(spin.value()));
         gtk::glib::Propagation::Stop
@@ -124,9 +128,10 @@ pub fn install_spin_row_unit(row: &adw::SpinRow, unit: BigSpinUnit) {
         return;
     }
     row.set_numeric(false);
+    let range = row.adjustment();
     row.set_width_chars(
         row.width_chars()
-            .max(width_chars_for(unit, row.adjustment().upper())),
+            .max(width_chars_for(unit, range.lower(), range.upper())),
     );
     row.connect_output(move |row| {
         row.set_text(&unit.display(row.value()));
@@ -181,6 +186,14 @@ mod tests {
         assert_eq!(BigSpinUnit::Plain.parse("7 px"), None);
         assert_eq!(BigSpinUnit::Kilobytes.parse("4kb"), Some(4096.0));
         assert_eq!(BigSpinUnit::Milliseconds.parse(" 250 MS "), Some(250.0));
+    }
+
+    /// "-10000 px", nine characters and the caret's, is wider than the "0 px"
+    /// at the top of its range.
+    #[test]
+    fn negative_bound_sizes_field() {
+        assert_eq!(width_chars_for(BigSpinUnit::Pixels, -10_000.0, 0.0), 10);
+        assert_eq!(width_chars_for(BigSpinUnit::Percent, 0.0, 200.0), 5);
     }
 
     /// A value the field shows rounded is kept when the field is read back,
