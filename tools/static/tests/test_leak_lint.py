@@ -445,6 +445,31 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
+    def test_field_label_binds_nothing(self):
+        # In `Event { widget: w }` the arm binds `w`; its `widget` is the function's.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match controller.event() {
+                    Some(PATTERN) => {
+                        widget.grab_focus();
+                        Stop
+                    }
+                    _ => Proceed,
+                });
+                widget.add_controller(keys);
+            }
+        """
+        for pattern, expected in (
+            ("Event { widget: w }", [("handler-holds-owner", "warning")]),
+            ("Event { widget }", []),
+            ("Event { source: widget }", []),
+            ("Event { source: Some(widget), .. }", []),
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(lint(case.replace("PATTERN", pattern)), expected)
+
     def test_inner_closure_binding_ends_with_it(self):
         # After the inner closure, `widget` is the function's again: it is captured.
         case = """
