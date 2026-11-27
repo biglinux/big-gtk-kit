@@ -96,21 +96,33 @@ impl SharedMapping {
         self.len == 0
     }
 
-    /// The file's bytes. The other holder of the file may be writing them:
-    /// read once its protocol says it is done (a `ready` event).
+    /// The file's bytes, to read once the other holder's protocol says it is
+    /// done writing them (a `ready` event).
+    ///
+    /// # Safety
+    ///
+    /// Nothing may write the file while the slice lives: neither the other
+    /// holder nor this process through [`Self::fd`]. The file's writers are
+    /// outside what a borrow of `self` can hold off.
     #[must_use]
-    pub fn bytes(&self) -> &[u8] {
+    pub unsafe fn bytes(&self) -> &[u8] {
         // SAFETY: `start` maps `len` readable bytes until `Drop`, which the
-        // borrow of `self` outlasts.
+        // borrow of `self` outlasts; the caller keeps the file's writers off.
         unsafe { std::slice::from_raw_parts(self.start.as_ptr(), self.len) }
     }
 
-    /// The bytes to write, while the other process does not read them (a
+    /// The bytes to write, while the other holder does not use them (a
     /// `wl_buffer` not yet attached, or released).
+    ///
+    /// # Safety
+    ///
+    /// Nothing else may read or write the file while the slice lives: neither
+    /// the other holder nor this process through [`Self::fd`].
     #[must_use]
-    pub fn bytes_mut(&mut self) -> &mut [u8] {
-        // SAFETY: `start` maps `len` writable bytes until `Drop`, and the
-        // mutable borrow of `self` is the only one into them here.
+    pub unsafe fn bytes_mut(&mut self) -> &mut [u8] {
+        // SAFETY: `start` maps `len` writable bytes until `Drop`, the mutable
+        // borrow of `self` is the only one into them here, and the caller
+        // keeps every other user of the file off.
         unsafe { std::slice::from_raw_parts_mut(self.start.as_ptr(), self.len) }
     }
 }
@@ -153,12 +165,15 @@ mod tests {
     fn mapping_shares_its_file() {
         let mut mapping = SharedMapping::new("test", 4096).unwrap();
         assert_eq!(mapping.len(), 4096);
-        mapping.bytes_mut()[..5].copy_from_slice(b"frame");
+        // SAFETY: the slice is dropped before the file is read.
+        let frame = unsafe { mapping.bytes_mut() };
+        frame[..5].copy_from_slice(b"frame");
         let mut read = [0_u8; 5];
         rustix::io::pread(mapping.fd(), &mut read, 0).unwrap();
         assert_eq!(&read, b"frame");
         rustix::io::pwrite(mapping.fd(), b"ready", 4091).unwrap();
-        assert_eq!(&mapping.bytes()[4091..], b"ready");
+        // SAFETY: the write above is done, and nothing writes the file after it.
+        assert_eq!(&unsafe { mapping.bytes() }[4091..], b"ready");
         for len in [0, 4095, 4097] {
             assert!(
                 rustix::fs::ftruncate(mapping.fd(), len).is_err(),
