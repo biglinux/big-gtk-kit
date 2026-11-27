@@ -137,6 +137,32 @@ fn gtk_test_runner() -> Option<mpsc::Sender<GtkTestJob>> {
         .clone()
 }
 
+/// The example module's library, `libbigexample_module.so`, beside this test
+/// binary in Cargo's target directory. For the module tests of the programs
+/// that load modules; nothing in this repository calls it.
+///
+/// # Panics
+///
+/// Panics when it is not built: a module test that returned early instead would
+/// pass without loading anything. Build it first.
+#[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "a test harness: its panics are the failures it reports"
+)]
+pub fn example_module_library() -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("the test binary has a path");
+    exe.ancestors()
+        .flat_map(|ancestor| {
+            [
+                ancestor.join("libbigexample_module.so"),
+                ancestor.join("deps/libbigexample_module.so"),
+            ]
+        })
+        .find(|candidate| candidate.is_file())
+        .expect("libbigexample_module.so is built (cargo build -p bigexample-module)")
+}
+
 /// Resident set size (KiB) of this process from `/proc/self/status` `VmRSS`.
 ///
 /// Advisory: a growing-but-bounded GTK cache can inflate it, so pair it with
