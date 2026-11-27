@@ -33,6 +33,11 @@ invalid:
         Ok(())
     }
   - |
+    fn open_and_mutex(p: &Path, m: &Mutex<()>) {
+        let f = OpenOptions::new().append(true).open(p);
+        let _g = m.lock();
+    }
+  - |
     fn field(&mut self, p: &Path) -> io::Result<()> {
         self.file = OpenOptions::new().open(p)?;
         self.file.try_lock()?;
