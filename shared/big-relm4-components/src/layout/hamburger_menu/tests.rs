@@ -119,12 +119,9 @@ fn vertical_separator_count(widget: &gtk::Widget) -> usize {
             .downcast_ref::<gtk::Separator>()
             .is_some_and(|separator| separator.orientation() == gtk::Orientation::Vertical),
     );
-    let mut child = widget.first_child();
-    let mut below = 0;
-    while let Some(node) = child {
-        below += vertical_separator_count(&node);
-        child = node.next_sibling();
-    }
+    let below: usize = children(widget)
+        .map(|node| vertical_separator_count(&node))
+        .sum();
     here + below
 }
 
