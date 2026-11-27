@@ -13,7 +13,8 @@ use gtk::prelude::*;
 /// and the extra entry outlives the label in GTK's AT-SPI cache: the next
 /// screen reader that fetches the cache reads a freed object and the process
 /// dies. Making the links when the label joins a window, and again whenever its
-/// markup changes, means the registration finds them already made.
+/// markup changes or the same text turns into markup, means the registration
+/// finds them already made.
 ///
 /// Each link is also named by its visible text, which GTK leaves empty.
 ///
@@ -37,6 +38,7 @@ pub fn expose_links(label: &gtk::Label) {
     make_links(label);
     label.connect_root_notify(make_links);
     label.connect_label_notify(make_links);
+    label.connect_use_markup_notify(make_links);
 }
 
 /// The visible text of each `<a>` element of `markup`, in order: the order
@@ -96,6 +98,32 @@ mod tests {
             let window = gtk::Window::builder().child(&label).build();
             window.present();
             settle();
+            let mut named = 0;
+            let mut link = label.first_accessible_child();
+            while let Some(accessible) = link {
+                assert!(gtk::test_accessible_has_property(
+                    &accessible,
+                    gtk::AccessibleProperty::Label
+                ));
+                named += 1;
+                link = accessible.next_accessible_sibling();
+            }
+            window.destroy();
+            assert_eq!(named, 2);
+        });
+    }
+
+    /// Text shown as it is and then, unchanged, as markup grows its links
+    /// with no change to the label's text.
+    #[test]
+    fn links_named_when_markup_starts() {
+        big_testkit::harness::require_gtk_test(|| {
+            let label = gtk::Label::new(Some(LINKS));
+            expose_links(&label);
+            let window = gtk::Window::builder().child(&label).build();
+            window.present();
+            settle();
+            label.set_markup(LINKS);
             let mut named = 0;
             let mut link = label.first_accessible_child();
             while let Some(accessible) = link {
