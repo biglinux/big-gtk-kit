@@ -176,7 +176,8 @@ impl DirectoryListingEntry {
     /// `is_symlink` comes from the same `statx` as the rest of the metadata
     /// rather than from a directory iterator's cached type, so one child read on
     /// its own answers exactly what the same child answers inside a full scan.
-    /// No call mounts an automount point it meets.
+    /// Neither the entry nor a link's final target is mounted when it is an
+    /// automount point; one on the way to a link's target is.
     fn capture(folder: BorrowedFd<'_>, name: &CStr, path: PathBuf) -> std::io::Result<Self> {
         let stat = rustix::fs::statx(
             folder,
@@ -590,7 +591,9 @@ mod tests {
             std::process::id(),
             DIRECTORY_LISTING_TEST_SEQ.fetch_add(1, Ordering::Relaxed),
         ));
-        fs::create_dir_all(&dir).unwrap();
+        // A failed run under a reused PID leaves its files behind.
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
         dir
     }
 
