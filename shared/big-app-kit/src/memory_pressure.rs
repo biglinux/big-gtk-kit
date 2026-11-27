@@ -109,6 +109,9 @@ pub(crate) fn watch_scoped_for(
     release: impl Fn() + Send + Clone + 'static,
 ) -> std::io::Result<Option<MemoryPressureWatch>> {
     if watched_by_another_copy() {
+        // The watching copy's pressure reaches `resources` only through the
+        // application's action, which a copy registering no cache never joins.
+        let _ = process_application();
         return Ok(None);
     }
     let Some(config) = PressureConfig::from_environment()? else {

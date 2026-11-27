@@ -155,7 +155,11 @@ fn scan(
     for index in 0..count {
         let entry = at.checked_add(2)?.checked_add(index * 12)?;
         let (tag, format) = (reader.u16_at(entry)?, reader.u16_at(entry + 2)?);
-        // The value of a single SHORT or LONG sits in the entry itself.
+        // The value of a single SHORT or LONG sits in the entry itself; for
+        // more, the entry holds where they are.
+        if reader.u32_at(entry + 4)? != 1 {
+            continue;
+        }
         let value = match format {
             3 => u32::from(reader.u16_at(entry + 8)?),
             4 => reader.u32_at(entry + 8)?,
@@ -229,6 +233,16 @@ pub(super) mod tests {
         let length = u16::from_be_bytes([head[4], head[5]]) + 100;
         head[4..6].copy_from_slice(&length.to_be_bytes());
         assert_eq!(embedded_thumbnail(&head).map(|t| t.jpeg), Some(THUMBNAIL));
+    }
+
+    /// A thumbnail offset given as several LONGs is an offset to them, not
+    /// the thumbnail's.
+    #[test]
+    fn multi_valued_offset_gives_none() {
+        let mut tiff = camera_tiff(1, Some(THUMBNAIL));
+        // The count of the second directory's first entry, at 26 + 2 + 4.
+        tiff[32..36].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(thumbnail_in(&tiff), None);
     }
 
     #[test]

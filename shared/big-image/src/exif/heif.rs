@@ -99,7 +99,7 @@ fn thumbnail_item(iref: &[u8]) -> Option<u64> {
     Cursor { bytes: reference }.uint(id_width(version))
 }
 
-/// `(id, offset, length)` of every item `iloc` places in the file itself, in
+/// `(id, offset, length)` of every item `iloc` places in this file itself, in
 /// one extent.
 fn locations(iloc: &[u8]) -> Option<Vec<(u64, u64, u64)>> {
     let mut cursor = Cursor { bytes: iloc };
@@ -120,20 +120,21 @@ fn locations(iloc: &[u8]) -> Option<Vec<(u64, u64, u64)>> {
         let id = cursor.uint(if version < 2 { 2 } else { 4 })?;
         // Construction method 0 is an offset into the file.
         let in_file = version == 0 || cursor.uint(2)? & 15 == 0;
-        cursor.take(2)?;
+        // Data reference 0 is this file; any other names a file elsewhere.
+        let local = cursor.uint(2)? == 0;
         let base = cursor.uint(base_width)?;
-        let extents = cursor.uint(2)?;
+        let extents = usize::try_from(cursor.uint(2)?).ok()?;
+        let index = if version >= 1 { index_width } else { 0 };
         if extents != 1 {
-            // A scattered item is no thumbnail; the next item's fields are
-            // not at a known place, so the list ends here.
-            break;
+            // A scattered item is no thumbnail: step over its extents to the
+            // next item.
+            cursor.take(extents.checked_mul(index + offset_width + length_width)?)?;
+            continue;
         }
-        if version >= 1 {
-            cursor.take(index_width)?;
-        }
+        cursor.take(index)?;
         let offset = cursor.uint(offset_width)?;
         let length = cursor.uint(length_width)?;
-        if in_file {
+        if in_file && local {
             found.push((id, base.checked_add(offset)?, length));
         }
     }
@@ -251,11 +252,18 @@ mod tests {
     /// A HEIC head: a primary item, a `jpeg` thumbnail item when `thumbnail`
     /// is set and an `Exif` item holding `tiff`, with `mdat` after `meta`.
     fn camera_heic(thumbnail: Option<&[u8]>, tiff: &[u8]) -> Vec<u8> {
-        tiled_heic(0, thumbnail, tiff)
+        tiled_heic((0, 1), thumbnail, tiff, 0)
     }
 
-    /// `camera_heic` with `tiles` image items listed ahead of the others.
-    fn tiled_heic(tiles: u16, thumbnail: Option<&[u8]>, tiff: &[u8]) -> Vec<u8> {
+    /// `camera_heic` with `tiles` image items of `extents` extents each listed
+    /// ahead of the others, and the thumbnail's bytes in the file
+    /// `thumbnail_file` names, 0 for this one.
+    fn tiled_heic(
+        (tiles, extents): (u16, u16),
+        thumbnail: Option<&[u8]>,
+        tiff: &[u8],
+        thumbnail_file: u16,
+    ) -> Vec<u8> {
         let mut exif = 0u32.to_be_bytes().to_vec();
         exif.extend_from_slice(tiff);
         let build = |data_at: u32| {
@@ -272,17 +280,21 @@ mod tests {
             // Offsets and lengths of 4 bytes, no base offset.
             let mut iloc = vec![0, 0, 0, 0, 0x44, 0];
             iloc.extend_from_slice(&(2 + tiles).to_be_bytes());
-            let thumb_at = data_at + exif.len() as u32;
-            let tile_items = (0..tiles).map(|id| (100 + id, data_at, 0));
+            let exif_len = exif.len() as u32;
+            let thumb = (data_at + exif_len, thumbnail.map_or(0, <[u8]>::len) as u32);
+            let tile_items = (0..tiles).map(|id| (100 + id, 0, extents, data_at, 0));
             let items = tile_items.chain([
-                (2u16, thumb_at, thumbnail.map_or(0, <[u8]>::len) as u32),
-                (3, data_at, exif.len() as u32),
+                (2u16, thumbnail_file, 1, thumb.0, thumb.1),
+                (3, 0, 1, data_at, exif_len),
             ]);
-            for (id, at, length) in items {
+            for (id, file, extents, at, length) in items {
                 iloc.extend_from_slice(&id.to_be_bytes());
-                iloc.extend_from_slice(&[0, 0, 0, 1]);
-                iloc.extend_from_slice(&at.to_be_bytes());
-                iloc.extend_from_slice(&length.to_be_bytes());
+                iloc.extend_from_slice(&file.to_be_bytes());
+                iloc.extend_from_slice(&extents.to_be_bytes());
+                for _ in 0..extents {
+                    iloc.extend_from_slice(&at.to_be_bytes());
+                    iloc.extend_from_slice(&length.to_be_bytes());
+                }
             }
             let mut meta = vec![0, 0, 0, 0];
             meta.extend(boxed(b"iinf", &iinf));
@@ -324,7 +336,7 @@ mod tests {
 
     #[test]
     fn thumbnail_behind_many_tiles_is_found() {
-        let head = tiled_heic(300, Some(THUMBNAIL), &camera_tiff(6, None));
+        let head = tiled_heic((300, 1), Some(THUMBNAIL), &camera_tiff(6, None), 0);
         assert_eq!(
             thumbnail(&head),
             Some(EmbeddedThumbnail {
@@ -344,6 +356,26 @@ mod tests {
                 orientation: 3
             })
         );
+    }
+
+    /// Items stored in several extents ahead of the thumbnail are stepped over.
+    #[test]
+    fn thumbnail_behind_scattered_items_is_found() {
+        let head = tiled_heic((3, 2), Some(THUMBNAIL), &camera_tiff(6, None), 0);
+        assert_eq!(
+            thumbnail(&head),
+            Some(EmbeddedThumbnail {
+                jpeg: THUMBNAIL,
+                orientation: 6
+            })
+        );
+    }
+
+    /// A thumbnail item kept in another file is not read from this one's bytes.
+    #[test]
+    fn thumbnail_in_another_file_has_none() {
+        let head = tiled_heic((0, 1), Some(THUMBNAIL), &camera_tiff(1, None), 1);
+        assert_eq!(thumbnail(&head), None);
     }
 
     #[test]

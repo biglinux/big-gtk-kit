@@ -39,9 +39,18 @@ pub fn turned_jpeg(bytes: &[u8], quarter_turns: u8, mirrored: bool) -> Option<Ve
     // readers expect first.
     let mut insert_at = 2;
     loop {
+        // Fill bytes may precede a marker.
+        while bytes.get(at) == Some(&0xFF) && bytes.get(at + 1) == Some(&0xFF) {
+            at += 1;
+        }
         let marker = *bytes.get(at..at + 2)?.get(1)?;
         if bytes[at] != 0xFF || marker == 0xDA || marker == 0xD9 {
             break;
+        }
+        // Standalone markers carry no length.
+        if matches!(marker, 0x01 | 0xD0..=0xD7) {
+            at += 2;
+            continue;
         }
         let length = usize::from(u16::from_be_bytes([
             *bytes.get(at + 2)?,
@@ -95,17 +104,31 @@ fn orientation_offset(tiff: &[u8]) -> Option<usize> {
             u16::from_le_bytes(pair)
         })
     };
-    let quad = tiff.get(4..8)?;
-    let directory = usize::try_from(if big_endian {
-        u32::from_be_bytes([quad[0], quad[1], quad[2], quad[3]])
-    } else {
-        u32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]])
-    })
-    .ok()?;
+    let u32_at = |offset: usize| {
+        let quad = [
+            *tiff.get(offset)?,
+            *tiff.get(offset + 1)?,
+            *tiff.get(offset + 2)?,
+            *tiff.get(offset + 3)?,
+        ];
+        Some(if big_endian {
+            u32::from_be_bytes(quad)
+        } else {
+            u32::from_le_bytes(quad)
+        })
+    };
+    // The magic 42 is what tells a TIFF header from two coincidental letters.
+    if u16_at(2)? != 42 {
+        return None;
+    }
+    let directory = usize::try_from(u32_at(4)?).ok()?;
     let count = usize::from(u16_at(directory)?).min(MAX_ENTRIES);
+    // One SHORT is held in the entry itself; more are elsewhere, at an offset.
     (0..count).find_map(|index| {
         let entry = directory + 2 + index * 12;
-        (u16_at(entry)? == ORIENTATION_TAG && u16_at(entry + 2)? == SHORT)
+        (u16_at(entry)? == ORIENTATION_TAG
+            && u16_at(entry + 2)? == SHORT
+            && u32_at(entry + 4)? == 1)
             .then_some(entry + 8)
             .filter(|value| value + 2 <= tiff.len())
     })
@@ -232,6 +255,44 @@ mod tests {
         big_endian.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
         let turned = turned_jpeg(&big_endian, 1, false).expect("rewritten");
         assert_eq!(orientation_of(&turned), 3);
+    }
+
+    /// An orientation that is not one SHORT holds an offset, never rewritten.
+    #[test]
+    fn non_scalar_orientation_refused() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x22];
+        jpeg.extend_from_slice(
+            b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x03\0\0\0\x1a\0\0\0\0",
+        );
+        jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+        assert_eq!(turned_jpeg(&jpeg, 1, false), None);
+    }
+
+    /// Fill bytes before a marker are stepped over to the orientation.
+    #[test]
+    fn fill_bytes_before_exif_skipped() {
+        let once = turned_jpeg(&plain_jpeg(), 1, false).expect("rewritten");
+        let app1 = once
+            .windows(2)
+            .position(|window| window == [0xFF, 0xE1])
+            .expect("an EXIF block");
+        let mut filled = once;
+        filled.insert(app1, 0xFF);
+        let turned = turned_jpeg(&filled, 1, false).expect("rewritten through the fill");
+        assert_eq!(orientation_of(&turned), 3);
+        assert_eq!(turned.len(), filled.len());
+    }
+
+    #[test]
+    fn exif_without_tiff_magic_refused() {
+        let once = turned_jpeg(&plain_jpeg(), 1, false).expect("rewritten");
+        let magic = once
+            .windows(4)
+            .position(|window| window == b"II\x2a\0")
+            .expect("a TIFF header");
+        let mut broken = once;
+        broken[magic + 2] = 43;
+        assert_eq!(turned_jpeg(&broken, 1, false), None);
     }
 
     /// What is not a JPEG, or is cut short, is refused; it never panics.

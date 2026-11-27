@@ -443,7 +443,9 @@ pub async fn decode_rgba_sandboxed_cancellable_async(
 }
 
 /// The picture an [`exif::EmbeddedThumbnail`] holds, fitted within `bound`
-/// pixels and turned upright, through the decoding sandbox.
+/// pixels and turned by its orientation's rotation, through the decoding
+/// sandbox. A mirrored orientation (2, 4, 5 and 7), rare in camera files, is
+/// left as stored.
 ///
 /// # Errors
 ///
@@ -455,7 +457,6 @@ pub async fn decode_embedded_thumbnail_async(
 ) -> Result<BigRgbaImage, BigImageError> {
     let image =
         secure::decode_jpeg_bytes_async(thumbnail.jpeg.to_vec(), bound, cancellable).await?;
-    // Mirrored orientations are left as they are: rare in camera files.
     match thumbnail.orientation {
         3 => rotate_rgba_quarter_turn(&image, BigImageQuarterTurn::Half),
         6 => rotate_rgba_quarter_turn(&image, BigImageQuarterTurn::Clockwise),

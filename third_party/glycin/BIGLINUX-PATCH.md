@@ -63,9 +63,12 @@ decoding under big-image), with these changes:
   one per core (`src/icc.rs`). Upstream starts one thread per core for every
   frame and builds a transform in each, about 2 ms apiece: a 256x256
   thumbnail cost 56 ms of processor time instead of under 3, and a transform
-  that failed to build was reported as a successful conversion. The lcms2
+  that failed to build was reported as a successful conversion. Bytes a
+  loader leaves past the last whole pixel stay out of the conversion, where
+  upstream's lcms2 call panics on them. The lcms2
   floor is 6.1.1, the oldest release checked for the shared transform, with
-  the lcms2-sys release it needs. `icc::chunked_matches_whole` checks it.
+  the lcms2-sys release it needs. `icc::chunked_matches_whole` and
+  `icc::partial_pixel_left_alone` check it.
 
 `Cargo.toml.orig`, `Cargo.lock` and the registry's bookkeeping files were left
 out.
@@ -74,4 +77,5 @@ Remove this directory and the `[patch.crates-io]` entry in the workspace
 `Cargo.toml` when upstream lets a pool or a loader choose its processes'
 priority, releases idle loaders within the retention time and lets a caller
 choose the memory format by the frame's colors, confines a loader without
-user namespaces, and converts a small frame's colors on one thread.
+user namespaces, converts a small frame's colors on one thread, and leaves a
+partial pixel out of the conversion.

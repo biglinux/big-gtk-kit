@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use gtk::glib;
 
@@ -22,6 +23,9 @@ const FC_CACHE: &str = "/usr/bin/fc-cache";
 /// 800 by 1100 for A4. A spreadsheet's used area may be far larger; past this
 /// it is refused before anything is decoded.
 const MAX_PAGE_SIDE: u32 = 8192;
+/// How long after a failed try a template is not tried again: a try starts
+/// LibreOffice twice, and a kernel that refuses the overlay refuses each one.
+const TEMPLATE_RETRY: Duration = Duration::from_secs(10 * 60);
 /// Where the template's two directories appear inside the sandbox.
 const PROFILE: &str = "/tmp/profile";
 const FONT_CACHE: &str = "/tmp/fontconfig";
@@ -94,7 +98,7 @@ pub fn render(
     if !output.status.success() || !page.is_file() {
         return Err(OfficePageFailure::Document);
     }
-    read_page(&page, bound).ok_or(OfficePageFailure::Document)
+    read_page(&page, bound)
 }
 
 /// LibreOffice's argv with `arguments` after the options every run shares.
@@ -128,27 +132,35 @@ fn overlay_mounts(template: &Path) -> Vec<std::ffi::OsString> {
 /// The page LibreOffice wrote, refused past [`MAX_PAGE_SIDE`], decoded in the
 /// image sandbox with no in-process fallback, and scaled to fit `bound`. The
 /// page came out of a process that read an untrusted file, and the sandbox
-/// costs little against LibreOffice's own run.
-fn read_page(page: &Path, bound: i32) -> Option<crate::BigRgbaImage> {
-    let file = big_os_kit::file_io::open_regular_no_follow(page).ok()?;
-    let reader = png::Decoder::new(std::io::BufReader::new(file))
-        .read_info()
-        .ok()?;
-    let png_info = reader.info();
-    if png_info.width > MAX_PAGE_SIDE || png_info.height > MAX_PAGE_SIDE {
-        return None;
+/// costs little against LibreOffice's own run. A decoder that could not run
+/// says nothing of the document.
+fn read_page(page: &Path, bound: i32) -> Result<crate::BigRgbaImage, OfficePageFailure> {
+    let document = OfficePageFailure::Document;
+    let file = big_os_kit::file_io::open_regular_no_follow(page).map_err(|_| document)?;
+    // The header alone: the rest is for the sandboxed decoder.
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let header = decoder.read_header_info().map_err(|_| document)?;
+    if header.width > MAX_PAGE_SIDE || header.height > MAX_PAGE_SIDE {
+        return Err(document);
     }
-    let image =
-        crate::decode_rgba_sandboxed(&crate::BigImageSpec::thumbnail(page, bound, bound)).ok()?;
+    let image = crate::decode_rgba_sandboxed(&crate::BigImageSpec::thumbnail(page, bound, bound))
+        .map_err(|error| match error {
+        crate::BigImageError::ResourceLimit
+        | crate::BigImageError::SandboxUnavailable
+        | crate::BigImageError::WorkerGone => OfficePageFailure::Unavailable,
+        _ => document,
+    })?;
     // The bound is a hint the PNG decoder does not take.
     let (width, height) = crate::fit_within((image.width, image.height), (bound, bound));
     if (width, height) == (image.width, image.height) {
-        return Some(image);
+        return Ok(image);
     }
-    crate::resize_rgba(&image, width, height).ok()
+    crate::resize_rgba(&image, width, height).map_err(|_| document)
 }
 
-/// The profile and font cache every render starts from, made on first use.
+/// The profile and font cache every render starts from, made on first use,
+/// and tried again [`TEMPLATE_RETRY`] after a failure (a full disk, an
+/// upgrade under way).
 ///
 /// Kept in the user's cache under a name for the installed LibreOffice, so
 /// an upgrade makes a new one and the old is removed. Built by LibreOffice
@@ -156,8 +168,20 @@ fn read_page(page: &Path, bound: i32) -> Option<crate::BigRgbaImage> {
 /// over it the way a render does: where the kernel refuses an unprivileged
 /// overlay, no render is attempted and no file is marked as undrawable.
 fn template() -> Option<&'static Path> {
-    static TEMPLATE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    TEMPLATE.get_or_init(build_template).as_deref()
+    static TEMPLATE: OnceLock<PathBuf> = OnceLock::new();
+    static FAILED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+    if let Some(template) = TEMPLATE.get() {
+        return Some(template);
+    }
+    let failed_at = *FAILED_AT.lock().unwrap_or_else(PoisonError::into_inner);
+    if failed_at.is_some_and(|at| at.elapsed() < TEMPLATE_RETRY) {
+        return None;
+    }
+    let Some(template) = build_template() else {
+        *FAILED_AT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        return None;
+    };
+    Some(TEMPLATE.get_or_init(|| template))
 }
 
 fn build_template() -> Option<PathBuf> {
@@ -248,7 +272,7 @@ mod tests {
     #[test]
     fn fifo_page_is_refused() {
         assert!(crate::thumbnailer::tests::refuses_fifo(|path| {
-            read_page(path, 128).is_some()
+            read_page(path, 128).is_ok()
         }));
     }
 

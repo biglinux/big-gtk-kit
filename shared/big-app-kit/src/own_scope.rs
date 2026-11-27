@@ -36,14 +36,12 @@ pub async fn open_uri(uri: &str, token: Option<&str>) -> Result<(), glib::Error>
             .await?;
         // The caller's string, as GIO passes it: a URI made into a GFile and
         // back loses parts of it (`mailto:` gains slashes, a fragment goes).
-        return spawned(&handler).as_ref().unwrap_or(&handler).launch_uris(
-            &[uri],
-            context
-                .as_ref()
-                .map(|context| context.upcast_ref::<gio::AppLaunchContext>()),
-        );
+        return spawned(&handler)
+            .as_ref()
+            .unwrap_or(&handler)
+            .launch_uris(&[uri], Some(&context));
     }
-    gio::AppInfo::launch_default_for_uri_future(uri, context.as_ref()).await
+    gio::AppInfo::launch_default_for_uri_future(uri, Some(&context)).await
 }
 
 /// Whether the desktop's portal can ask the person which program opens a file.
@@ -107,9 +105,9 @@ pub fn launch(
     // A given token travels in the context's environment, which D-Bus
     // activation does not pass on: such an entry is started by its command.
     if token.is_some() {
-        return start(application, files, context.as_ref());
+        return start(application, files, Some(&context));
     }
-    application.launch(files, context.as_ref())
+    application.launch(files, Some(&context))
 }
 
 /// Chromium-family browsers, by the program their entry runs. They build a web
@@ -236,9 +234,10 @@ const SOFTWARE_RENDERING: [(&str, &str); 8] = [
 /// a Vulkan program that picks the dedicated GPU by itself (DXVK) on the
 /// integrated one; the non-default GPU is turned on first where
 /// `big-dgpu-power` has it off. That asks the system bus first; a failure of
-/// that lookup shows in the log only, and the program starts as [`launch`]
-/// would start an entry without a preference. Such a launch answers before
-/// the program starts: `failed` hears why it could not.
+/// that lookup shows in the log only, and the program starts with the
+/// session's environment, less the NVIDIA offload variables when the default
+/// GPU was asked for. Such a launch answers before the program starts:
+/// `failed` hears why it could not.
 ///
 /// # Errors
 ///
@@ -259,10 +258,8 @@ pub fn launch_on(
         let non_default = renderer == Renderer::NonDefaultGpu;
         glib::spawn_future_local(async move {
             let environment = gpu_environment(non_default).await;
-            if let Some(context) = &context {
-                set_gpu_environment(context, non_default, &environment.unwrap_or_default());
-            }
-            if let Err(error) = start(&application, &files, context.as_ref()) {
+            set_gpu_environment(&context, non_default, &environment.unwrap_or_default());
+            if let Err(error) = start(&application, &files, Some(&context)) {
                 log::warn!("cannot start {}: {error}", application.display_name());
                 if let Some(failed) = failed {
                     failed(error);
@@ -271,7 +268,7 @@ pub fn launch_on(
         });
         return Ok(());
     }
-    start(application, files, context.as_ref())
+    start(application, files, Some(&context))
 }
 
 /// Start `application` with `context`'s environment.
@@ -434,7 +431,7 @@ fn environment_of(gpus: &glib::Variant, default: bool) -> Option<Vec<(String, St
 /// environment ([`set_environment`]), and moves what it starts into a scope of
 /// its own: `token` in `XDG_ACTIVATION_TOKEN` and `DESKTOP_STARTUP_ID`, or
 /// without one the display's context, which mints one at launch for this
-/// program's last input. `None` when neither a token nor a display is there.
+/// program's last input, or a plain context where there is no display.
 ///
 /// The token is what lets a program that is already running come to the front
 /// on Wayland; without one it opens behind the window it was asked from.
@@ -442,7 +439,7 @@ fn launch_context(
     renderer: Renderer,
     token: Option<&str>,
     started: Option<Started>,
-) -> Option<gio::AppLaunchContext> {
+) -> gio::AppLaunchContext {
     let context = match token {
         Some(token) => {
             let context = gio::AppLaunchContext::new();
@@ -450,11 +447,13 @@ fn launch_context(
             context.setenv("DESKTOP_STARTUP_ID", token);
             context
         }
-        None => gdk::Display::default()?.app_launch_context().upcast(),
+        None => gdk::Display::default().map_or_else(gio::AppLaunchContext::new, |display| {
+            display.app_launch_context().upcast()
+        }),
     };
     set_environment(&context, renderer);
     rehome(&context, started);
-    Some(context)
+    context
 }
 
 /// Give what `context` starts the person's environment, with the software

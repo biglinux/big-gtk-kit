@@ -8,6 +8,23 @@ fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("big-image-secure-{}-{name}", std::process::id()))
 }
 
+/// A request cancelled before it starts says so, without staging its source.
+#[test]
+fn cancelled_texture_request_stages_nothing() {
+    let cancellable = gio::Cancellable::new();
+    cancellable.cancel();
+    let missing = BigImageSpec::bounded(temp_path("never-written.png"), 16, 16);
+    let texture = glib::MainContext::new().block_on(crate::load_sandboxed_texture_cancellable(
+        missing,
+        BigImageFit::Contain,
+        cancellable,
+    ));
+    assert!(
+        matches!(texture, Err(BigImageError::Cancelled)),
+        "{texture:?}"
+    );
+}
+
 #[test]
 fn strict_request_stages_regular_file() {
     use std::os::unix::fs::PermissionsExt;
@@ -212,35 +229,59 @@ const JPEG: &[u8] = include_bytes!("../../tests/fixtures/blue.jpg");
 fn decoding_confined_without_user_namespaces() {
     if std::env::var_os(WITHOUT_USER_NAMESPACES).is_some() {
         every_entry_point_decodes();
-    } else if Path::new(big_os_kit::confinement::BWRAP).exists() {
-        run_without_user_namespaces();
+        return;
+    }
+    let host_confines = glib::MainContext::new().block_on(glycin::SandboxMechanism::detect())
+        == glycin::SandboxMechanism::NotSandboxed;
+    if host_confines || Path::new(big_os_kit::confinement::BWRAP).exists() {
+        run_without_user_namespaces(host_confines);
     }
 }
 
 /// This test again, in a namespace that may not make another, where
-/// bubblewrap fails the way it does with user namespaces off.
-fn run_without_user_namespaces() {
-    use big_os_kit::subprocess::BigSubprocessSpec;
+/// bubblewrap fails the way it does with user namespaces off; as it is where
+/// the host already confines loaders that way.
+fn run_without_user_namespaces(host_confines: bool) {
+    use big_os_kit::confinement::BWRAP;
+    use big_os_kit::subprocess::{BigSubprocessAllowList, BigSubprocessSpec};
 
+    let test = std::env::current_exe().unwrap();
+    let (program, mut argv) = if host_confines {
+        (test, Vec::new())
+    } else {
+        let mut argv: Vec<std::ffi::OsString> = [
+            "--dev-bind",
+            "/",
+            "/",
+            "--unshare-user",
+            "--disable-userns",
+            "--",
+        ]
+        .map(Into::into)
+        .into();
+        argv.push(test.into());
+        (PathBuf::from(BWRAP), argv)
+    };
+    argv.extend(
+        [
+            "--exact",
+            "secure::tests::decoding_confined_without_user_namespaces",
+            "--quiet",
+        ]
+        .map(Into::into),
+    );
     // Named as our JPEG loader's directory, so a region decoder is asked for.
     let mut data_dirs = glib::user_runtime_dir()
         .join("big-image/confined-test/jpg")
         .into_os_string();
     data_dirs.push(":/usr/share");
     let out = BigSubprocessSpec::builder()
-        .program(big_os_kit::confinement::BWRAP)
-        .args(["--dev-bind", "/", "/", "--unshare-user", "--disable-userns"])
-        .arg("--")
-        .arg(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "secure::tests::decoding_confined_without_user_namespaces",
-            "--quiet",
-        ])
+        .program(program)
+        .args(argv)
         .env(WITHOUT_USER_NAMESPACES, "1")
         .env("XDG_DATA_DIRS", data_dirs)
         .timeout(std::time::Duration::from_secs(60))
-        .allow_list([big_os_kit::confinement::BWRAP])
+        .maybe_allow((!host_confines).then(|| BigSubprocessAllowList::new([BWRAP])))
         .build()
         .run()
         .unwrap();
@@ -294,7 +335,8 @@ fn every_entry_point_decodes() {
         assert_eq!(decoded.unwrap().width, 16);
         let animation = crate::open_animation(BigImageSpec::bounded(&gif, 16, 16)).await;
         assert!(animation.unwrap().is_none(), "a still GIF");
-        assert!(crate::open_region_decoder(&jpeg).await.is_ok());
+        let region = crate::open_region_decoder(&jpeg).await.unwrap();
+        assert_eq!(region.expect("a region decoder").natural_size(), (16, 16));
         let icon = crate::icon::decode_svg(glib::Bytes::from_static(SVG), 16).await;
         assert_eq!(icon.unwrap().height(), 16);
     });
