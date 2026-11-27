@@ -149,15 +149,20 @@ pub fn mount_of<'a>(table: &'a str, path: &Path) -> Option<Mount<'a>> {
         .max_by_key(|mount| mount.point.as_os_str().len())
 }
 
-/// Whether `folder` is on a mount of `table` that is not a network share: a
-/// process id found there is this machine's. A folder the table holds no mount
-/// for, as when it could not be read, is not, nor is any folder while a mount
-/// point the table holds is not UTF-8: a share may sit there.
+/// Whether `folder` is on a mount of `table` that is not a network share, so a
+/// process id found there is this machine's. Found by the folder's own mount
+/// id, which a share mounted over a local mount cannot hide; `false` for a
+/// mount the table does not hold, as when it could not be read.
 pub(crate) fn is_local(table: &str, folder: &Path) -> bool {
-    !table.contains(char::REPLACEMENT_CHARACTER)
-        && std::fs::canonicalize(folder).is_ok_and(|folder| {
-            mount_holding(table, &folder).is_some_and(|(_, filesystem)| !is_network(&filesystem))
-        })
+    rustix::fs::statx(
+        rustix::fs::CWD,
+        folder,
+        rustix::fs::AtFlags::empty(),
+        rustix::fs::StatxFlags::MNT_ID,
+    )
+    .ok()
+    .and_then(|status| mount_with_id(table, status.stx_mnt_id))
+    .is_some_and(|mount| !is_network(mount.filesystem))
 }
 
 /// The source and the filesystem type of the mount [`mount_of`] finds.
@@ -282,27 +287,29 @@ fn read(file: &mut File) -> Option<Arc<str>> {
 #[cfg(test)]
 mod tests {
     /// A mount point that is not UTF-8 leaves the other mounts readable, and
-    /// no folder local.
+    /// a share there is still a share.
     #[test]
     fn foreign_bytes_spoil_one_line() {
+        let root = std::path::Path::new("/");
+        let id = mount_id(root);
         let path = std::env::temp_dir().join(format!("mountinfo-{}", std::process::id()));
-        std::fs::write(
-            &path,
-            b"22 1 0:21 / / rw - btrfs /dev/sda2 rw\n90 22 0:60 / /media/\xff rw - nfs4 server:/x rw\n",
-        )
-        .unwrap();
-        let table = super::read(&mut std::fs::File::open(&path).unwrap()).unwrap();
-        std::fs::remove_file(&path).unwrap();
+        let table = |share: u64, disk: u64| {
+            let mut bytes =
+                format!("{disk} 1 0:21 / / rw - btrfs /dev/sda2 rw\n{share} 1 0:60 / /media/")
+                    .into_bytes();
+            bytes.extend_from_slice(b"\xff rw - nfs4 server:/x rw\n");
+            std::fs::write(&path, bytes).unwrap();
+            let table = super::read(&mut std::fs::File::open(&path).unwrap()).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            table
+        };
+        let disk = table(id + 1, id);
         assert_eq!(
-            super::mount_holding(&table, std::path::Path::new("/home")),
+            super::mount_holding(&disk, std::path::Path::new("/home")),
             Some(("/dev/sda2".to_owned(), "btrfs".to_owned()))
         );
-        // The share may hold any folder: none counts as local.
-        assert!(!super::is_local(&table, std::path::Path::new("/")));
-        assert!(super::is_local(
-            "22 1 0:21 / / rw - btrfs /dev/sda2 rw\n",
-            std::path::Path::new("/")
-        ));
+        assert!(super::is_local(&disk, root));
+        assert!(!super::is_local(&table(id, id + 1), root));
     }
 
     /// The disk under each mounted device spins or not as `lsblk` says, and
@@ -332,6 +339,40 @@ mod tests {
         }
         assert!(!super::on_solid_state("tmpfs"));
         assert!(!super::on_solid_state("/dev/null"));
+    }
+
+    /// The id `statx` gives the mount `path` is on.
+    fn mount_id(path: &std::path::Path) -> u64 {
+        rustix::fs::statx(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::AtFlags::empty(),
+            rustix::fs::StatxFlags::MNT_ID,
+        )
+        .unwrap()
+        .stx_mnt_id
+    }
+
+    /// A share mounted over an older local mount hides it, and mountinfo
+    /// still lists the hidden one, with the longer mount point: the folder's
+    /// own mount decides.
+    #[test]
+    fn visible_mount_decides_local() {
+        let folder = std::env::temp_dir();
+        let id = mount_id(&folder);
+        let point = std::fs::canonicalize(&folder)
+            .unwrap()
+            .to_string_lossy()
+            .replace(' ', "\\040");
+        let table = |visible: &str, hidden: &str| {
+            format!(
+                "{id} 1 0:53 / / rw - {visible} server:/export rw\n\
+                 {} 1 0:21 / {point} rw - {hidden} /dev/sda2 rw\n",
+                id + 1
+            )
+        };
+        assert!(!super::is_local(&table("nfs4", "ext4"), &folder));
+        assert!(super::is_local(&table("ext4", "nfs4"), &folder));
     }
 
     #[test]

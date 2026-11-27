@@ -950,10 +950,14 @@ fn replaced_document_keeps_group() {
     // SAFETY: getegid has no preconditions.
     let new_file_group = unsafe { libc::getegid() };
     let dir_group = fs::metadata(&dir).unwrap().gid();
-    let other = groups
+    let Some(other) = groups
         .into_iter()
         .find(|group| *group != new_file_group && *group != dir_group)
-        .expect("the test user must belong to a second group");
+    else {
+        eprintln!("skipped: the test user belongs to no second group");
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    };
     std::os::unix::fs::chown(&target, None, Some(other)).unwrap();
 
     assert!(atomic_replace_document(&target, b"new", || true).unwrap());
@@ -1005,6 +1009,52 @@ fn replaced_document_keeps_access_acl() {
             .any(|(name, _)| name.as_bytes() == b"system.posix_acl_access")
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// A folder's default ACL does not reach the replacement of a document that
+/// had no access ACL of its own.
+#[test]
+fn replacement_drops_inherited_acl() {
+    const ACL_USER_OBJ: u16 = 0x01;
+    const ACL_USER: u16 = 0x02;
+    const ACL_GROUP_OBJ: u16 = 0x04;
+    const ACL_MASK: u16 = 0x10;
+    const ACL_OTHER: u16 = 0x20;
+    let entry = |tag: u16, perm: u16, id: u32| {
+        [tag.to_le_bytes(), perm.to_le_bytes()]
+            .concat()
+            .into_iter()
+            .chain(id.to_le_bytes())
+            .collect::<Vec<_>>()
+    };
+    let dir = storage_test_dir("replace-inherited-acl");
+    let target = dir.join("private.txt");
+    fs::write(&target, b"old").unwrap();
+    let reader = crate::microdaemon::current_effective_user_id() + 1;
+    let acl = [
+        2_u32.to_le_bytes().to_vec(),
+        entry(ACL_USER_OBJ, 6, u32::MAX),
+        entry(ACL_USER, 4, reader),
+        entry(ACL_GROUP_OBJ, 4, u32::MAX),
+        entry(ACL_MASK, 4, u32::MAX),
+        entry(ACL_OTHER, 0, u32::MAX),
+    ]
+    .concat();
+    assert!(
+        set_xattr(&dir, "system.posix_acl_default", &acl),
+        "the test folder must take default ACLs"
+    );
+
+    assert!(atomic_replace_document(&target, b"new", || true).unwrap());
+
+    let after = document_attributes(&target).unwrap();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(
+        !after
+            .iter()
+            .any(|(name, _)| name.as_bytes() == b"system.posix_acl_access"),
+        "{after:?}"
+    );
 }
 
 /// The attributes grew between the size query and the read: ask again.
