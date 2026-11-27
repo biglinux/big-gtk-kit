@@ -50,6 +50,8 @@ fn file_io_test_dir(name: &str) -> PathBuf {
         std::process::id(),
         FILE_IO_TEST_SEQ.fetch_add(1, Ordering::Relaxed),
     ));
+    // A failed run under a reused PID leaves its files behind.
+    let _ = remove_tree(&dir);
     create_dir_all(&dir).unwrap();
     dir
 }
@@ -722,12 +724,13 @@ fn remove_tree_stays_inside() {
                 && fs::read_dir(root.join("a/b")).is_ok_and(|entries| entries.count() > 19_000)
             {
             }
-            let _ = fs::rename(root.join("a/b"), root.join("b"));
+            fs::rename(root.join("a/b"), root.join("b"))
         })
     };
     let _ = remove_tree(&root);
-    mover.join().unwrap();
+    let moved = mover.join().unwrap();
     let kept = parent.join("o/victim").exists();
     let _ = remove_tree(&parent);
+    assert!(moved.is_ok(), "no move during the walk: {moved:?}");
     assert!(kept, "the walk deleted a file outside its tree");
 }
