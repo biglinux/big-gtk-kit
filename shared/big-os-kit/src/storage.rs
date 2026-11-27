@@ -286,7 +286,7 @@ fn remove_dead_writers_temps(target: &Path) {
     if !crate::mount_table::is_local(&crate::mount_table::mountinfo(), parent) {
         return;
     }
-    let prefix = format!(".{}.tmp.", name.to_string_lossy());
+    let prefix = temp_prefix(name);
     let Ok(entries) = fs::read_dir(parent) else {
         return;
     };
@@ -324,15 +324,21 @@ fn remove_dead_writers_temps(target: &Path) {
     }
 }
 
+/// `.<name>.tmp.`, with `name` cut short enough that the process id and a
+/// sequence number after it stay within a file system's 255-byte names.
+fn temp_prefix(name: &std::ffi::OsStr) -> String {
+    // `.`, `.tmp.` and `.` around a pid of up to 7 digits and a `u64`.
+    const LONGEST_NAME: usize = 255 - 7 - 7 - 20;
+    let name = name.to_string_lossy();
+    format!(".{}.tmp.", &name[..name.floor_char_boundary(LONGEST_NAME)])
+}
+
 fn atomic_sibling_temp_path(target: &Path) -> PathBuf {
     let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let name = target
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "store".to_string());
+    let prefix = temp_prefix(target.file_name().unwrap_or("store".as_ref()));
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!(".{name}.tmp.{pid}.{seq}"))
+    parent.join(format!("{prefix}{pid}.{seq}"))
 }
 
 /// Atomically write `bytes` to `path`: write a uniquely-named sibling temp file,
