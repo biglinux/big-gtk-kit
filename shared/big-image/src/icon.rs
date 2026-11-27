@@ -233,7 +233,8 @@ fn missing_icon() -> gio::Icon {
     gio::ThemedIcon::new("image-missing-symbolic").upcast()
 }
 
-/// A cache key for `path` drawn `px` tall with `variant` (a tint, or empty).
+/// A cache key for `path` drawn `px` tall with `variant` (a tint, a shape, or
+/// empty).
 ///
 /// The file's length and modification time are part of it, so an icon theme
 /// update stops matching the entries of the icon it replaced.
@@ -491,10 +492,11 @@ pub fn file_texture(
     deliver: impl FnOnce(gdk::Texture) + 'static,
 ) {
     let height = (px * scale.max(1)).max(1);
-    let key = source_key(path, height, "");
     if path.extension().and_then(|ext| ext.to_str()) != Some("svg") {
         // As wide as a banner may reasonably be; the height is what was asked.
+        // Keyed apart from the icon of that height, which fits a square.
         let bound = (height.saturating_mul(8), height);
+        let key = source_key(path, height, "banner");
         raster_texture(path.to_path_buf(), bound, key, |texture| {
             if let Some(texture) = texture {
                 deliver(texture);
@@ -502,6 +504,7 @@ pub fn file_texture(
         });
         return;
     }
+    let key = source_key(path, height, "");
     if let Some(texture) = memory_hit(&key) {
         deliver(texture);
         return;
@@ -1008,6 +1011,37 @@ mod tests {
             let (linked, _) = answer(&file_icon(&link));
             let _ = std::fs::remove_dir_all(&dir);
             assert!(linked.is_ok(), "{linked:?}");
+        });
+    }
+
+    /// A wide picture drawn as a banner, then as an icon of the same height,
+    /// gives each its own size: the banner its width, the icon a square's.
+    #[test]
+    fn banner_and_icon_kept_apart() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dir = scratch("banner");
+            let wide = dir.join("wide.png");
+            let pixels = glib::Bytes::from_owned(vec![200u8; 256 * 32 * 4]);
+            let png =
+                gdk::MemoryTexture::new(256, 32, gdk::MemoryFormat::R8g8b8a8, &pixels, 256 * 4)
+                    .save_to_png_bytes();
+            std::fs::write(&wide, &png).unwrap();
+            let slot = std::rc::Rc::new(RefCell::new(None));
+            let sink = slot.clone();
+            file_texture(&wide, 32, 1, move |texture| {
+                sink.replace(Some(texture));
+            });
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while slot.borrow().is_none() {
+                assert!(Instant::now() < deadline, "no banner");
+                glib::MainContext::default().iteration(false);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let banner = slot.take().expect("a banner");
+            let (icon, _) = answer(&file_icon(&wide));
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!((banner.width(), banner.height()), (256, 32));
+            assert_eq!(icon.expect("an icon").width(), 32);
         });
     }
 
