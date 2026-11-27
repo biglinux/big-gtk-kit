@@ -169,7 +169,8 @@ fn first_descendant<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Option<T> {
 /// Name each item the button's and the popup's factories make after the string
 /// it shows. GTK's and libadwaita's default factories draw a label and a check
 /// mark but leave the list item unnamed, so a screen reader reads an empty
-/// item; naming it keeps the factory's look.
+/// item; naming it keeps the factory's look. An item the factory named
+/// itself, which binds first, keeps that name.
 fn name_list_items(
     factory: Option<gtk::ListItemFactory>,
     list_factory: Option<gtk::ListItemFactory>,
@@ -183,8 +184,19 @@ fn name_list_items(
             let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
-            if let Some(value) = item.item().and_downcast::<gtk::StringObject>() {
+            // The property, not `accessible_label()`, whose binding cannot
+            // return the NULL an unnamed item has.
+            let named = item
+                .property::<Option<gtk::glib::GString>>("accessible-label")
+                .is_some_and(|name| !name.is_empty());
+            if !named && let Some(value) = item.item().and_downcast::<gtk::StringObject>() {
                 item.set_accessible_label(&value.string());
+            }
+        });
+        // A reused item starts unnamed, so the name above never outlives its choice.
+        factory.connect_unbind(|_, item| {
+            if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
+                item.set_accessible_label("");
             }
         });
     }
@@ -217,22 +229,26 @@ mod tests {
         let mut item = list.first_child();
         for choice in choices {
             let widget = item.expect("an item per choice");
-            // SAFETY: the item outlives the call, and the label
-            // property's variadic value is a NUL-terminated string.
-            let mismatch: Option<gtk::glib::GString> = unsafe {
-                gtk::glib::translate::from_glib_full(gtk::ffi::gtk_test_accessible_check_property(
-                    gtk::glib::translate::ToGlibPtr::to_glib_none(
-                        widget.upcast_ref::<gtk::Accessible>(),
-                    )
-                    .0,
-                    gtk::ffi::GTK_ACCESSIBLE_PROPERTY_LABEL,
-                    choice.as_ptr(),
-                ))
-            };
-            assert_eq!(mismatch, None, "{choice:?}");
+            assert_eq!(name_mismatch(&widget, choice), None, "{choice:?}");
             item = widget.next_sibling();
         }
         assert!(item.is_none());
+    }
+
+    /// What `widget`'s accessible name is when it is not `name`.
+    fn name_mismatch(widget: &gtk::Widget, name: &std::ffi::CStr) -> Option<gtk::glib::GString> {
+        // SAFETY: the widget outlives the call, and the label property's
+        // variadic value is a NUL-terminated string.
+        unsafe {
+            gtk::glib::translate::from_glib_full(gtk::ffi::gtk_test_accessible_check_property(
+                gtk::glib::translate::ToGlibPtr::to_glib_none(
+                    widget.upcast_ref::<gtk::Accessible>(),
+                )
+                .0,
+                gtk::ffi::GTK_ACCESSIBLE_PROPERTY_LABEL,
+                name.as_ptr(),
+            ))
+        }
     }
 
     #[test]
@@ -276,6 +292,94 @@ mod tests {
         });
     }
 
+    /// The popup's list of `dropdown`, built from its own model and factory.
+    fn list_of(dropdown: &gtk::DropDown) -> gtk::ListView {
+        gtk::ListView::new(
+            dropdown
+                .model()
+                .map(|model| gtk::NoSelection::new(Some(model))),
+            dropdown.factory(),
+        )
+    }
+
+    /// A factory that names its items keeps its names.
+    #[test]
+    fn factory_names_are_kept() {
+        big_testkit::harness::require_gtk_test(|| {
+            let shown_as = |code: &str| match code {
+                "pt_BR" => "Portuguese (Brazil)",
+                _ => "English",
+            };
+            let factory = gtk::SignalListItemFactory::new();
+            factory.connect_setup(|_, item| {
+                if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
+                    item.set_child(Some(&gtk::Label::new(None)));
+                }
+            });
+            factory.connect_bind(move |_, item| {
+                let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+                    return;
+                };
+                if let Some(code) = item.item().and_downcast::<gtk::StringObject>() {
+                    let name = shown_as(&code.string());
+                    item.child()
+                        .and_downcast::<gtk::Label>()
+                        .expect("the label setup made")
+                        .set_label(name);
+                    item.set_accessible_label(name);
+                }
+            });
+            let languages = gtk::StringList::new(&["pt_BR", "en"]);
+            let named =
+                build_drop_down(gtk::DropDown::builder().model(&languages).factory(&factory));
+            let list = list_of(&named);
+            let window = gtk::Window::builder().child(&list).build();
+            window.present();
+            assert_named(&list, &[c"Portuguese (Brazil)", c"English"]);
+            window.destroy();
+        });
+    }
+
+    /// The automatic name follows an item the list binds to another choice.
+    #[test]
+    fn reused_item_is_renamed() {
+        big_testkit::harness::require_gtk_test(|| {
+            // More choices than the 200 items a list view makes, so scrolling
+            // binds the items it made to other choices.
+            let choices: Vec<String> = (0..1000).map(|n| format!("Choice {n}")).collect();
+            let dropdown = from_strings(&choices.iter().map(String::as_str).collect::<Vec<_>>());
+            let list = list_of(&dropdown);
+            let scrolled = gtk::ScrolledWindow::builder()
+                .child(&list)
+                .min_content_height(120)
+                .build();
+            let window = gtk::Window::builder().child(&scrolled).build();
+            window.present();
+            let shows = |text: &str| {
+                children(&list).any(|item| {
+                    item.is_mapped()
+                        && descendants(&item).any(|widget| {
+                            widget
+                                .downcast::<gtk::Label>()
+                                .is_ok_and(|label| label.label() == text)
+                        })
+                })
+            };
+            assert!(big_testkit::harness::pump_until(|| shows("Choice 0")));
+            list.scroll_to(999, gtk::ListScrollFlags::NONE, None);
+            assert!(big_testkit::harness::pump_until(|| shows("Choice 999")));
+            for item in children(&list) {
+                let shown = descendants(&item)
+                    .find_map(|widget| widget.downcast::<gtk::Label>().ok())
+                    .expect("the label the item shows")
+                    .label();
+                let shown = std::ffi::CString::new(shown.as_str()).expect("no NUL");
+                assert_eq!(name_mismatch(&item, &shown), None, "{shown:?}");
+            }
+            window.destroy();
+        });
+    }
+
     /// A row inside another popover still shows its choice on one line; only
     /// its own open list wraps.
     #[test]
@@ -295,8 +399,7 @@ mod tests {
                     .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
                     .find(|label| {
                         label.label().as_str() == long
-                            && label.ancestor(gtk::Popover::static_type()).as_ref()
-                                == Some(popover)
+                            && label.ancestor(gtk::Popover::static_type()).as_ref() == Some(popover)
                     })
             };
             let shown = label_in(outer.upcast_ref()).expect("the chosen label on the row");
