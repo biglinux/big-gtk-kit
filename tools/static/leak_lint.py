@@ -853,17 +853,18 @@ def none_arm_continues(closure: str) -> bool:
             close = brace + len(call_argument(closure, brace)) + 1
             upgrades = re.search(r"\.upgrade\(\)", closure[m.end() : brace]) is not None
             matches.append((brace, close, upgrades))
-    # A match inside the arms of one on an upgrade (`Some(t) => match next() {…}`)
-    # is not about the upgrade unless it upgrades too: the outer `None` arm is.
-    nested = [
-        (lo, hi)
-        for lo, hi, inner_upgrades in matches
-        if not inner_upgrades
-        and any(upgrades and outer < lo < end for outer, end, upgrades in matches)
-    ]
     for m in re.finditer(r"\bNone\s*(?:if\b[^;{}]*?)?=>\s*", closure):
-        if any(lo < m.start() < hi for lo, hi in nested):
-            continue
+        # The arm belongs to the innermost match around it. One inside the arms
+        # of a match on an upgrade (`Some(t) => match next() {…}`) is not about
+        # the upgrade unless its own match upgrades: the outer `None` arm is.
+        around = [match for match in matches if match[0] < m.start() < match[1]]
+        if around:
+            lo, _, upgrades = max(around)
+            if not upgrades and any(
+                outer_upgrades and outer < lo < end
+                for outer, end, outer_upgrades in matches
+            ):
+                continue
         if closure.startswith("{", m.end()):
             arm = call_argument(closure, m.end())
         else:

@@ -961,21 +961,34 @@ class RepeatingSources(unittest.TestCase):
                 self.assertIn(self.RULE, lint(case.replace("ARM", arm)))
 
     def test_nested_upgrade_match_is_read(self):
-        # The inner match is on an upgrade of its own: its `None` arm continues.
-        self.assertIn(
-            self.RULE,
-            lint("""
+        # The innermost match is on an upgrade of its own: its `None` arm
+        # continues, directly inside the outer upgrade's arms or a level below.
+        for inner in (
+            (
+                "match win.upgrade() { Some(b) => { a.step(&b); glib::ControlFlow::Continue }"
+                " None => glib::ControlFlow::Continue, }"
+            ),
+            (
+                "match a.state() { State::Active => match win.upgrade() {"
+                " Some(b) => { a.step(&b); glib::ControlFlow::Continue }"
+                " None => glib::ControlFlow::Continue },"
+                " State::Idle => glib::ControlFlow::Continue }"
+            ),
+        ):
+            with self.subTest(inner=inner):
+                self.assertIn(
+                    self.RULE,
+                    lint(
+                        """
             fn setup(d: Duration, app: glib::WeakRef<App>, win: glib::WeakRef<Win>) {
                 glib::timeout_add_local(d, move || match app.upgrade() {
-                    Some(a) => match win.upgrade() {
-                        Some(b) => { a.step(&b); glib::ControlFlow::Continue }
-                        None => glib::ControlFlow::Continue,
-                    },
+                    Some(a) => INNER,
                     None => glib::ControlFlow::Break,
                 });
             }
-        """),
-        )
+        """.replace("INNER", inner)
+                    ),
+                )
 
     def test_guarded_none_arm_is_read(self):
         case = """
