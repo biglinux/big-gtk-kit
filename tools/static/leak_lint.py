@@ -530,8 +530,8 @@ def match_arm_patterns(body: str) -> list[tuple[int, int, int]]:
                 comma = re.match(r"\s*,", body[arm:close])
                 start = arm + (comma.end() if comma else 0)
             else:
-                comma = top_level_index(body, arm, close, ",")
-                if comma < 0:
+                comma = expression_end(body, arm)
+                if comma >= close:
                     break  # the last arm
                 start = comma + 1
         if not arms:  # `match never {}`, or a brace this reader took for the arms

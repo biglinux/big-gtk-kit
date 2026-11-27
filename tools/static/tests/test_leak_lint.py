@@ -477,6 +477,30 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
+    def test_turbofish_comma_ends_no_arm(self):
+        # The arm `cast::<A, B>(&widget)` reads the function's `widget` whole.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match controller.event() {
+                    FIRST,
+                    SECOND,
+                });
+                widget.add_controller(keys);
+            }
+        """
+        warns = [("handler-holds-owner", "warning")]
+        for first, second, expected in (
+            ("Some(other) => cast::<A, B>(&widget)", "None => Proceed", warns),
+            ("None => cast::<A, B>(other)", "Some(widget) => widget.show()", []),
+        ):
+            with self.subTest(first=first):
+                self.assertEqual(
+                    lint(case.replace("FIRST", first).replace("SECOND", second)),
+                    expected,
+                )
+
     def test_field_label_binds_nothing(self):
         # In `Event { widget: w }` the arm binds `w`; its `widget` is the function's.
         case = """
