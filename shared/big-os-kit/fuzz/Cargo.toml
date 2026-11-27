@@ -1,0 +1,43 @@
+[package]
+name = "big-os-kit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.100.0"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+big-os-kit = { path = "..", features = ["http-client"] }
+
+[[bin]]
+name = "cgroup_capacity"
+path = "fuzz_targets/cgroup_capacity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pressure_config"
+path = "fuzz_targets/pressure_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "microdaemon_frame"
+path = "fuzz_targets/microdaemon_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_headers"
+path = "fuzz_targets/http_headers.rs"
+test = false
+doc = false
+bench = false
