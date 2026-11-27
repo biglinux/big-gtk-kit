@@ -129,7 +129,9 @@ mod tests {
     }
 
     /// An answer for an earlier edit of the same name, asked before the file
-    /// went away, does not refuse the name typed again.
+    /// went away, does not refuse the name typed again. Under load the first
+    /// lookup may end only after the file is gone; the test then passes without
+    /// a stale answer, and cannot fail wrongly.
     #[test]
     fn superseded_lookup_is_ignored() {
         big_testkit::harness::require_gtk_test(|| {
