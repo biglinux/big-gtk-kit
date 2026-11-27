@@ -189,7 +189,9 @@ impl AppShellComponent for NeverBuilt {
 #[test]
 fn early_cli_runs_before_validation() {
     let exit = run_root_with_args::<NeverBuilt, &str>(
-        AppShellSpec::new("invalid id").early_cli(early_cli_success),
+        AppShellSpec::new("invalid id")
+            .early_cli(early_cli_success)
+            .start_threads(|| panic!("an early answer starts no thread")),
         vec!["demo", "--version"],
     );
 
@@ -280,6 +282,7 @@ fn boot_exits_after_last_window() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     static BUILT: AtomicBool = AtomicBool::new(false);
+    static THREADS_STARTED: AtomicBool = AtomicBool::new(false);
 
     struct SmokeRoot;
 
@@ -301,6 +304,10 @@ fn boot_exits_after_last_window() {
             root: Self::Root,
             _sender: relm4::ComponentSender<Self>,
         ) -> relm4::ComponentParts<Self> {
+            assert!(
+                THREADS_STARTED.load(Ordering::SeqCst),
+                "the program's threads start before its first window"
+            );
             BUILT.store(true, Ordering::SeqCst);
             let window_for_close = root;
             glib::idle_add_local_once(move || window_for_close.close());
@@ -329,7 +336,8 @@ fn boot_exits_after_last_window() {
     }
 
     let exit = run_root_with_args::<SmokeRoot, &str>(
-        AppShellSpec::new("br.com.biglinux.AppKitSmoke"),
+        AppShellSpec::new("br.com.biglinux.AppKitSmoke")
+            .start_threads(|| THREADS_STARTED.store(true, Ordering::SeqCst)),
         vec!["appkit-smoke"],
     );
     assert_eq!(exit, glib::ExitCode::SUCCESS);

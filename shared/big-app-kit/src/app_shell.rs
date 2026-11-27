@@ -40,6 +40,7 @@ pub struct AppShellSpec {
     base_css: Option<&'static str>,
     watch_dark_mode: bool,
     early_cli: Option<AppShellEarlyCli>,
+    start_threads: Option<fn()>,
 }
 
 /// Display-less command-line handler run before GTK and application startup.
@@ -59,6 +60,7 @@ impl AppShellSpec {
             base_css: None,
             watch_dark_mode: false,
             early_cli: None,
+            start_threads: None,
         }
     }
 
@@ -94,6 +96,17 @@ impl AppShellSpec {
     #[must_use]
     pub const fn early_cli(mut self, handler: AppShellEarlyCli) -> Self {
         self.early_cli = Some(handler);
+        self
+    }
+
+    /// Start the program's own threads in `start`, which [`AppShell::run`]
+    /// calls once the locale and the process environment are set and before
+    /// the application runs and builds its first window. A thread started in
+    /// `main` instead keeps the program from opening. Not called when an
+    /// early command-line answer ends the program.
+    #[must_use]
+    pub const fn start_threads(mut self, start: fn()) -> Self {
+        self.start_threads = Some(start);
         self
     }
 
@@ -400,7 +413,7 @@ impl AppShell {
     /// environment and locale, which no other thread may read meanwhile. It
     /// returns failure, starting nothing, when another thread already runs, so
     /// a program that starts one in `main` first never opens. Start such work
-    /// from the main loop instead, for example on its first idle.
+    /// in [`AppShellSpec::start_threads`].
     ///
     /// This registers the preconfigured application through
     /// `RelmApp::from_app`, but drives GTK through a native-argument
@@ -466,6 +479,10 @@ where
     };
     let _relm_app = relm4::RelmApp::<()>::from_app(app.clone());
     let (root, deferred_local_command_line) = connect_root_activation::<C>(&app, watch_dark_mode);
+    // Nothing changes the environment past here.
+    if let Some(start) = spec.start_threads {
+        start();
+    }
     let application_exit_code = run_application_with_os_args(app.upcast_ref(), &args);
     let exit_code = deferred_local_command_line
         .borrow_mut()
