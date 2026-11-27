@@ -259,32 +259,34 @@ fn process_application() -> Option<gio::Application> {
     static JOINED: Mutex<Option<(std::thread::ThreadId, usize)>> = Mutex::new(None);
     let application = gio::Application::default()?;
     let here = (std::thread::current().id(), application.as_ptr() as usize);
-    let mut joined = JOINED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    match *joined {
-        Some(already) if already == here => {}
-        Some(_) => return None,
-        None => {
-            let handlers: [(&str, fn()); 2] = [
-                (PROCESS_RELEASE_ACTION, purge_this_copy),
-                (PROCESS_PRESSURE_ACTION, || {
-                    big_os_kit::session_resources::shared().note_pressure();
-                }),
-            ];
-            for (name, handler) in handlers {
-                let action = application
-                    .lookup_action(name)
-                    .and_downcast::<gio::SimpleAction>()
-                    .unwrap_or_else(|| {
-                        let action = gio::SimpleAction::new(name, None);
-                        application.add_action(&action);
-                        action
-                    });
-                action.connect_activate(move |_, _| handler());
-            }
-            *joined = Some(here);
+    {
+        let mut joined = JOINED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match *joined {
+            Some(already) if already == here => return Some(application),
+            Some(_) => return None,
+            None => *joined = Some(here),
         }
+    }
+    // Unlocked: adding an action emits `action-added`, whose handlers may
+    // register a cache and come back here.
+    let handlers: [(&str, fn()); 2] = [
+        (PROCESS_RELEASE_ACTION, purge_this_copy),
+        (PROCESS_PRESSURE_ACTION, || {
+            big_os_kit::session_resources::shared().note_pressure();
+        }),
+    ];
+    for (name, handler) in handlers {
+        let action = application
+            .lookup_action(name)
+            .and_downcast::<gio::SimpleAction>()
+            .unwrap_or_else(|| {
+                let action = gio::SimpleAction::new(name, None);
+                application.add_action(&action);
+                action
+            });
+        action.connect_activate(move |_, _| handler());
     }
     Some(application)
 }
@@ -697,6 +699,23 @@ mod tests {
             .join()
             .expect("the second thread");
         assert!(!joined_elsewhere);
+    }
+
+    /// A handler of the application's `action-added` that registers a cache
+    /// while the process actions are added gets through.
+    #[test]
+    fn action_observer_registers_cache() {
+        if std::env::var_os(CHILD_RUN).is_none() {
+            run_alone(
+                "memory_pressure::tests::action_observer_registers_cache",
+                &[],
+            );
+            return;
+        }
+        let application = gio::Application::new(None, gio::ApplicationFlags::NON_UNIQUE);
+        application.set_default();
+        application.connect_action_added(None, |_, _| register_release(|| {}));
+        assert!(process_application().is_some());
     }
 
     #[test]
