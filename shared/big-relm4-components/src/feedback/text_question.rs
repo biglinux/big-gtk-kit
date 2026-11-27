@@ -53,7 +53,8 @@ pub fn ask_text(
     alert.set_close_response("cancel");
     alert.set_extra_child(Some(&entry));
     alert.set_focus(Some(&entry));
-    alert.set_response_enabled(ACCEPT, accepts(question.text.trim()));
+    // The field's own text: `max_length` cuts the question's text to fit.
+    alert.set_response_enabled(ACCEPT, accepts(entry.text().trim()));
     entry.connect_changed({
         let alert = alert.downgrade();
         move |entry| {
@@ -114,6 +115,31 @@ mod tests {
             assert!(dialog.is_response_enabled(ACCEPT));
             entry.set_text(" notes ");
             assert!(!dialog.is_response_enabled(ACCEPT));
+        });
+    }
+
+    /// A text longer than the field takes is cut, and the answer offered is
+    /// judged on what the field holds.
+    #[test]
+    fn cut_text_is_judged() {
+        big_testkit::harness::require_gtk_test(|| {
+            let question = TextQuestion {
+                heading: "Rename",
+                body: "",
+                field: "New name",
+                text: "abcd",
+                placeholder: "",
+                max_length: 3,
+                accept: "Rename",
+                cancel: "Cancel",
+            };
+            let alert = ask_text(
+                None::<&gtk::Widget>,
+                question,
+                |text| text.len() == 4,
+                |_| {},
+            );
+            assert!(!alert.dialog().is_response_enabled(ACCEPT));
         });
     }
 
