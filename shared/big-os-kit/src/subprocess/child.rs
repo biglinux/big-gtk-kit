@@ -207,7 +207,8 @@ impl BigSubprocessChild {
     }
 
     /// Take the stdin pipe (present only when the spec set a `stdin`
-    /// payload). Returns `None` after the first take.
+    /// payload). Returns `None` after the first take, and once any clone of
+    /// this handle has waited: [`Self::wait`] closes a stdin nobody took.
     #[must_use]
     pub fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
         self.lock_child().ok()?.stdin.take()
