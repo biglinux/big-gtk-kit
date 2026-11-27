@@ -249,20 +249,23 @@ impl Sandbox {
 
         shared_fds.push(self.dbus_socket.as_raw_fd());
 
+        let confined = confinement.is_some();
         unsafe {
             command.pre_exec(move || {
                 #[cfg(not(all(target_os = "linux", target_env = "musl")))]
-                {
+                let marked =
                     libc::close_range(3, libc::c_uint::MAX, libc::CLOSE_RANGE_CLOEXEC as i32);
-                }
                 #[cfg(all(target_os = "linux", target_env = "musl"))]
-                {
-                    libc::syscall(
-                        libc::SYS_close_range,
-                        3,
-                        libc::c_uint::MAX,
-                        libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
-                    );
+                let marked = libc::syscall(
+                    libc::SYS_close_range,
+                    3,
+                    libc::c_uint::MAX,
+                    libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
+                );
+                // Landlock leaves a descriptor opened before it usable, so a
+                // confined loader starts with none of this process's.
+                if marked != 0 && confined {
+                    return Err(io::Error::last_os_error());
                 }
                 // Allow FDs to be passed to child process
                 for raw_fd in &shared_fds {
@@ -1347,11 +1350,11 @@ mod tests {
         }
     }
 
+    const SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>"#;
+
     /// The installed loaders work within that confinement.
     #[test]
     fn fallback_loader_decodes() {
-        const SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>"#;
-
         glib::MainContext::new().block_on(async {
             let mut loader = crate::Loader::new_bytes(glib::Bytes::from_static(SVG));
             loader.sandbox_selector(crate::SandboxSelector::NotSandboxed);
@@ -1363,5 +1366,50 @@ mod tests {
             let frame = image.next_frame().await.unwrap();
             assert_eq!((frame.width(), frame.height()), (4, 4));
         });
+    }
+
+    /// Where this process cannot mark its descriptors close-on-exec (a
+    /// container filter refusing `close_range`), no confined loader starts.
+    #[test]
+    fn unclosed_descriptors_refuse_loader() {
+        const CHILD: &str = "GLYCIN_TEST_CLOSE_RANGE_REFUSED";
+        if std::env::var_os(CHILD).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sandbox::tests::unclosed_descriptors_refuse_loader",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{output:?}"
+            );
+            return;
+        }
+        let mut filter = ScmpFilterContext::new(ScmpAction::Allow).unwrap();
+        filter
+            .add_rule(
+                ScmpAction::Errno(libc::ENOSYS),
+                ScmpSyscall::from_name("close_range").unwrap(),
+            )
+            .unwrap();
+        filter.load().unwrap();
+        let loaded = util::block_on(async {
+            let mut loader = crate::Loader::new_bytes(glib::Bytes::from_static(SVG));
+            loader.sandbox_selector(crate::SandboxSelector::NotSandboxed);
+            loader.load().await
+        });
+        let error = loaded
+            .err()
+            .expect("a loader started with the host's descriptors");
+        assert!(
+            error
+                .to_string()
+                .contains(&io::Error::from_raw_os_error(libc::ENOSYS).to_string()),
+            "{error}"
+        );
     }
 }

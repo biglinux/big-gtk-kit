@@ -53,8 +53,11 @@ decoding under big-image), with these changes:
   without bubblewrap, keeps its loaders under `/app`, which these rules leave
   out: it loads no image. A kernel without Landlock ABI 6 (before Linux 6.12)
   starts no loader: the load fails with `Error::SandboxUnavailable`. Upstream
-  runs that loader with nothing but a cleared environment. `sandbox::tests`
-  and `landlock::tests` check it.
+  runs that loader with nothing but a cleared environment. Such a loader
+  also does not start when the forked process cannot mark the descriptors it
+  inherited close-on-exec, which upstream ignores: Landlock leaves a
+  descriptor opened before it usable. `sandbox::tests` and `landlock::tests`
+  check it.
 - An ICC conversion builds one lcms2 transform, without its last-pixel cache
   so the threads can share it, and starts a thread per 131 072 pixels, up to
   one per core (`src/icc.rs`). Upstream starts one thread per core for every
