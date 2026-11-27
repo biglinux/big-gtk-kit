@@ -763,10 +763,14 @@ fn capture_requirement<'a>(
     }
 }
 
-/// Whether `accel` is written with a modifier; `<Shift>` counts only where
-/// [`key_accel`] kept it, so Shift+? (`question`) types text and is no shortcut.
+/// Whether `accel` is written with Ctrl, Alt or Shift, the modifiers
+/// [`key_accel`] captures; `<Shift>` counts only where it kept it, so Shift+?
+/// (`question`) types text and is no shortcut.
 fn accel_has_modifiers(accel: &str) -> bool {
-    parse_accel(accel).is_some_and(|(_, modifiers)| !modifiers.is_empty())
+    let captured = gdk::ModifierType::CONTROL_MASK
+        | gdk::ModifierType::ALT_MASK
+        | gdk::ModifierType::SHIFT_MASK;
+    parse_accel(accel).is_some_and(|(_, modifiers)| modifiers.intersects(captured))
 }
 
 fn accelerator_label(accel: &str, labels: &BigShortcutEditorLabels) -> String {
@@ -1116,6 +1120,10 @@ mod tests {
             );
             assert_eq!(capture_requirement(modified, "<Ctrl>f", &labels), None);
             assert_eq!(capture_requirement(modified, "<Shift>Z", &labels), None);
+            assert_eq!(
+                capture_requirement(modified, "<Super>k", &labels),
+                Some("Press a modified key")
+            );
         });
     }
 
