@@ -95,17 +95,27 @@ fn orientation_offset(tiff: &[u8]) -> Option<usize> {
             u16::from_le_bytes(pair)
         })
     };
-    let quad = tiff.get(4..8)?;
-    let directory = usize::try_from(if big_endian {
-        u32::from_be_bytes([quad[0], quad[1], quad[2], quad[3]])
-    } else {
-        u32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]])
-    })
-    .ok()?;
+    let u32_at = |offset: usize| {
+        let quad = [
+            *tiff.get(offset)?,
+            *tiff.get(offset + 1)?,
+            *tiff.get(offset + 2)?,
+            *tiff.get(offset + 3)?,
+        ];
+        Some(if big_endian {
+            u32::from_be_bytes(quad)
+        } else {
+            u32::from_le_bytes(quad)
+        })
+    };
+    let directory = usize::try_from(u32_at(4)?).ok()?;
     let count = usize::from(u16_at(directory)?).min(MAX_ENTRIES);
+    // One SHORT is held in the entry itself; more are elsewhere, at an offset.
     (0..count).find_map(|index| {
         let entry = directory + 2 + index * 12;
-        (u16_at(entry)? == ORIENTATION_TAG && u16_at(entry + 2)? == SHORT)
+        (u16_at(entry)? == ORIENTATION_TAG
+            && u16_at(entry + 2)? == SHORT
+            && u32_at(entry + 4)? == 1)
             .then_some(entry + 8)
             .filter(|value| value + 2 <= tiff.len())
     })
@@ -232,6 +242,17 @@ mod tests {
         big_endian.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
         let turned = turned_jpeg(&big_endian, 1, false).expect("rewritten");
         assert_eq!(orientation_of(&turned), 3);
+    }
+
+    /// An orientation that is not one SHORT holds an offset, never rewritten.
+    #[test]
+    fn non_scalar_orientation_refused() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x22];
+        jpeg.extend_from_slice(
+            b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x03\0\0\0\x1a\0\0\0\0",
+        );
+        jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+        assert_eq!(turned_jpeg(&jpeg, 1, false), None);
     }
 
     /// What is not a JPEG, or is cut short, is refused; it never panics.
