@@ -31,9 +31,16 @@ static WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 ///
 /// # Errors
 ///
-/// A second call (`AlreadyExists`), the pipe's creation, or a signal whose
-/// action cannot change (`SIGKILL`, `SIGSTOP`).
+/// A signal whose action cannot change (`SIGKILL`, `SIGSTOP`; `InvalidInput`,
+/// before anything is installed), a second call (`AlreadyExists`), or the
+/// pipe's creation.
 pub fn install(signals: &[Signal]) -> io::Result<OwnedFd> {
+    if signals.contains(&Signal::KILL) || signals.contains(&Signal::STOP) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SIGKILL and SIGSTOP cannot be caught",
+        ));
+    }
     let (read, write) = pipe_with(PipeFlags::CLOEXEC)?;
     fcntl_setfl(&write, fcntl_getfl(&write)? | OFlags::NONBLOCK)?;
     let raw = write.as_raw_fd();
@@ -92,11 +99,14 @@ mod tests {
         assert_eq!(sent, 0, "raised");
     }
 
-    /// One test, since a process installs once: the byte names the signal, a
-    /// full pipe leaves the interrupted code's errno alone, and a second
-    /// install is refused.
+    /// One test, since a process installs once: a signal whose action cannot
+    /// change is refused before anything is installed, the byte names the
+    /// signal, a full pipe leaves the interrupted code's errno alone, and a
+    /// second install is refused.
     #[test]
     fn signal_arrives_as_its_number() {
+        let uncatchable = install(&[Signal::USR2, Signal::KILL]).expect_err("SIGKILL");
+        assert_eq!(uncatchable.kind(), io::ErrorKind::InvalidInput);
         let read = install(&[Signal::USR2]).expect("installed");
         raise_here(Signal::USR2);
         let mut byte = [0u8; 1];
