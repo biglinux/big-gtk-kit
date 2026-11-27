@@ -50,7 +50,7 @@ mod imp {
             &self,
             arguments: &mut gio::subclass::ArgumentList,
         ) -> ControlFlow<glib::ExitCode> {
-            if arguments.iter().any(|argument| argument == "--") {
+            if arguments.iter().skip(1).any(|argument| argument == "--") {
                 return ControlFlow::Continue(());
             }
             self.parent_local_command_line(arguments)
