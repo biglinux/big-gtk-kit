@@ -290,9 +290,10 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
 /// [`WeakDialog`] stops upgrading. Everything else reached through the
 /// deref acts on whatever the dialog shows now.
 ///
-/// Each opening puts the focus on the field set as the dialog's focus, else on
-/// the first shown field that takes typing, else on the default widget; a
-/// button set as the focus is passed over, as libadwaita sets one itself.
+/// Each opening as a sheet puts the focus on the field set as the dialog's
+/// focus, else on the first shown field that takes typing, else on the
+/// default widget; a button set as the focus is passed over, as libadwaita
+/// sets one itself.
 ///
 /// Content sizes go through [`Self::set_content_width`],
 /// [`Self::set_content_height`] or [`Self::builder`]: [`present`](Self::present)
