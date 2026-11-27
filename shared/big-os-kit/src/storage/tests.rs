@@ -315,6 +315,20 @@ fn private_creation_never_overwrites_target() {
     fs::remove_file(path).unwrap();
 }
 
+/// A name at the 255-byte limit of a file system's names still saves: the
+/// temporary beside it shortens what it copies of the name.
+#[test]
+fn longest_name_saves() {
+    let dir = storage_test_path("longest-name");
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("\u{e9}".repeat(127) + "x");
+    let saved = atomic_write(&path, b"first").and_then(|()| atomic_write(&path, b"second"));
+    let read = fs::read(&path);
+    fs::remove_dir_all(&dir).unwrap();
+    saved.unwrap();
+    assert_eq!(read.unwrap(), b"second");
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 struct Prefs {
     volume: u8,
