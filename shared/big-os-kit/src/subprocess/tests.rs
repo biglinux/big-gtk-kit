@@ -1140,8 +1140,25 @@ fn child_gets_default_interrupt() {
     assert!(!restored);
 }
 
-/// Both file-limit tests change the process-wide RLIMIT_NOFILE.
+/// The file-limit tests change the process-wide RLIMIT_NOFILE.
 static FILE_LIMIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// `prlimit` reads PID 0 as the caller: this process keeps its own limit.
+#[test]
+fn pid_zero_restores_nothing() {
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+    let _serial = FILE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+    let hard = getrlimit(Resource::Nofile).maximum;
+    // A soft limit below the hard one, so there is something to give back.
+    let low = Rlimit {
+        current: Some(256),
+        maximum: hard,
+    };
+    setrlimit(Resource::Nofile, low).unwrap();
+    raise_file_limit();
+    restore_limits(0);
+    assert_eq!(getrlimit(Resource::Nofile).current, hard);
+}
 
 #[test]
 fn started_program_gets_inherited_file_limit() {
