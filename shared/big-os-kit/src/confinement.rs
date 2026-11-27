@@ -99,7 +99,8 @@ const CHANGE: u64 = WRITE_FILE | REMOVE_DIR | REMOVE_FILE | MAKE_DIR | MAKE_REG 
 /// ones it starts later: a thread the driver started before this, a shader
 /// compiler's among them, reads with no limit. Call it after EGL and the GL
 /// context are open. A kernel without Landlock leaves the process unconfined,
-/// which is logged.
+/// which is logged; one before Linux 6.2 (Landlock ABI 1 or 2) cannot deny
+/// truncating a file, so that stays allowed wherever this user may write.
 ///
 /// # Errors
 ///
