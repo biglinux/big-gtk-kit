@@ -61,9 +61,11 @@ pub fn mark(label: &str) {
     let Some(sink) = SINK.as_ref() else {
         return;
     };
-    let ms = monotonic_ms();
+    // One write per record: the launcher and the resident host append to one
+    // file, and `writeln!` writes each formatted piece on its own.
+    let record = format!("{:12.1}  {label}\n", monotonic_ms());
     if let Ok(mut file) = sink.lock() {
-        let _ = writeln!(file, "{ms:12.1}  {label}");
+        let _ = file.write_all(record.as_bytes());
     }
 }
 
