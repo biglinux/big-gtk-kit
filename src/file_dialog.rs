@@ -397,10 +397,12 @@ fn portal_options(request: &FileRequest) -> glib::Variant {
         .or_else(|| request.select.as_deref().and_then(std::path::Path::parent))
         // A bare file name's parent is empty, which names no folder.
         .filter(|start| !start.as_os_str().is_empty());
-    if let Some(start) = start {
+    // Resolved here as the toolkit's dialog resolves it: the portal runs in a
+    // working directory of its own.
+    if let Some(start) = start.and_then(|start| gio::File::for_path(start).path()) {
         // Paths travel as NUL-terminated bytes, not as text: a file name is
         // bytes on Linux and need not be UTF-8.
-        let mut bytes = start.as_os_str().as_encoded_bytes().to_vec();
+        let mut bytes = start.into_os_string().into_encoded_bytes();
         bytes.push(0);
         options.insert_value(
             "current_folder",
@@ -745,6 +747,24 @@ mod tests {
         };
         assert_eq!(start("/home/ana/notes.txt"), Some(b"/home/ana\0".to_vec()));
         assert_eq!(start("notes.txt"), None);
+    }
+
+    /// A relative folder reaches the portal, which has a working directory
+    /// of its own, as the folder the toolkit's dialog starts in.
+    #[test]
+    fn portal_folder_resolves_relative() {
+        let request = FileRequest::open_file().starting_in("music");
+        let folder = glib::VariantDict::new(Some(&portal_options(&request)))
+            .lookup_value("current_folder", None)
+            .map(|folder| folder.fixed_array::<u8>().unwrap().to_vec());
+        let mut expected = gio::File::for_path("music")
+            .path()
+            .expect("a local path")
+            .into_os_string()
+            .into_encoded_bytes();
+        expected.push(0);
+        assert!(expected.starts_with(b"/"));
+        assert_eq!(folder, Some(expected));
     }
 
     /// Responses as the portal's `org.freedesktop.portal.Request` documents
