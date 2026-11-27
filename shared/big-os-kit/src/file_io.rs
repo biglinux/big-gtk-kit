@@ -686,7 +686,8 @@ fn rename_by_link(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Return sorted child file paths whose extension equals `extension`.
+/// Return sorted child file paths whose extension equals `extension`: regular
+/// files, or links to one, never a folder named like one.
 ///
 /// # Errors
 ///
@@ -715,6 +716,7 @@ pub fn directory_file_paths_with_extension(
         .filter(|path| {
             path.extension()
                 .is_some_and(|candidate| candidate == extension)
+                && is_regular_file(path)
         })
         .collect())
 }
