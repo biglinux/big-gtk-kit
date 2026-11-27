@@ -154,6 +154,10 @@ fn private_directory_is_owned_and_removed() {
             0o700
         );
         fs::write(first.path().join("partial"), b"owned").unwrap();
+        assert!(matches!(
+            fs::File::open(first.path()).unwrap().try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
     }
     assert!(!first_path.exists());
     let _ = fs::remove_dir_all(parent);
@@ -235,13 +239,18 @@ fn abandoned_staging_is_cleared() {
     let recent = parent.join(".stage-999999998-0");
     fs::create_dir_all(&recent).unwrap();
     fs::set_permissions(&recent, fs::Permissions::from_mode(0o700)).unwrap();
+    // An owner in another PID namespace that has written nothing beside its
+    // folder for hours holds its lease.
+    let leased = private(".stage-999999998-1", 0o700);
+    let lease = fs::File::open(&leased).unwrap();
+    lease.lock().unwrap();
     let other = private(".other-999999999-0", 0o700);
 
     let staged = OwnedPrivateDirectory::create(&parent, ".stage").unwrap();
 
     assert!(!dead.exists());
     assert!(mine.exists() && shared.exists() && live.exists() && other.exists());
-    assert!(recent.exists());
+    assert!(recent.exists() && leased.exists());
     assert!(lookalikes.iter().all(|lookalike| lookalike.exists()));
     drop(staged);
     remove_tree(&parent).unwrap();
@@ -262,17 +271,29 @@ fn abandoned_staging_on_share_stays() {
         .set_modified(left)
         .unwrap();
     fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+    let id = rustix::fs::statx(
+        rustix::fs::CWD,
+        &parent,
+        AtFlags::empty(),
+        rustix::fs::StatxFlags::MNT_ID,
+    )
+    .unwrap()
+    .stx_mnt_id;
     let point = fs::canonicalize(&parent)
         .unwrap()
         .to_string_lossy()
         .replace(' ', "\\040");
-    let share = format!("36 25 0:53 / {point} rw,relatime - nfs4 server:/export rw\n");
+    let share = format!("{id} 25 0:53 / {point} rw,relatime - nfs4 server:/export rw\n");
 
     remove_abandoned(&parent, ".stage", &share);
     let kept = staging.exists();
     remove_abandoned(&parent, ".stage", "");
     let kept_unread = staging.exists();
-    remove_abandoned(&parent, ".stage", "22 1 0:21 / / rw - btrfs /dev/sda2 rw\n");
+    remove_abandoned(
+        &parent,
+        ".stage",
+        &format!("{id} 1 0:21 / / rw - btrfs /dev/sda2 rw\n"),
+    );
 
     assert!(kept);
     assert!(

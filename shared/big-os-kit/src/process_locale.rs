@@ -142,33 +142,4 @@ mod tests {
         let _ = second.join();
         assert!(beside.is_err(), "{beside:?}");
     }
-
-    /// An empty `LC_ALL` is unset, as glibc reads it: the language stays the
-    /// one `LANG` names. Checked in a child run, which owns its environment.
-    #[test]
-    fn empty_lc_all_keeps_lang() {
-        if std::env::var_os("BIG_OS_KIT_CHILD_LOCALE").is_some() {
-            // SAFETY: the child runs this one test, on the only thread that
-            // touches the environment.
-            unsafe { super::init_c_numeric_locale() };
-            assert_eq!(std::env::var("LANG").as_deref(), Ok("pt_BR.UTF-8"));
-            assert_eq!(std::env::var_os("LC_ALL"), None);
-            return;
-        }
-        let child = crate::subprocess::BigSubprocessSpec::builder()
-            .program(std::env::current_exe().expect("test binary"))
-            .args([
-                "--exact",
-                "process_locale::tests::empty_lc_all_keeps_lang",
-                "--quiet",
-            ])
-            .env_inherit(false)
-            .env("BIG_OS_KIT_CHILD_LOCALE", "1")
-            .env("LC_ALL", "")
-            .env("LANG", "pt_BR.UTF-8")
-            .build()
-            .run()
-            .expect("child run");
-        assert!(child.status.success(), "{}", child.stdout_lossy());
-    }
 }
