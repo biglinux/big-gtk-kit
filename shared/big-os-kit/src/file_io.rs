@@ -783,9 +783,11 @@ pub fn is_executable_file(path: &Path) -> bool {
 /// What stands between this process and running a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunVerdict {
-    /// The kernel would start it as it is.
+    /// The kernel would let it start as it is; whether its format or its
+    /// interpreter then loads is not asked.
     Runs,
-    /// Its permission bits do not let this account run it.
+    /// Its permission bits do not let this account run it, or it is no
+    /// regular file (a folder is searchable, never run).
     NotPermitted,
     /// It sits on a file system mounted without the right to run programs
     /// (`noexec`), which no permission bit changes.
@@ -808,6 +810,10 @@ pub fn may_run(path: &Path) -> std::io::Result<RunVerdict> {
     let stats = rustix::fs::statvfs(&c_path)?;
     if stats.f_flag.contains(rustix::fs::StatVfsMountFlags::NOEXEC) {
         return Ok(RunVerdict::NoExecMount);
+    }
+    let mode = rustix::fs::stat(&c_path)?.st_mode;
+    if rustix::fs::FileType::from_raw_mode(mode) != rustix::fs::FileType::RegularFile {
+        return Ok(RunVerdict::NotPermitted);
     }
     match rustix::fs::access(&c_path, rustix::fs::Access::EXEC_OK) {
         Ok(()) => Ok(RunVerdict::Runs),
