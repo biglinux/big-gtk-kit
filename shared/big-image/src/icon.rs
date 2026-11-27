@@ -41,8 +41,12 @@ const MEMORY_CACHE_BYTES: usize = 4 * 1024 * 1024;
 /// "icon" is not one.
 const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
-/// On-disk entry layout version. Bump when the header or pixel format changes.
-const DISK_FORMAT: &str = "rgba-premul-1";
+/// On-disk entry layout version. Bump when the header, the pixel format or
+/// what a key names changes; the pruning removes the previous version's folder.
+const DISK_FORMAT: &str = "rgba-premul-2";
+/// The version before [`DISK_FORMAT`], whose keys could name a banner and an
+/// icon of one file alike.
+const PREVIOUS_DISK_FORMAT: &str = "rgba-premul-1";
 /// Entries unchanged this long are removed: a key names its source's size and
 /// time, so one whose source changed is never read again, and a read marks an
 /// entry older than half of this again.
@@ -578,18 +582,6 @@ fn svg_answer(
     if !join_waiters(&key, Box::new(deliver)) {
         return;
     }
-    if let SvgSource::Bytes(bytes) = &source {
-        // Refused past either ceiling, and not remembered: a later request
-        // decodes it.
-        let over_budget = PENDING_BYTE_JOBS.with(Cell::get) >= MAX_PENDING_JOBS
-            || PENDING_BYTES.with(Cell::get).saturating_add(bytes.len()) > MAX_PENDING_BYTES;
-        if over_budget {
-            answer_waiters(&key, None);
-            return;
-        }
-        PENDING_BYTE_JOBS.with(|jobs| jobs.set(jobs.get() + 1));
-        PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
-    }
     // The bitmap already on disk is read off the main thread, where a slow
     // home would hold a menu of icons; only a miss is decoded again.
     glib::spawn_future_local(async move {
@@ -597,13 +589,22 @@ fn svg_answer(
         if let Ok(Some((width, height, stride, pixels))) =
             gio::spawn_blocking(move || read_disk_rgba(&cache_key)).await
         {
-            if let SvgSource::Bytes(bytes) = &source {
-                release_pending_bytes(bytes);
-            }
             let texture = texture_from_rgba(width, height, stride, pixels);
             memory_put(key.clone(), texture.clone());
             answer_waiters(&key, Some(&texture));
             return;
+        }
+        if let SvgSource::Bytes(bytes) = &source {
+            // Refused past either ceiling, and not remembered: a later request
+            // decodes it.
+            let over_budget = PENDING_BYTE_JOBS.with(Cell::get) >= MAX_PENDING_JOBS
+                || PENDING_BYTES.with(Cell::get).saturating_add(bytes.len()) > MAX_PENDING_BYTES;
+            if over_budget {
+                answer_waiters(&key, None);
+                return;
+            }
+            PENDING_BYTE_JOBS.with(|jobs| jobs.set(jobs.get() + 1));
+            PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
         }
         PENDING.with(|pending| {
             pending.borrow_mut().push_back(PendingSvg {
@@ -890,6 +891,7 @@ fn prune_disk_cache(directory: &Path, now: SystemTime) {
     {
         return;
     }
+    let _ = std::fs::remove_dir_all(directory.with_file_name(PREVIOUS_DISK_FORMAT));
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
