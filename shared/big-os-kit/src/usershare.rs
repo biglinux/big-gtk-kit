@@ -131,18 +131,19 @@ pub fn shares() -> Result<Vec<Share>, Error> {
 }
 
 /// Share `share.path` as `share.name`; an existing name is replaced, which is
-/// how a share is edited.
+/// how a share is edited. An edit that keeps [`Share::writable`] keeps the
+/// share's access list as it was, a deny for one person included.
 ///
 /// # Errors
 ///
 /// As [`shares`].
 pub fn add(share: &Share) -> Result<(), Error> {
-    // Full control or read: the only two grants written here.
-    let grant = if share.writable {
-        "Everyone:F"
-    } else {
-        "Everyone:R"
-    };
+    let listed = net(&["usershare".as_ref(), "info".as_ref()])?;
+    let current = parse_with_acl(&listed)
+        .into_iter()
+        .find(|(old, _)| old.name.to_lowercase() == share.name.to_lowercase())
+        .map(|(_, acl)| acl);
+    let grant = grant_for(share.writable, current.as_deref());
     let guests = if share.anyone {
         "guest_ok=y"
     } else {
@@ -160,6 +161,23 @@ pub fn add(share: &Share) -> Result<(), Error> {
         guests.as_ref(),
     ])
     .map(drop)
+}
+
+/// The access list `add` writes: `current` while it grants what `writable`
+/// says, else full control or read for everyone, the only two written anew.
+fn grant_for(writable: bool, current: Option<&str>) -> String {
+    match current {
+        Some(acl) if acl_is_writable(acl) == writable => acl.trim_end_matches(',').to_owned(),
+        _ if writable => "Everyone:F".to_owned(),
+        _ => "Everyone:R".to_owned(),
+    }
+}
+
+/// Only full control for everyone reads as writable: a list that grants it
+/// to one person would come back from `add` granting it to all.
+fn acl_is_writable(acl: &str) -> bool {
+    acl.split(',')
+        .any(|grant| grant.eq_ignore_ascii_case("Everyone:F"))
 }
 
 /// Stop sharing `name`.
@@ -187,34 +205,41 @@ pub fn remove(name: &str) -> Result<(), Error> {
 /// guest_ok=n
 /// ```
 fn parse(text: &str) -> Vec<Share> {
+    parse_with_acl(text)
+        .into_iter()
+        .map(|(share, _)| share)
+        .collect()
+}
+
+/// [`parse`], each share with its `usershare_acl` as `net` printed it.
+fn parse_with_acl(text: &str) -> Vec<(Share, String)> {
     let mut found = Vec::new();
-    let mut share: Option<Share> = None;
+    let mut share: Option<(Share, String)> = None;
     for line in text.lines() {
         let line = line.trim();
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             found.extend(share.take());
-            share = Some(Share {
-                name: name.to_owned(),
-                path: PathBuf::new(),
-                comment: String::new(),
-                writable: false,
-                anyone: false,
-            });
+            share = Some((
+                Share {
+                    name: name.to_owned(),
+                    path: PathBuf::new(),
+                    comment: String::new(),
+                    writable: false,
+                    anyone: false,
+                },
+                String::new(),
+            ));
             continue;
         }
-        let (Some(here), Some((key, value))) = (share.as_mut(), line.split_once('=')) else {
+        let (Some((here, acl)), Some((key, value))) = (share.as_mut(), line.split_once('=')) else {
             continue;
         };
         match key {
             "path" => here.path = PathBuf::from(value),
             "comment" => here.comment = value.to_owned(),
-            // Only full control for everyone reads as writable: a list that
-            // grants it to one person would come back from `add` granting it
-            // to all.
             "usershare_acl" => {
-                here.writable = value
-                    .split(',')
-                    .any(|grant| grant.eq_ignore_ascii_case("Everyone:F"));
+                here.writable = acl_is_writable(value);
+                value.clone_into(acl);
             }
             "guest_ok" => here.anyone = value == "y",
             _ => {}
@@ -357,6 +382,26 @@ mod tests {
         assert!(!acl("BUILTIN\\Users:F,"));
         assert!(acl("Everyone:F,"));
         assert!(acl("alice:R,everyone:f,"));
+    }
+
+    /// An edit that keeps the share's writability keeps entries `add` never
+    /// writes; one that changes it writes the grant asked for.
+    #[test]
+    fn edit_keeps_a_persons_deny() {
+        let denied = "alice:D,Everyone:R,";
+        assert_eq!(grant_for(false, Some(denied)), "alice:D,Everyone:R");
+        assert_eq!(grant_for(true, Some(denied)), "Everyone:F");
+        assert_eq!(
+            grant_for(false, Some("Everyone:D,bob:F,")),
+            "Everyone:D,bob:F"
+        );
+        assert_eq!(
+            grant_for(true, Some("bob:R,Everyone:F,")),
+            "bob:R,Everyone:F"
+        );
+        assert_eq!(grant_for(false, None), "Everyone:R");
+        let found = parse_with_acl(&format!("[Docs]\npath=/srv/docs\nusershare_acl={denied}\n"));
+        assert_eq!(found[0].1, denied);
     }
 
     /// A parser that only pushes on the next header drops the last share.
