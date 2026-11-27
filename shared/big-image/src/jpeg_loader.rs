@@ -170,15 +170,31 @@ fn loaders_base() -> PathBuf {
     gtk::glib::user_runtime_dir().join("big-image")
 }
 
-/// Whether a glycin `conf.d` directory names a loader for `mime_type`.
+/// Whether a glycin `conf.d` directory names a loader for `mime_type`, read
+/// as glycin reads it: a `.conf` file's group `loader:<type>`, anything after
+/// a further `:` ignored, with an `Exec`.
 fn claims(conf_d: &Path, mime_type: &str) -> bool {
-    let section = format!("[loader:{mime_type}]");
     std::fs::read_dir(conf_d)
         .into_iter()
         .flatten()
         .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|suffix| suffix == "conf")
+        })
         .any(|entry| {
-            std::fs::read_to_string(entry.path()).is_ok_and(|text| text.contains(&section))
+            let keys = gtk::glib::KeyFile::new();
+            keys.load_from_file(entry.path(), gtk::glib::KeyFileFlags::NONE)
+                .is_ok()
+                && keys.groups().iter().any(|group| {
+                    let group = group.as_str().trim();
+                    let mut parts = group.split(':');
+                    parts.next() == Some("loader")
+                        && parts.next() == Some(mime_type)
+                        && keys.string(group, "Exec").is_ok()
+                })
         })
 }
 
@@ -197,9 +213,9 @@ fn find_loader(installed: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    /// With `GLYCIN_DATA_DIR` set glycin reads that directory alone, so no type
-    /// counts as ours and the pixel cap stays; without it JPEG is routed. Each
-    /// case runs in a child, the only thread that touches its environment.
+    /// JPEG is routed here, lifting the pixel cap, unless glycin reads only
+    /// `GLYCIN_DATA_DIR` or the person's own list names a JPEG loader. Each case
+    /// runs in a child, the only thread that touches its environment.
     #[test]
     fn glycin_data_dir_routes_nothing() {
         const CHILD: &str = "BIG_IMAGE_CHILD_ROUTING";
@@ -217,8 +233,21 @@ mod tests {
         let runtime = scratch.join("runtime");
         std::fs::create_dir_all(&runtime).expect("scratch runtime directory");
         let nowhere = scratch.join("glycin-data");
+        let empty_home = scratch.join("empty-home");
+        let own_home = scratch.join("own-home");
+        let own_list = own_home.join(super::CONF_D);
+        std::fs::create_dir_all(&own_list).expect("own loader list directory");
+        std::fs::write(
+            own_list.join("own.conf"),
+            "[loader:image/jpeg:local]\nExec=/usr/bin/true\n",
+        )
+        .expect("own loader list");
         let mut outcomes = Vec::new();
-        for (glycin_data_dir, expected) in [(None, "routed"), (Some(&nowhere), "unrouted")] {
+        for (glycin_data_dir, data_home, expected) in [
+            (None, &empty_home, "routed"),
+            (Some(&nowhere), &empty_home, "unrouted"),
+            (None, &own_home, "unrouted"),
+        ] {
             let mut child = big_os_kit::subprocess::BigSubprocessSpec::builder()
                 .program(std::env::current_exe().expect("test binary"))
                 .args([
@@ -227,7 +256,8 @@ mod tests {
                     "--quiet",
                 ])
                 .env(CHILD, expected)
-                .env("XDG_RUNTIME_DIR", &runtime);
+                .env("XDG_RUNTIME_DIR", &runtime)
+                .env("XDG_DATA_HOME", data_home);
             if let Some(directory) = glycin_data_dir {
                 child = child.env("GLYCIN_DATA_DIR", directory);
             }
