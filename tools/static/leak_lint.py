@@ -562,6 +562,8 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     params = set(re.findall(r"\b([a-z_]\w*)\b", closure.group(2)))
     # Each pattern inside the body (let, for, inner closure, match arm) as
     # (start, end, where its names start and stop shadowing the outer ones).
+    # A `let` or `for` shadows to the end of the handler, not of its block, so
+    # a capture of the outer name after that block is missed.
     patterns = [(lo, hi, lo, end) for lo, hi, end in match_arm_patterns(body)]
     binders = [
         r"\blet\s+([^=;]+?)\s*=(?!=)",
@@ -815,7 +817,9 @@ REPEATING_SOURCE = re.compile(
 
 def none_arm_continues(closure: str) -> bool:
     """Whether a `None` arm, a failed upgrade, can return `Continue` and so keep the
-    source after its target is gone."""
+    source after its target is gone. Only a `None` arm is read: a let-else, an
+    `if let` with an `else`, a `_` arm, `map_or` or `is_none()` that continues on
+    a failed upgrade is not seen."""
     for m in re.finditer(r"\bNone\s*=>\s*", closure):
         if closure.startswith("{", m.end()):
             arm = call_argument(closure, m.end())
