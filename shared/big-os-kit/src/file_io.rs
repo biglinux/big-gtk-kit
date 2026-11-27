@@ -441,7 +441,8 @@ impl From<std::io::Error> for BigBoundedReadError {
 /// use big_os_kit::file_io::read_bounded;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-read-bounded-doc.txt");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-read-bounded-doc-{}.txt", std::process::id()));
 /// atomic_write(&path, b"hello").unwrap();
 /// assert_eq!(read_bounded(&path, 8).unwrap(), b"hello");
 /// let _ = std::fs::remove_file(path);
@@ -560,7 +561,8 @@ pub fn modified_secs(path: &Path) -> Option<u64> {
 /// use big_os_kit::file_io::read_to_string;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-read-string-doc.txt");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-read-string-doc-{}.txt", std::process::id()));
 /// atomic_write(&path, b"name = \"demo\"\n").unwrap();
 /// assert!(read_to_string(&path).unwrap().contains("demo"));
 /// let _ = std::fs::remove_file(path);
@@ -699,7 +701,8 @@ fn rename_by_link(from: &Path, to: &Path) -> std::io::Result<()> {
 /// use big_os_kit::file_io::directory_file_paths_with_extension;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let dir = std::env::temp_dir().join("big-os-kit-extension-doc");
+/// let dir = std::env::temp_dir()
+///     .join(format!("big-os-kit-extension-doc-{}", std::process::id()));
 /// std::fs::create_dir_all(&dir).unwrap();
 /// atomic_write(&dir.join("a.toml"), b"id = \"a\"\n").unwrap();
 /// atomic_write(&dir.join("b.txt"), b"ignored").unwrap();
@@ -729,7 +732,8 @@ pub fn directory_file_paths_with_extension(
 /// use big_os_kit::file_io::is_regular_file;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-regular-file-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-regular-file-doc-{}", std::process::id()));
 /// atomic_write(&path, b"x").unwrap();
 /// assert!(is_regular_file(&path));
 /// let _ = std::fs::remove_file(path);
@@ -750,7 +754,8 @@ pub fn is_regular_file(path: &Path) -> bool {
 /// use big_os_kit::file_io::is_executable_file;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-executable-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-executable-doc-{}", std::process::id()));
 /// atomic_write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
 /// #[cfg(unix)]
 /// {
@@ -836,7 +841,8 @@ pub fn may_run(path: &Path) -> std::io::Result<RunVerdict> {
 /// use big_os_kit::file_io::check_readable_file;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-readable-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-readable-doc-{}", std::process::id()));
 /// atomic_write(&path, b"x").unwrap();
 /// check_readable_file(&path).unwrap();
 /// let _ = std::fs::remove_file(path);
@@ -858,7 +864,8 @@ pub fn check_readable_file(path: &Path) -> std::io::Result<()> {
 /// use big_os_kit::file_io::remove_file_if_exists;
 /// use big_os_kit::storage::atomic_write;
 ///
-/// let path = std::env::temp_dir().join("big-os-kit-remove-doc");
+/// let path = std::env::temp_dir()
+///     .join(format!("big-os-kit-remove-doc-{}", std::process::id()));
 /// atomic_write(&path, b"x").unwrap();
 /// remove_file_if_exists(&path).unwrap();
 /// remove_file_if_exists(&path).unwrap();
