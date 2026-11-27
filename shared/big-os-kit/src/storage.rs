@@ -634,16 +634,18 @@ fn atomic_write_with_mode(
     {
         // The folders made here: a durable write puts their entries on the
         // disk too, or a power cut can take the whole new path.
-        let made: Vec<PathBuf> = parent
-            .ancestors()
-            .take_while(|folder| !folder.as_os_str().is_empty() && !folder.exists())
-            .map(Path::to_path_buf)
-            .collect();
+        let made: Vec<PathBuf> = if durable {
+            parent
+                .ancestors()
+                .take_while(|folder| !folder.as_os_str().is_empty() && !folder.exists())
+                .map(Path::to_path_buf)
+                .collect()
+        } else {
+            Vec::new()
+        };
         fs::create_dir_all(parent)?;
-        if durable {
-            for folder in made.iter().rev() {
-                sync_parent_directory(folder)?;
-            }
+        for folder in made.iter().rev() {
+            sync_parent_directory(folder)?;
         }
     }
     let mut temporary_write = PendingAtomicWrite::create_sibling(path, mode)?;
