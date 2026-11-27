@@ -21,6 +21,7 @@ tools/headless-gate.sh --accessible cargo nextest run --workspace --all-features
 tools/headless-gate.sh cargo test --workspace --all-features --locked --doc
 RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps --locked
 ast-grep scan
+ast-grep test --skip-snapshot-tests
 cargo deny --workspace check
 ruff check .
 ruff format --check .

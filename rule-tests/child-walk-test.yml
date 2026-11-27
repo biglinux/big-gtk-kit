@@ -1,0 +1,40 @@
+id: child-walk
+valid:
+  - |
+    fn other(w: &gtk::Widget, other: Option<gtk::Widget>) {
+        let mut child = w.first_child();
+        let mut next = other;
+        while let Some(c) = next { next = c.next_sibling(); }
+    }
+  - |
+    fn walk(w: &gtk::Widget) { for c in children(w) { c.show(); } }
+invalid:
+  - |
+    fn adjacent(w: &gtk::Widget) {
+        let mut child = w.first_child();
+        while let Some(c) = child { child = c.next_sibling(); }
+    }
+  - |
+    fn after_init(w: &gtk::Widget) {
+        let mut child = w.first_child();
+        let mut count = 0;
+        while let Some(c) = child { count += 1; child = c.next_sibling(); }
+    }
+  - |
+    fn nested(w: &gtk::Widget) {
+        let mut child = w.first_child();
+        let n = 3;
+        if n > 2 { while let Some(c) = child { child = c.next_sibling(); } }
+    }
+  - |
+    fn labeled(w: &gtk::Widget) {
+        let mut child = w.first_child();
+        'outer: while let Some(c) = child { child = c.next_sibling(); }
+    }
+  - |
+    fn tail(w: &gtk::Widget) {
+        let mut child = w.first_child();
+        while let Some(c) = child { child = c.next_sibling() }
+    }
+  - |
+    fn successors(w: &gtk::Widget) { let _ = std::iter::successors(w.first_child(), |c| c.next_sibling()); }

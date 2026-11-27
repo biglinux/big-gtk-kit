@@ -1,0 +1,27 @@
+id: context-menu
+valid:
+  - |
+    #[cfg(test)]
+    #[allow(dead_code)]
+    mod tests {
+        fn t() { let _ = gdk::BUTTON_SECONDARY; }
+    }
+  - |
+    #[cfg(test)]
+    mod tests {
+        use gdk::BUTTON_SECONDARY;
+        fn t() { let _ = BUTTON_SECONDARY; }
+    }
+invalid:
+  - |
+    fn p() { let _ = gdk::BUTTON_SECONDARY; }
+  - |
+    use gdk::{BUTTON_SECONDARY, Key};
+  - |
+    fn p(click: &gtk::GestureClick) { click.set_button(BUTTON_SECONDARY); }
+  - |
+    #[cfg(test)]
+    fn helper() {}
+    mod prod {
+        fn p() { let _ = gdk::BUTTON_SECONDARY; }
+    }
