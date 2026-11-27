@@ -45,7 +45,9 @@ impl AppShellActivation {
     /// targets.
     ///
     /// Relative paths are resolved against the invoking process's working
-    /// directory, including remote activations. URI arguments remain URIs.
+    /// directory, including remote activations. A URI with a local path, such
+    /// as `file:///tmp/a%20b.png`, becomes that path (`/tmp/a b.png`); any
+    /// other URI remains a URI.
     /// Applications with switches must parse [`Self::arguments`] instead of
     /// treating every trailing argument as an open target. This convenience
     /// projection replaces non-UTF-8 path bytes lossily; use
