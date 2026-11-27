@@ -33,6 +33,11 @@ fn run_verdict_asks_the_kernel() {
         may_run(Path::new("/proc/self/status")).unwrap(),
         RunVerdict::NoExecMount
     );
+    // Searchable is `X_OK` too, yet `execve` refuses a folder.
+    assert_eq!(
+        may_run(Path::new("/usr/bin")).unwrap(),
+        RunVerdict::NotPermitted
+    );
 }
 use std::error::Error as _;
 use std::sync::atomic::{AtomicU64, Ordering};
