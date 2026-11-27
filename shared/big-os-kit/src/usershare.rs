@@ -164,13 +164,26 @@ pub fn add(share: &Share) -> Result<(), Error> {
 }
 
 /// The access list `add` writes: `current` while it grants what `writable`
-/// says, else full control or read for everyone, the only two written anew.
+/// says, else `current` with only its grant to everyone changed to full
+/// control or read, so a person's own entry (a deny above all) stays.
 fn grant_for(writable: bool, current: Option<&str>) -> String {
-    match current {
-        Some(acl) if acl_is_writable(acl) == writable => acl.trim_end_matches(',').to_owned(),
-        _ if writable => "Everyone:F".to_owned(),
-        _ => "Everyone:R".to_owned(),
+    let everyone = if writable { "Everyone:F" } else { "Everyone:R" };
+    let Some(acl) = current else {
+        return everyone.to_owned();
+    };
+    if acl_is_writable(acl) == writable {
+        return acl.trim_end_matches(',').to_owned();
     }
+    acl.split(',')
+        .filter(|grant| {
+            !grant.is_empty()
+                && !grant
+                    .get(..9)
+                    .is_some_and(|start| start.eq_ignore_ascii_case("Everyone:"))
+        })
+        .chain(std::iter::once(everyone))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Only full control for everyone reads as writable: a list that grants it
@@ -384,13 +397,17 @@ mod tests {
         assert!(acl("alice:R,everyone:f,"));
     }
 
-    /// An edit that keeps the share's writability keeps entries `add` never
-    /// writes; one that changes it writes the grant asked for.
+    /// An edit keeps the entries `add` never writes; one that changes the
+    /// share's writability changes only the grant to everyone.
     #[test]
     fn edit_keeps_a_persons_deny() {
         let denied = "alice:D,Everyone:R,";
         assert_eq!(grant_for(false, Some(denied)), "alice:D,Everyone:R");
-        assert_eq!(grant_for(true, Some(denied)), "Everyone:F");
+        assert_eq!(grant_for(true, Some(denied)), "alice:D,Everyone:F");
+        assert_eq!(
+            grant_for(false, Some("Everyone:F,alice:D")),
+            "alice:D,Everyone:R"
+        );
         assert_eq!(
             grant_for(false, Some("Everyone:D,bob:F,")),
             "Everyone:D,bob:F"
