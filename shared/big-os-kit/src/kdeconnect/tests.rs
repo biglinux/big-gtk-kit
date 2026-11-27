@@ -240,6 +240,9 @@ impl FakeDevice {
     fn has_plugin(&self, plugin: &str) -> bool {
         self.plugins.contains(&plugin)
     }
+
+    #[zbus(signal, name = "pluginsChanged")]
+    async fn plugins_changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
 struct FakeShare(Arc<Mutex<Vec<String>>>);
@@ -523,6 +526,22 @@ fn device_list_signal_ticks_the_watch() {
         FakeDaemon::device_list_changed(&emitter)
             .await
             .expect("emit");
+        assert!(ticks.next().await.is_some());
+    });
+}
+
+/// Turning a plugin off on a phone changes no device list; the device says so.
+#[test]
+fn plugin_change_ticks_the_watch() {
+    let bus = Bus::start();
+    zbus::block_on(async {
+        let (service, _) = serve(&bus, true).await;
+        let client = bus.connect().await;
+        let mut ticks = Box::pin(phones_changed(&client).await.expect("watch"));
+        let emitter =
+            zbus::object_server::SignalEmitter::new(&service, "/modules/kdeconnect/devices/a")
+                .expect("emitter");
+        FakeDevice::plugins_changed(&emitter).await.expect("emit");
         assert!(ticks.next().await.is_some());
     });
 }
