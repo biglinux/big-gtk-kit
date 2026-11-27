@@ -42,7 +42,8 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
   on a quarter pixel grid instead of a 1/32 one and resampled down, as the
   renderer already does under rotations. The frames of one animation, and the
   openings after it, then share entries. Below one step (1/120), which can be
-  any number of times the scale, they keep the exact scale.
+  any number of times the scale, they keep the exact scale, still on the
+  quarter pixel grid.
 - A cached fill or stroke is snapped to the pixel grid of the scale it is
   rendered at, not of the frame that made it, and its key holds its subpixel
   grid, so a mask made on the quarter pixel grid is never taken for a phase on
