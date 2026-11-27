@@ -148,6 +148,60 @@ fn destroyed_primary_fails_without_windows() {
     assert_eq!(error.message(), NO_WINDOW_PRESENTATION_ERROR);
 }
 
+/// GTK takes a destroyed primary window out of the application without
+/// disposing of it while the shell holds it; the window left is presented.
+#[test]
+#[ignore = "display: needs a GTK display"]
+fn removed_primary_yields_to_secondary() {
+    struct WindowRoot;
+
+    impl relm4::SimpleComponent for WindowRoot {
+        type Init = ();
+        type Input = ();
+        type Output = ();
+        type Root = adw::ApplicationWindow;
+        type Widgets = ();
+
+        fn init_root() -> Self::Root {
+            adw::ApplicationWindow::builder().build()
+        }
+
+        fn init(
+            (): Self::Init,
+            _root: Self::Root,
+            _sender: relm4::ComponentSender<Self>,
+        ) -> relm4::ComponentParts<Self> {
+            relm4::ComponentParts {
+                model: Self,
+                widgets: (),
+            }
+        }
+    }
+
+    let app = adw::Application::new(
+        Some("br.com.biglinux.AppKitRemovedPrimary"),
+        gio::ApplicationFlags::NON_UNIQUE,
+    );
+    let presented_secondary = Rc::new(RefCell::new(None));
+    let presented_for_activate = Rc::clone(&presented_secondary);
+    app.connect_activate(move |app| {
+        let root = AppShellController::<WindowRoot>::launch(());
+        root.bind_primary_window(app);
+        let secondary = gtk::Window::new();
+        secondary.set_application(Some(app));
+        root.primary_window().expect("a window root").destroy();
+        let chosen = root
+            .window_for_presentation(app, AppShellActivationOutcome::PresentCurrent, true)
+            .ok()
+            .flatten();
+        *presented_for_activate.borrow_mut() = Some(chosen == Some(secondary.clone()));
+        secondary.destroy();
+    });
+    app.run_with_args(&["appkit-removed-primary"]);
+
+    assert_eq!(*presented_secondary.borrow(), Some(true));
+}
+
 /// A root that fails the test if `AppShell` gets as far as building it.
 struct NeverBuilt;
 

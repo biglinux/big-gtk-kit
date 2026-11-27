@@ -318,12 +318,6 @@ where
         let primary_window = component_root_window(controller.widget());
         let has_primary_window = primary_window.is_some();
         let primary_window = Rc::new(RefCell::new(primary_window));
-        if let Some(window) = primary_window.borrow().as_ref() {
-            let primary_window_for_destroy = Rc::clone(&primary_window);
-            window.connect_destroy(move |_| {
-                primary_window_for_destroy.borrow_mut().take();
-            });
-        }
         Self {
             controller,
             primary_window,
@@ -343,11 +337,22 @@ where
     }
 
     fn bind_primary_window(&self, app: &adw::Application) {
-        if let Some(window) = self.primary_window()
-            && window.application().as_ref() != Some(app.upcast_ref())
-        {
+        let Some(window) = self.primary_window() else {
+            return;
+        };
+        if window.application().as_ref() != Some(app.upcast_ref()) {
             window.set_application(Some(app));
         }
+        // A destroyed window leaves the application, but while this slot holds
+        // it, it is never disposed of and `destroy` never comes.
+        let primary_window = Rc::clone(&self.primary_window);
+        // leak-guard: allow(process-object-handler) AppShell wires one root per process
+        app.connect_window_removed(move |_, removed| {
+            let mut primary = primary_window.borrow_mut();
+            if primary.as_ref() == Some(removed) {
+                primary.take();
+            }
+        });
     }
 
     fn window_for_presentation(
