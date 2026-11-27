@@ -169,7 +169,12 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
         }
         let entries = usize::from(reader.u16_at(second).unwrap_or(0));
         dropped.push(second..second.saturating_add(2 + entries * 12 + 4));
-        dropped.extend(thumbnail::thumbnail_span(&reader, second));
+        match thumbnail::thumbnail_span(&reader, second) {
+            Some(span) => dropped.push(span),
+            // Named but not placed, it could be any of the block.
+            None if thumbnail::names_jpeg(&reader, second) => return None,
+            None => {}
+        }
     }
     // What the first directory points to lies before the second one, as
     // writers lay the block out; a thumbnail there could be any of it.
@@ -549,6 +554,16 @@ mod tests {
         // Two strips: the entries list their offsets and counts elsewhere.
         tiff[32..36].copy_from_slice(&2u32.to_le_bytes());
         tiff[44..48].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
+    }
+
+    /// A thumbnail whose offset lists several values cannot be placed, so it
+    /// cannot be cut out either.
+    #[test]
+    fn upright_refuses_unplaced_thumbnail() {
+        let mut tiff = thumbnail::tests::camera_tiff(6, Some(&[0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9]));
+        // The count of the second directory's JPEGInterchangeFormat entry.
+        tiff[32..36].copy_from_slice(&2u32.to_le_bytes());
         assert_eq!(upright(&tiff), None);
     }
 

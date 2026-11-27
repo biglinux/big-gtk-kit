@@ -137,12 +137,25 @@ pub(super) fn thumbnail_span(reader: &Reader<'_>, second: usize) -> Option<Range
 /// tag alone decides, whatever its format and count: several strips list
 /// several offsets.
 pub(super) fn in_strips(reader: &Reader<'_>, second: usize) -> bool {
-    let count = reader.u16_at(second).map_or(0, usize::from);
+    names_any(reader, second, &[TAG_STRIP_OFFSETS, TAG_TILE_OFFSETS])
+}
+
+/// Whether the directory at `second` names a JPEG thumbnail, placed or not.
+pub(super) fn names_jpeg(reader: &Reader<'_>, second: usize) -> bool {
+    names_any(
+        reader,
+        second,
+        &[TAG_THUMBNAIL_OFFSET, TAG_THUMBNAIL_LENGTH],
+    )
+}
+
+/// Whether the directory at `at` has an entry for one of `tags`.
+fn names_any(reader: &Reader<'_>, at: usize, tags: &[u16]) -> bool {
+    let count = reader.u16_at(at).map_or(0, usize::from);
     (0..count).any(|index| {
-        second
-            .checked_add(2 + index * 12)
+        at.checked_add(2 + index * 12)
             .and_then(|entry| reader.u16_at(entry))
-            .is_some_and(|tag| matches!(tag, TAG_STRIP_OFFSETS | TAG_TILE_OFFSETS))
+            .is_some_and(|tag| tags.contains(&tag))
     })
 }
 
