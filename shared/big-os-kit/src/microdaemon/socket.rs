@@ -166,16 +166,20 @@ pub fn runs_under_user_manager() -> bool {
 fn belongs_to_user_manager(runtime: &Path, bus: Option<&OsStr>, uid: libc::uid_t) -> bool {
     let manager = Path::new("/run/user").join(uid.to_string());
     let manager_bus = manager.join("bus");
-    // A D-Bus address lists `transport:key=value,…` entries separated by `;`.
+    // A D-Bus address lists `transport:key=value,…` entries separated by `;`,
+    // tried in order, so every one must name the manager's bus.
     let on_manager_bus = |address: &str| {
-        address.split(';').any(|entry| {
-            entry.strip_prefix("unix:").is_some_and(|keys| {
-                keys.split(',').any(|key| {
-                    key.strip_prefix("path=")
-                        .is_some_and(|path| Path::new(path) == manager_bus)
+        address
+            .split(';')
+            .filter(|entry| !entry.is_empty())
+            .all(|entry| {
+                entry.strip_prefix("unix:").is_some_and(|keys| {
+                    keys.split(',').any(|key| {
+                        key.strip_prefix("path=")
+                            .is_some_and(|path| Path::new(path) == manager_bus)
+                    })
                 })
             })
-        })
     };
     runtime == manager
         && bus
@@ -385,6 +389,11 @@ mod tests {
                 false,
             ),
             ("/run/user/1000", bus("unix:tmpdir=/dev/shm/bg.x"), false),
+            (
+                "/run/user/1000",
+                bus("unix:path=/run/user/1000/gui-session.x/bus;unix:path=/run/user/1000/bus"),
+                false,
+            ),
         ] {
             assert_eq!(
                 belongs_to_user_manager(Path::new(runtime), address.as_deref(), 1000),
