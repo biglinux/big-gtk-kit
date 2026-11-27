@@ -336,7 +336,7 @@ index 42c3410a46..b9c2040504 100644
 +  return MAX (ceilf (scale * GSK_GPU_SCALE_STEPS - 0.001f), 1) / GSK_GPU_SCALE_STEPS;
 +}
 diff --git a/testsuite/gsk/misc.c b/testsuite/gsk/misc.c
-index a1dc9c8274..ea01ce9c9a 100644
+index a1dc9c8274..e84d8df72d 100644
 --- a/testsuite/gsk/misc.c
 +++ b/testsuite/gsk/misc.c
 @@ -1,11 +1,18 @@
@@ -639,7 +639,7 @@ index a1dc9c8274..ea01ce9c9a 100644
 +  GskRenderNode *text, *node;
 +  GskTransform *transform;
 +  GdkTexture *texture;
-+  guchar data[40 * 40 * 4];
++  guint32 data[40 * 40];
 +  gboolean inked = FALSE;
 +
 +  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
@@ -678,12 +678,12 @@ index a1dc9c8274..ea01ce9c9a 100644
 +  node = gsk_transform_node_new (text, transform);
 +  gsk_transform_unref (transform);
 +  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 40, 40));
-+  gdk_texture_download (texture, data, 40 * 4);
++  gdk_texture_download (texture, (guchar *) data, 40 * 4);
 +
 +  for (int y = 0; y < 40; y++)
 +    for (int x = 0; x < 40; x++)
 +      {
-+        guchar alpha = data[(y * 40 + x) * 4 + 3];
++        guchar alpha = data[y * 40 + x] >> 24;
 +
 +        /* The ink at that scale, and a pixel around it for antialiasing */
 +        if (x >= floorf (ink.x * 0.002f) - 1 && x <= ceilf ((ink.x + ink.width) * 0.002f) &&
