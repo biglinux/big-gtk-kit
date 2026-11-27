@@ -5,7 +5,8 @@
 //!
 //! The XDG portal's `FileChooser` is asked first, so GNOME, KDE and BigLinux
 //! each show their own picker; GTK's `GtkFileDialog` answers when no portal
-//! does. GTK reaches the portal by itself only for sandboxed applications.
+//! does. GTK 4.24 asks the same portal when one is there, but never answers
+//! when that call fails: asked here, a refusal is an error the program sees.
 //!
 //! The answer is the chosen [`gio::File`]s, local or not. Cancelling is
 //! "no file", never an error; an error is a dialog that failed.
@@ -56,8 +57,9 @@ pub struct FileRequest {
     pub title: String,
     /// Where to start. `None` starts wherever the desktop last was.
     pub start_in: Option<PathBuf>,
-    /// A file whose folder to start in when `start_in` names none. Neither
-    /// dialog selects it: an open dialog takes a folder, not a file.
+    /// A file whose folder to start in when `start_in` names none; a save
+    /// with no `current_name` also offers its name. An open dialog takes a
+    /// folder, not a file, so neither dialog selects it.
     pub select: Option<PathBuf>,
     /// The word on the confirming button. `None` asks for the desktop's.
     pub accept_label: Option<String>,
@@ -386,17 +388,30 @@ fn portal_options(request: &FileRequest) -> glib::Variant {
         // A folder is asked for through OpenFile with this flag, not a method
         // of its own.
         FileRequestKind::SelectFolder => options.insert("directory", true),
-        FileRequestKind::SaveFile { current_name } if !current_name.is_empty() => {
-            options.insert("current_name", current_name.as_str());
-        }
         _ => {}
+    }
+    // Resolved as the toolkit's dialog resolves it, so a bare file name is in
+    // the working directory.
+    let selected = request
+        .select
+        .as_deref()
+        .and_then(|file| gio::File::for_path(file).path());
+    if let FileRequestKind::SaveFile { current_name } = &request.kind {
+        // The toolkit's dialog pre-fills the selected file's name too.
+        let name = selected
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .and_then(std::ffi::OsStr::to_str)
+            .filter(|_| current_name.is_empty())
+            .unwrap_or(current_name);
+        if !name.is_empty() {
+            options.insert("current_name", name);
+        }
     }
     let start = request
         .start_in
         .as_deref()
-        .or_else(|| request.select.as_deref().and_then(std::path::Path::parent))
-        // A bare file name's parent is empty, which names no folder.
-        .filter(|start| !start.as_os_str().is_empty());
+        .or_else(|| selected.as_deref().and_then(std::path::Path::parent));
     // Resolved here as the toolkit's dialog resolves it: the portal runs in a
     // working directory of its own.
     if let Some(start) = start.and_then(|start| gio::File::for_path(start).path()) {
@@ -539,9 +554,9 @@ fn dismissed(error: &glib::Error) -> bool {
 
 /// Speaking `org.freedesktop.portal.FileChooser` directly.
 ///
-/// GTK only reaches the portal for sandboxed applications, so an unsandboxed
-/// program that wants the desktop's chosen picker asks for it itself: the same
-/// request as a portal call, and the toolkit's dialog when no portal answers.
+/// GTK's own portal request never answers when the call fails, so the program
+/// asks the portal itself: the same request, an error when the portal refuses
+/// it, and the toolkit's dialog when no portal takes it.
 ///
 /// GIO's D-Bus is used rather than a client library because it is already here
 /// and already lives on the GTK main loop: a dialog stays open for as long as
@@ -666,44 +681,58 @@ mod portal {
             gio::DBusSendMessageFlags::NONE,
             -1,
             gio::Cancellable::NONE,
-            move |reply| match reply.and_then(carried_error) {
-                // Watched from the reply on, by the unique name that sent it: a
-                // portal that crashes with the dialog open never answers, and
-                // one restarted under the same name knows nothing of this
-                // request. A name already gone is reported as vanished.
-                Ok(reply) if subscription.borrow().is_some() => {
-                    let handle = reply
-                        .body()
-                        .and_then(|body| body.get::<(glib::variant::ObjectPath,)>());
-                    let (Some(portal), Some((handle,))) = (reply.sender(), handle) else {
-                        finish(Some(Err(glib::Error::new(
-                            gtk::DialogError::Failed,
-                            "the file portal sent a malformed reply",
-                        ))));
+            move |reply| {
+                let reply = match reply {
+                    Ok(reply) => reply,
+                    // Never sent, or never answered: no portal took the request.
+                    Err(error) => {
+                        log::debug!("the file portal did not take the request: {error}");
+                        finish(None);
                         return;
-                    };
-                    // A portal older than `handle_token` answers on a path of
-                    // its own choosing. An answer it sent there before this
-                    // line is lost, as the portal's documentation accepts.
-                    if handle.as_str() != path {
-                        let moved = listen(handle.as_str());
-                        subscription.borrow_mut().replace(moved);
                     }
-                    let vanished = Rc::clone(&finish);
-                    watcher.set(Some(gio::bus_watch_name_on_connection(
-                        &connection,
-                        &portal,
-                        gio::BusNameWatcherFlags::NONE,
-                        |_, _, _| {},
-                        move |_, _| vanished(None),
-                    )));
+                };
+                // The bus answers for a portal it has not, or could not start;
+                // only the portal's own refusal is the dialog's failure.
+                let from_bus = reply.sender().as_deref() == Some("org.freedesktop.DBus");
+                match carried_error(reply) {
+                    // Watched from the reply on, by the unique name that sent it: a
+                    // portal that crashes with the dialog open never answers, and
+                    // one restarted under the same name knows nothing of this
+                    // request. A name already gone is reported as vanished.
+                    Ok(reply) if subscription.borrow().is_some() => {
+                        let handle = reply
+                            .body()
+                            .and_then(|body| body.get::<(glib::variant::ObjectPath,)>());
+                        let (Some(portal), Some((handle,))) = (reply.sender(), handle) else {
+                            finish(Some(Err(glib::Error::new(
+                                gtk::DialogError::Failed,
+                                "the file portal sent a malformed reply",
+                            ))));
+                            return;
+                        };
+                        // A portal older than `handle_token` answers on a path of
+                        // its own choosing. An answer it sent there before this
+                        // line is lost, as the portal's documentation accepts.
+                        if handle.as_str() != path {
+                            let moved = listen(handle.as_str());
+                            subscription.borrow_mut().replace(moved);
+                        }
+                        let vanished = Rc::clone(&finish);
+                        watcher.set(Some(gio::bus_watch_name_on_connection(
+                            &connection,
+                            &portal,
+                            gio::BusNameWatcherFlags::NONE,
+                            |_, _, _| {},
+                            move |_, _| vanished(None),
+                        )));
+                    }
+                    Ok(_) => {}
+                    Err(error) if from_bus || absent(&error) => {
+                        log::debug!("the file portal did not take the request: {error}");
+                        finish(None);
+                    }
+                    Err(error) => finish(Some(Err(error))),
                 }
-                Ok(_) => {}
-                Err(error) if absent(&error) => {
-                    log::debug!("the file portal did not take the request: {error}");
-                    finish(None);
-                }
-                Err(error) => finish(Some(Err(error))),
             },
         );
     }
@@ -767,7 +796,12 @@ mod portal {
         };
         match response {
             SUCCESS => match results.lookup::<Vec<String>>("uris") {
-                Ok(Some(uris)) => Ok(uris.iter().map(|uri| gio::File::for_uri(uri)).collect()),
+                Ok(Some(uris))
+                    if !uris.is_empty()
+                        && uris.iter().all(|uri| glib::Uri::peek_scheme(uri).is_some()) =>
+                {
+                    Ok(uris.iter().map(|uri| gio::File::for_uri(uri)).collect())
+                }
                 _ => Err(failed("the file portal chose without naming the files")),
             },
             CANCELLED => Ok(Vec::new()),
@@ -794,8 +828,8 @@ mod tests {
         assert_ne!(first.next(), first.next(), "and one copy never repeats");
     }
 
-    /// The portal starts in the folder of the file to select, and is given
-    /// none for a bare file name.
+    /// The portal starts in the folder of the file to select; a bare file
+    /// name is in the working directory, as for the toolkit's dialog.
     #[test]
     fn portal_starts_in_selected_folder() {
         let start = |select: &str| {
@@ -806,7 +840,13 @@ mod tests {
                 .map(|folder| folder.fixed_array::<u8>().unwrap().to_vec())
         };
         assert_eq!(start("/home/ana/notes.txt"), Some(b"/home/ana\0".to_vec()));
-        assert_eq!(start("notes.txt"), None);
+        let mut here = gio::File::for_path(".")
+            .path()
+            .expect("a local path")
+            .into_os_string()
+            .into_encoded_bytes();
+        here.push(0);
+        assert_eq!(start("notes.txt"), Some(here));
     }
 
     /// A relative folder reaches the portal, which has a working directory
@@ -885,6 +925,29 @@ mod tests {
             chose(Some("file:///a".to_variant())).is_err(),
             "uris not a list"
         );
+        assert!(
+            chose(Some(Vec::<String>::new().to_variant())).is_err(),
+            "chose no file"
+        );
+        assert!(
+            chose(Some(vec!["notes.txt"].to_variant())).is_err(),
+            "a uri without a scheme"
+        );
+    }
+
+    /// A save with no name of its own offers the selected file's, as the
+    /// toolkit's dialog does; a name of its own wins.
+    #[test]
+    fn portal_save_offers_selected_name() {
+        let name = |current: &str| {
+            let request = FileRequest::save_file(current).selecting("/home/ana/song.ogg");
+            glib::VariantDict::new(Some(&portal_options(&request)))
+                .lookup::<String>("current_name")
+                .ok()
+                .flatten()
+        };
+        assert_eq!(name("").as_deref(), Some("song.ogg"));
+        assert_eq!(name("mix.ogg").as_deref(), Some("mix.ogg"));
     }
 
     /// Turn this thread's context until `done`, for at most five seconds.

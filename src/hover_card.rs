@@ -87,9 +87,11 @@ pub struct HoverCards {
 
 impl HoverCards {
     /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`; a row or an
-    /// index without a card opens nothing. Each card scrolls when it is taller
-    /// than the overlay. The cards and controllers stay on `layer` and the
-    /// rows for their lifetime: make one for each layer.
+    /// index without a card opens nothing. Each card is wrapped in a scroller,
+    /// which carries the `side-card` class and the visibility and scrolls when
+    /// the card is taller than the overlay: pass the content, not a
+    /// [`crate::side_card::card`]. The cards and controllers stay on `layer`
+    /// and the rows for their lifetime: make one for each layer.
     pub fn new(
         layer: &gtk::Overlay,
         rows: Vec<gtk::Widget>,
