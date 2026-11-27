@@ -453,14 +453,15 @@ on_signal (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
-// A request that came before the main loop ran, kept until it runs.
-static volatile sig_atomic_t early_request;
+// A request that came before the main loop ran, kept until it runs. Atomic: the
+// signal may land on another thread while the main one reads it.
+static int early_request;
 
 static void
 note_early_request (int signum)
 {
   (void) signum;
-  early_request = 1;
+  __atomic_store_n (&early_request, 1, __ATOMIC_RELEASE);
 }
 
 static gboolean
@@ -471,7 +472,7 @@ install_signal (gpointer data)
   // never GLib inside a raw signal handler. Added first, so a request after the
   // check below is GLib's to deliver.
   g_unix_signal_add (SIGUSR2, on_signal, NULL);
-  if (early_request)
+  if (__atomic_load_n (&early_request, __ATOMIC_ACQUIRE))
     on_signal (NULL);
   return G_SOURCE_REMOVE;
 }
