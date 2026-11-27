@@ -103,7 +103,8 @@ impl MicrodaemonIdleExit {
             // One millisecond past the deadline, so the exit is not a hair early.
             (Some(_), Some(left)) => Some(left.saturating_add(Duration::from_millis(1))),
         };
-        let until = deadline.map(|deadline| Instant::now() + deadline);
+        // A grace past what an `Instant` holds never runs out: wait untimed.
+        let until = deadline.and_then(|deadline| Instant::now().checked_add(deadline));
         let mut watched = vec![PollFd::new(&listener, PollFlags::IN)];
         if let Some(bell) = &self.bell {
             watched.push(PollFd::new(bell.as_ref(), PollFlags::IN));
@@ -411,6 +412,20 @@ mod tests {
     }
 
     #[test]
+    fn endless_grace_waits_for_the_bell() {
+        let idle_exit = MicrodaemonIdleExit::new(Duration::MAX);
+        let (listener, _writer) = quiet_listener();
+        idle_exit.wake();
+        let woken = wait_within(
+            &idle_exit,
+            &listener,
+            Instant::now(),
+            Duration::from_secs(2),
+        );
+        assert_eq!(woken.map(|(client, _)| client), Some(false));
+    }
+
+    #[test]
     fn held_daemon_has_no_exit_time() {
         let idle_exit = MicrodaemonIdleExit::new(Duration::from_secs(30));
         let client = idle_exit.client_connected();
@@ -434,9 +449,19 @@ mod tests {
         let _client = idle_exit.client_connected();
         idle_exit.wake();
 
-        let woken = wait_within(&idle_exit, &listener, Instant::now(), Duration::from_secs(2));
+        let woken = wait_within(
+            &idle_exit,
+            &listener,
+            Instant::now(),
+            Duration::from_secs(2),
+        );
         assert_eq!(woken.map(|(client, _)| client), Some(false));
-        let again = wait_within(&idle_exit, &listener, Instant::now(), Duration::from_millis(100));
+        let again = wait_within(
+            &idle_exit,
+            &listener,
+            Instant::now(),
+            Duration::from_millis(100),
+        );
         assert!(again.is_none(), "the bell rang once and was heard once");
         idle_exit.wake();
     }
