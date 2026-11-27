@@ -331,16 +331,27 @@ impl Drop for BigSettingChangeSubscription {
 ///     "big-settings-document-doctest-{}.json",
 ///     std::process::id(),
 /// ));
-/// let store = BigVersionedJsonStore::new(&path, 1);
-/// let document = BigSettingsDocument::new(AppSettings::default(), store);
-/// let _token = document.subscribe(|key| assert_eq!(key, "follow-system"));
-/// document.apply_change(
-///     "follow-system",
-///     |settings| settings.follow_system = true,
-///     |error| eprintln!("settings not saved: {error}"),
-/// );
-/// assert!(document.snapshot().follow_system);
-/// let _ = std::fs::remove_file(path);
+/// glib::MainContext::new()
+///     .with_thread_default(|| {
+///         let store = BigVersionedJsonStore::new(&path, 1);
+///         let document = BigSettingsDocument::new(AppSettings::default(), store);
+///         let _token = document.subscribe(|key| assert_eq!(key, "follow-system"));
+///         document.apply_change(
+///             "follow-system",
+///             |settings| settings.follow_system = true,
+///             |error| eprintln!("settings not saved: {error}"),
+///         );
+///         assert!(document.snapshot().follow_system);
+///         // The write ends on this thread's main context, as in an app's loop.
+///         let context = glib::MainContext::ref_thread_default();
+///         while document.is_saving() {
+///             context.iteration(true);
+///         }
+///     })
+///     .unwrap();
+/// let saved = BigVersionedJsonStore::<AppSettings>::new(&path, 1).read().unwrap();
+/// assert_eq!(saved, Some(AppSettings { follow_system: true }));
+/// std::fs::remove_file(path).unwrap();
 /// ```
 #[cfg(feature = "background-save")]
 #[derive(Clone)]
