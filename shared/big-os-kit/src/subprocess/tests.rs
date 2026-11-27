@@ -1538,3 +1538,75 @@ fn pipe_threads_end_at_the_deadline() {
     assert!(matches!(run, Err(BigSubprocessError::Timeout)), "{run:?}");
     assert!(still_held.is_empty(), "still held: {still_held:?}");
 }
+
+/// Where `close_range` answers ENOSYS (a seccomp filter), a child that may keep
+/// only its own descriptors is refused rather than started with all of ours.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn missing_close_range_refuses_the_child() {
+    let started = std::thread::spawn(|| {
+        deny_close_range_on_this_thread();
+        BigSubprocessSpec::builder()
+            .program("true")
+            .unix_process_group(true)
+            .build()
+            .spawn()
+            .map(|mut child| child.wait())
+    })
+    .join()
+    .expect("the filtered thread");
+    assert!(
+        matches!(&started, Err(BigSubprocessError::Spawn(error)) if error.raw_os_error() == Some(libc::ENOSYS)),
+        "{started:?}"
+    );
+}
+
+/// Make `close_range` fail with ENOSYS on the calling thread and the children
+/// it starts; the filter ends with the thread.
+fn deny_close_range_on_this_thread() {
+    let code = |code: u32| u16::try_from(code).expect("a BPF opcode");
+    let close_range = u32::try_from(libc::SYS_close_range).expect("a syscall number");
+    let enosys = u32::try_from(libc::ENOSYS).expect("an errno");
+    let mut filter = [
+        // `seccomp_data.nr`, at offset 0.
+        libc::sock_filter {
+            code: code(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS),
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
+        libc::sock_filter {
+            code: code(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K),
+            jt: 0,
+            jf: 1,
+            k: close_range,
+        },
+        libc::sock_filter {
+            code: code(libc::BPF_RET | libc::BPF_K),
+            jt: 0,
+            jf: 0,
+            k: libc::SECCOMP_RET_ERRNO | enosys,
+        },
+        libc::sock_filter {
+            code: code(libc::BPF_RET | libc::BPF_K),
+            jt: 0,
+            jf: 0,
+            k: libc::SECCOMP_RET_ALLOW,
+        },
+    ];
+    let program = libc::sock_fprog {
+        len: u16::try_from(filter.len()).expect("a short filter"),
+        filter: filter.as_mut_ptr(),
+    };
+    // SAFETY: `program` points at `filter`, both alive for the call, which
+    // copies them; without a thread-sync flag the filter binds this thread alone.
+    let installed = unsafe {
+        libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0
+            && libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::c_ulong::from(libc::SECCOMP_MODE_FILTER),
+                &raw const program,
+            ) == 0
+    };
+    assert!(installed, "{}", std::io::Error::last_os_error());
+}
