@@ -1430,3 +1430,16 @@ fn helper_ends_with_its_parent() {
     }
     assert!(ended.is_some_and(|status| !status.success()), "{ended:?}");
 }
+
+/// A timeout past what an `Instant` can hold never ends the run.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn unbounded_timeout_runs_to_exit() {
+    let output = BigSubprocessSpec::builder()
+        .program("true")
+        .timeout(Duration::MAX)
+        .build()
+        .run()
+        .expect("the run ends with the child");
+    assert!(output.status.success());
+}

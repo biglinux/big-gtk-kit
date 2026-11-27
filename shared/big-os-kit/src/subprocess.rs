@@ -1235,7 +1235,7 @@ fn run_validated(
         _ => None,
     };
 
-    let deadline = std::time::Instant::now() + spec.timeout;
+    let deadline = Deadline::new(spec.timeout);
     // Woken the moment the child ends; otherwise only as often as a cancel or
     // an observer needs looking at.
     let exited = child::pidfd(child.id());
@@ -1257,7 +1257,7 @@ fn run_validated(
                     let _ = child.wait();
                     break WaitOutcome::Cancelled;
                 }
-                if std::time::Instant::now() >= deadline {
+                if deadline.remaining().is_zero() {
                     terminate_or_kill_child_group(spec, &mut child);
                     let _ = child.wait();
                     break WaitOutcome::TimedOut;
@@ -1271,8 +1271,7 @@ fn run_validated(
                 }
                 child::sleep_until_exit(
                     exited.as_ref(),
-                    RUN_CHECK_INTERVAL
-                        .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                    RUN_CHECK_INTERVAL.min(deadline.remaining()),
                     Duration::from_millis(20),
                 );
             }
@@ -1306,18 +1305,37 @@ fn run_validated(
     })
 }
 
+/// The end of a run's timeout, kept as its start and length: a timeout too
+/// long for an `Instant` (`Duration::MAX`) then never ends rather than overflows.
+#[derive(Clone, Copy)]
+struct Deadline {
+    started: std::time::Instant,
+    timeout: Duration,
+}
+
+impl Deadline {
+    fn new(timeout: Duration) -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            timeout,
+        }
+    }
+
+    fn remaining(self) -> Duration {
+        self.timeout.saturating_sub(self.started.elapsed())
+    }
+}
+
 /// What a reader thread sent once its pipe closed, or the empty value for a
 /// pipe nobody captured; `None` when the pipe is still open at `deadline`.
 fn collect<T: Default>(
     reader: Option<std::sync::mpsc::Receiver<T>>,
-    deadline: std::time::Instant,
+    deadline: Deadline,
 ) -> Option<T> {
     let Some(reader) = reader else {
         return Some(T::default());
     };
-    reader
-        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-        .ok()
+    reader.recv_timeout(deadline.remaining()).ok()
 }
 
 /// The child's exit status once it has exited, reaping it; `None` while it runs.
