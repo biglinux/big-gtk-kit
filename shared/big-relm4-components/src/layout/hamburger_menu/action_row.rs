@@ -58,10 +58,13 @@ pub(super) fn build_action_menu_row(
     let weak_action_context = action_context.downgrade();
     let weak_popover = popover.downgrade();
     row.connect_clicked(move |_| {
+        // Held before the popover closes: its `closed` handlers may drop the
+        // last other reference to the context.
+        let action_context = weak_action_context.upgrade();
         if let Some(popover) = weak_popover.upgrade() {
             popover.popdown();
         }
-        if let Some(action_context) = weak_action_context.upgrade() {
+        if let Some(action_context) = action_context {
             let _ = activate_detailed_action(&action_context, &action);
         }
     });

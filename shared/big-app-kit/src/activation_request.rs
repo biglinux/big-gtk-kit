@@ -42,7 +42,8 @@ impl AppShellActivation {
     }
 
     /// Arguments after the executable name, interpreted as file or URI open
-    /// targets.
+    /// targets. The first `--` only ends the options, so `prog -- -name.png`
+    /// opens `-name.png`; a later `--` is a file of that name.
     ///
     /// Relative paths are resolved against the invoking process's working
     /// directory, including remote activations. A URI with a local path, such
@@ -54,9 +55,9 @@ impl AppShellActivation {
     /// [`Self::arguments`] when the native OS form is required.
     #[must_use]
     pub fn file_arguments(&self) -> Vec<String> {
-        self.arguments
-            .iter()
-            .skip(1)
+        let mut targets = self.arguments.iter().skip(1).peekable();
+        targets.next_if(|argument| *argument == "--");
+        targets
             .map(|argument| {
                 let file = self.cwd.as_ref().map_or_else(
                     || gio::File::for_commandline_arg(argument),
@@ -549,6 +550,21 @@ mod tests {
         assert_eq!(activation.arguments(), ["demo", "relative"]);
         assert_eq!(activation.cwd(), Some(Path::new("/invoker")));
         assert_eq!(activation.file_arguments(), ["/invoker/relative"]);
+    }
+
+    #[test]
+    fn first_double_dash_ends_options() {
+        let activation = AppShellActivation {
+            arguments: ["demo", "--", "-name.png", "--"]
+                .map(OsString::from)
+                .to_vec(),
+            cwd: Some(PathBuf::from("/invoker")),
+        };
+
+        assert_eq!(
+            activation.file_arguments(),
+            ["/invoker/-name.png", "/invoker/--"]
+        );
     }
 
     #[test]

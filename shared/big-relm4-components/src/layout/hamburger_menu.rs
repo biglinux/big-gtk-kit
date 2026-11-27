@@ -565,8 +565,10 @@ fn refill_on_model_change(
 }
 
 /// Replace a popover's child with flat named action rows, each activating its
-/// item's detailed action on `action_context` and closing the popover. Safe to
-/// call again on each opening: the popover's role is set once.
+/// item's detailed action on `action_context` and closing the popover. Fill it
+/// before it is first shown, or give it the group role yourself: GTK refuses a
+/// role once assistive technology has read the popover. Later refills keep the
+/// role, so it can be filled again on each opening.
 pub fn populate_flat_action_popover(
     popover: &gtk::Popover,
     action_context: &impl IsA<gtk::Widget>,
