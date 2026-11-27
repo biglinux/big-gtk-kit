@@ -115,7 +115,10 @@ fn has_animation_header(path: &Path) -> bool {
         return png_announces_animation(chunks, head.len() < PROBE_BYTES);
     }
     if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
-        return find(&head, b"ANIM").is_some();
+        // The animation flag of the extended header, which comes first
+        // (RFC 9649); `ANIM` may follow a color profile of any size.
+        return head.get(12..16) == Some(b"VP8X")
+            && head.get(20).is_some_and(|flags| flags & 0x02 != 0);
     }
     // An animated AVIF declares the image-sequence brand in its ftyp box.
     if head.get(4..8) == Some(b"ftyp") {
@@ -258,7 +261,11 @@ mod tests {
         )));
         assert!(has_animation_header(&write(
             "moving.webp",
-            b"RIFF\0\0\0\0WEBPVP8XANIM"
+            b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\x02\0\0\0\0\0\0\0\0\0ANIM"
+        )));
+        assert!(!has_animation_header(&write(
+            "alpha.webp",
+            b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\x10\0\0\0\0\0\0\0\0\0ALPH"
         )));
         assert!(!has_animation_header(&directory.join("missing.gif")));
 
@@ -311,6 +318,18 @@ mod tests {
         still.extend(png_chunk(b"IDAT", b"acTL"));
         still.extend(png_chunk(b"IEND", &[]));
         assert!(!probe("still.png", &still));
+    }
+
+    /// A color profile larger than the probe can put `ANIM` out of its
+    /// reach; the extended header's flag still says so.
+    #[test]
+    fn webp_flag_survives_large_profile() {
+        let mut webp = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\x22\0\0\0\0\0\0\0\0\0".to_vec();
+        webp.extend_from_slice(b"ICCP");
+        webp.extend_from_slice(&70_000u32.to_le_bytes());
+        webp.extend_from_slice(&[0; 70_000]);
+        webp.extend_from_slice(b"ANIM\x06\0\0\0\0\0\0\0\0\0");
+        assert!(probe("profiled.webp", &webp));
     }
 
     #[test]
