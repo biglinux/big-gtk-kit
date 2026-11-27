@@ -340,6 +340,9 @@ fn storage_test_path(name: &str) -> PathBuf {
     let pid = std::process::id();
     let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
     p.push(format!("big-os-kit-storage-test-{pid}-{seq}-{name}.json"));
+    // A failed run under a reused PID leaves its file or folder behind.
+    let _ = fs::remove_file(&p);
+    let _ = fs::remove_dir_all(&p);
     p
 }
 
