@@ -439,7 +439,10 @@ class WarningRules(unittest.TestCase):
                 self.assertEqual(lint(case.replace("SCRUTINEE", scrutinee)), [])
 
     def test_match_without_arms_read(self):
-        for scrutinee in ("never {}", "unsafe { read() } { _ => () }"):
+        for scrutinee in (
+            "never {}",
+            "unsafe { read() } { Some(button) => button.show(), _ => () }",
+        ):
             with self.subTest(scrutinee=scrutinee):
                 self.assertEqual(
                     lint(f"""

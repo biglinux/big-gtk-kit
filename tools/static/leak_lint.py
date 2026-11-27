@@ -491,10 +491,9 @@ def match_arms_brace(body: str, start: int) -> int:
     """Where the `{` that opens the arms of the `match` whose scrutinee starts at
     `start` is, or -1: past a block scrutinee and past braces inside brackets."""
     i = start
-    while i < len(body) and body[i].isspace():
-        i += 1
-    if body.startswith("{", i):  # a block as the scrutinee
-        i += len(call_argument(body, i)) + 2
+    # a block, or an `unsafe` one, as the scrutinee
+    if block := re.compile(r"\s*(?:unsafe\s*)?(?=\{)").match(body, start):
+        i = block.end() + len(call_argument(body, block.end())) + 2
     depth = 0
     for j in range(i, len(body)):
         c = body[j]
