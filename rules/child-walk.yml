@@ -10,6 +10,7 @@ rule:
     - all:
         - pattern: let mut $C = $W.first_child();
         - precedes:
+            stopBy: end
             any:
               - pattern: while let Some($X) = $C { $$$ }
               - has:
