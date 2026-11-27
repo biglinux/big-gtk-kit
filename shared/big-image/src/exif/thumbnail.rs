@@ -16,6 +16,8 @@ const MAX_SEGMENTS: usize = 16;
 const TAG_ORIENTATION: u16 = 0x0112;
 const TAG_THUMBNAIL_OFFSET: u16 = 0x0201;
 const TAG_THUMBNAIL_LENGTH: u16 = 0x0202;
+const TAG_STRIP_OFFSETS: u16 = 0x0111;
+const TAG_TILE_OFFSETS: u16 = 0x0144;
 
 /// A JPEG found inside the EXIF block of a JPEG or a HEIC file.
 #[derive(Debug, PartialEq, Eq)]
@@ -128,6 +130,17 @@ pub(super) fn thumbnail_span(reader: &Reader<'_>, second: usize) -> Option<Range
     let start = usize::try_from(offset?).ok()?;
     let end = start.checked_add(usize::try_from(length?).ok()?)?;
     Some(start..end)
+}
+
+/// Whether the directory at `second` keeps its thumbnail as pixels in strips
+/// or tiles (EXIF's uncompressed thumbnail), which no JPEG span names.
+pub(super) fn in_strips(reader: &Reader<'_>, second: usize) -> bool {
+    let mut found = false;
+    scan(reader, second, |tag, _| {
+        found |= matches!(tag, TAG_STRIP_OFFSETS | TAG_TILE_OFFSETS);
+        Some(())
+    });
+    found
 }
 
 /// Hand every single SHORT or LONG entry of the directory at `at` to `each`
