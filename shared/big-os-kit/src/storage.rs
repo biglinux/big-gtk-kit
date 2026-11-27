@@ -48,7 +48,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustix::fs::{
-    Gid, XattrFlags, fchown, fsetxattr, getxattr, getxattr_query, listxattr, listxattr_query,
+    Gid, XattrFlags, fchown, fremovexattr, fsetxattr, getxattr, getxattr_query, listxattr,
+    listxattr_query,
 };
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -261,14 +262,7 @@ impl<T: Serialize + DeserializeOwned> BigAtomicJsonStore<T> {
                 max_bytes: MAX_STORAGE_DOCUMENT_BYTES,
             });
         }
-        if let Some(parent) = self.path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        let mut temporary_store = PendingAtomicWrite::create_sibling(&self.path, Some(0o600))?;
-        temporary_store.file_mut()?.write_all(&bytes)?;
-        temporary_store.install(&self.path)?;
+        atomic_write_private(&self.path, &bytes)?;
         Ok(())
     }
 }
@@ -308,7 +302,7 @@ fn remove_dead_writers_temps(target: &Path) {
         let Ok(pid) = pid.parse::<libc::pid_t>() else {
             continue;
         };
-        if pid <= 0 || !seq.bytes().all(|byte| byte.is_ascii_digit()) {
+        if pid <= 0 || seq.is_empty() || !seq.bytes().all(|byte| byte.is_ascii_digit()) {
             continue;
         }
         // Signal 0 only asks whether the process exists.
@@ -457,7 +451,8 @@ fn atomic_create(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
 ///
 /// # Errors
 /// Returns the refusal above or the I/O failure; the original is untouched
-/// unless the result is `Ok(true)`.
+/// unless the result is `Ok(true)`, or the error is the final directory
+/// `fsync`'s, which comes after the new copy took its place.
 #[cfg(target_os = "linux")]
 pub fn atomic_replace_document(
     path: &Path,
@@ -497,6 +492,17 @@ pub fn atomic_replace_document(
     for (name, value) in &attributes {
         fsetxattr(&*file, name, value, XattrFlags::empty())?;
     }
+    // A folder's default ACL gives the new copy an access ACL the original
+    // did not have, which can let another user read it.
+    if !attributes
+        .iter()
+        .any(|(name, _)| name.as_bytes() == b"system.posix_acl_access")
+    {
+        match fremovexattr(&*file, c"system.posix_acl_access") {
+            Ok(()) | Err(rustix::io::Errno::NODATA | rustix::io::Errno::NOTSUP) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     // After the ACL: setting an access ACL rewrites the group bits of the mode.
     file.set_permissions(fs::Permissions::from_mode(metadata.mode() & 0o7777))?;
     file.sync_all()?;
@@ -514,23 +520,18 @@ pub fn atomic_replace_document(
 /// names, and stays a link.
 ///
 /// # Errors
-/// Returns the refusals of those two, a link that names nothing, or the I/O
-/// failure.
+/// Returns the refusals of those two, [`std::io::ErrorKind::AlreadyExists`]
+/// for a file another program made after this looked, a link that names
+/// nothing, or the I/O failure.
 #[cfg(target_os = "linux")]
 pub fn atomic_save_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = written_through(path)?;
-    // Replace a file seen to exist at once: creating it first would write the
-    // whole document twice. A file made after this look still comes back as
-    // `AlreadyExists`.
     if fs::symlink_metadata(&target).is_ok() {
         return atomic_replace_document(&target, bytes, || true).map(drop);
     }
-    match atomic_create_document(&target, bytes) {
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            atomic_replace_document(&target, bytes, || true).map(drop)
-        }
-        written => written,
-    }
+    // A file another program made after the look is not replaced: nobody
+    // chose to write over it.
+    atomic_create_document(&target, bytes)
 }
 
 /// The file a document named `path` is written to: the one a link names.
@@ -631,7 +632,19 @@ fn atomic_write_with_mode(
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
+        // The folders made here: a durable write puts their entries on the
+        // disk too, or a power cut can take the whole new path.
+        let made: Vec<PathBuf> = parent
+            .ancestors()
+            .take_while(|folder| !folder.as_os_str().is_empty() && !folder.exists())
+            .map(Path::to_path_buf)
+            .collect();
         fs::create_dir_all(parent)?;
+        if durable {
+            for folder in made.iter().rev() {
+                sync_parent_directory(folder)?;
+            }
+        }
     }
     let mut temporary_write = PendingAtomicWrite::create_sibling(path, mode)?;
     {
