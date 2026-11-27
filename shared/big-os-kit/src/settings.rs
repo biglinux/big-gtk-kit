@@ -717,9 +717,18 @@ mod tests {
             ))
         }
 
-        /// Turn the default main context until `done`, as an app's loop would.
+        /// Run `test` with a main context of its own as this thread's default:
+        /// libtest runs tests on threads of one process, and the global default
+        /// context serves one thread at a time.
+        fn on_own_context(test: impl FnOnce()) {
+            glib::MainContext::new()
+                .with_thread_default(test)
+                .expect("a new context has no owner");
+        }
+
+        /// Turn this thread's main context until `done`, as an app's loop would.
         fn wait(done: impl Fn() -> bool) {
-            let context = glib::MainContext::default();
+            let context = glib::MainContext::ref_thread_default();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !done() {
                 assert!(std::time::Instant::now() < deadline, "the write must end");
@@ -732,166 +741,170 @@ mod tests {
         /// fails keeps the change and is reported.
         #[test]
         fn applied_change_saves_later() {
-            let path = settings_test_path("apply");
-            let document = BigSettingsDocument::new(
-                TestSettings::default(),
-                BigVersionedJsonStore::new(&path, 1),
-            );
-            for level in [1.0, 2.0, 3.0] {
+            on_own_context(|| {
+                let path = settings_test_path("apply");
+                let document = BigSettingsDocument::new(
+                    TestSettings::default(),
+                    BigVersionedJsonStore::new(&path, 1),
+                );
+                for level in [1.0, 2.0, 3.0] {
+                    document.apply(
+                        "level",
+                        TestSettings {
+                            enabled: true,
+                            level,
+                        },
+                        |_| {},
+                    );
+                }
+                assert!((document.snapshot().level - 3.0).abs() < f64::EPSILON);
+                // A change edits the document as it is when the change is made.
+                document.apply_change("enabled", |settings| settings.enabled = false, |_| {});
+                let held = document.snapshot();
+                assert!(!held.enabled && (held.level - 3.0).abs() < f64::EPSILON);
+                document.apply_change("level", |settings| settings.level = 3.0, |_| {});
+                // Changes made during a write are written again after it, so the
+                // file is removed only once no write is left.
+                wait(|| !document.inner.saving.get());
+                let store = BigVersionedJsonStore::<TestSettings>::new(&path, 1);
+                assert_eq!(store.read().ok().flatten(), Some(held));
+                let _ = fs::remove_file(&path);
+
+                let blocked = settings_test_path("apply-blocked");
+                fs::write(&blocked, b"a file, not a folder").unwrap();
+                let document = BigSettingsDocument::new(
+                    TestSettings::default(),
+                    BigVersionedJsonStore::new(blocked.join("settings.json"), 1),
+                );
+                let failures = Rc::new(Cell::new(0));
+                let counted = Rc::clone(&failures);
                 document.apply(
-                    "level",
+                    "enabled",
                     TestSettings {
                         enabled: true,
-                        level,
+                        level: 0.0,
                     },
-                    |_| {},
+                    move |_| counted.set(counted.get() + 1),
                 );
-            }
-            assert!((document.snapshot().level - 3.0).abs() < f64::EPSILON);
-            // A change edits the document as it is when the change is made.
-            document.apply_change("enabled", |settings| settings.enabled = false, |_| {});
-            let held = document.snapshot();
-            assert!(!held.enabled && (held.level - 3.0).abs() < f64::EPSILON);
-            document.apply_change("level", |settings| settings.level = 3.0, |_| {});
-            // Changes made during a write are written again after it, so the
-            // file is removed only once no write is left.
-            wait(|| !document.inner.saving.get());
-            let store = BigVersionedJsonStore::<TestSettings>::new(&path, 1);
-            assert_eq!(store.read().ok().flatten(), Some(held));
-            let _ = fs::remove_file(&path);
-
-            let blocked = settings_test_path("apply-blocked");
-            fs::write(&blocked, b"a file, not a folder").unwrap();
-            let document = BigSettingsDocument::new(
-                TestSettings::default(),
-                BigVersionedJsonStore::new(blocked.join("settings.json"), 1),
-            );
-            let failures = Rc::new(Cell::new(0));
-            let counted = Rc::clone(&failures);
-            document.apply(
-                "enabled",
-                TestSettings {
-                    enabled: true,
-                    level: 0.0,
-                },
-                move |_| counted.set(counted.get() + 1),
-            );
-            assert!(document.snapshot().enabled);
-            wait(|| failures.get() == 1);
-            let _ = fs::remove_file(&blocked);
+                assert!(document.snapshot().enabled);
+                wait(|| failures.get() == 1);
+                let _ = fs::remove_file(&blocked);
+            });
         }
 
         /// A change made while a write runs is written once that write ends.
         #[test]
         fn change_during_write_is_written() {
-            let context = glib::MainContext::default();
-            let _owner = context
-                .acquire()
-                .expect("test thread owns the default context");
-            let path = settings_test_path("apply-during-write");
-            let document = BigSettingsDocument::new(
-                TestSettings::default(),
-                BigVersionedJsonStore::new(&path, 1),
-            );
-            let level = |level| TestSettings {
-                enabled: true,
-                level,
-            };
-            document.apply("level", level(1.0), |_| {});
-            // One turn of the loop: the writer copies this document and starts.
-            context.iteration(false);
-            document.apply("level", level(2.0), |_| {});
+            on_own_context(|| {
+                let context = glib::MainContext::ref_thread_default();
+                let path = settings_test_path("apply-during-write");
+                let document = BigSettingsDocument::new(
+                    TestSettings::default(),
+                    BigVersionedJsonStore::new(&path, 1),
+                );
+                let level = |level| TestSettings {
+                    enabled: true,
+                    level,
+                };
+                document.apply("level", level(1.0), |_| {});
+                // One turn of the loop: the writer copies this document and starts.
+                context.iteration(false);
+                document.apply("level", level(2.0), |_| {});
 
-            wait(|| !document.inner.saving.get());
+                wait(|| !document.inner.saving.get());
 
-            let saved = BigVersionedJsonStore::<TestSettings>::new(&path, 1)
-                .read()
-                .unwrap();
-            assert_eq!(saved, Some(level(2.0)));
-            let _ = fs::remove_file(&path);
+                let saved = BigVersionedJsonStore::<TestSettings>::new(&path, 1)
+                    .read()
+                    .unwrap();
+                assert_eq!(saved, Some(level(2.0)));
+                let _ = fs::remove_file(&path);
+            });
         }
 
         /// The window that owned the document may close while it writes.
         #[test]
         fn change_during_write_outlives_the_document() {
-            let context = glib::MainContext::default();
-            let _owner = context
-                .acquire()
-                .expect("test thread owns the default context");
-            let path = settings_test_path("apply-then-drop");
-            let document = BigSettingsDocument::new(
-                TestSettings::default(),
-                BigVersionedJsonStore::new(&path, 1),
-            );
-            let level = |level| TestSettings {
-                enabled: true,
-                level,
-            };
-            document.apply("level", level(1.0), |_| {});
-            context.iteration(false);
-            document.apply("level", level(2.0), |_| {});
-            drop(document);
+            on_own_context(|| {
+                let context = glib::MainContext::ref_thread_default();
+                let path = settings_test_path("apply-then-drop");
+                let document = BigSettingsDocument::new(
+                    TestSettings::default(),
+                    BigVersionedJsonStore::new(&path, 1),
+                );
+                let level = |level| TestSettings {
+                    enabled: true,
+                    level,
+                };
+                document.apply("level", level(1.0), |_| {});
+                context.iteration(false);
+                document.apply("level", level(2.0), |_| {});
+                drop(document);
 
-            let store = BigVersionedJsonStore::<TestSettings>::new(&path, 1);
-            wait(|| store.read().ok().flatten() == Some(level(2.0)));
-            let _ = fs::remove_file(&path);
+                let store = BigVersionedJsonStore::<TestSettings>::new(&path, 1);
+                wait(|| store.read().ok().flatten() == Some(level(2.0)));
+                let _ = fs::remove_file(&path);
+            });
         }
 
         #[test]
         fn change_stream_follows_live_document() {
-            let path = settings_test_path("change-stream");
-            let document = BigSettingsDocument::load_or_default(&path, 2).unwrap();
-            let calls = Rc::new(Cell::new(0));
-            let stream = document.change_stream();
-            let _token = stream.subscribe({
-                let calls = Rc::clone(&calls);
-                move |key| {
-                    assert_eq!(key, "enabled");
-                    calls.set(calls.get() + 1);
-                }
+            on_own_context(|| {
+                let path = settings_test_path("change-stream");
+                let document = BigSettingsDocument::load_or_default(&path, 2).unwrap();
+                let calls = Rc::new(Cell::new(0));
+                let stream = document.change_stream();
+                let _token = stream.subscribe({
+                    let calls = Rc::clone(&calls);
+                    move |key| {
+                        assert_eq!(key, "enabled");
+                        calls.set(calls.get() + 1);
+                    }
+                });
+
+                document.apply_change(
+                    "enabled",
+                    |settings: &mut TestSettings| settings.enabled = true,
+                    |_| {},
+                );
+
+                assert_eq!(
+                    calls.get(),
+                    1,
+                    "change_stream() must return the stream used by document changes"
+                );
+                wait(|| !document.inner.saving.get());
+                let _ = fs::remove_file(path);
             });
-
-            document.apply_change(
-                "enabled",
-                |settings: &mut TestSettings| settings.enabled = true,
-                |_| {},
-            );
-
-            assert_eq!(
-                calls.get(),
-                1,
-                "change_stream() must return the stream used by document changes"
-            );
-            wait(|| !document.inner.saving.get());
-            let _ = fs::remove_file(path);
         }
 
         #[test]
         fn document_round_trips_through_store() {
-            let path = settings_test_path("round-trip");
-            let document = BigSettingsDocument::load_or_default(&path, 2).unwrap();
+            on_own_context(|| {
+                let path = settings_test_path("round-trip");
+                let document = BigSettingsDocument::load_or_default(&path, 2).unwrap();
 
-            document.apply_change(
-                "enabled",
-                |settings: &mut TestSettings| {
-                    settings.enabled = true;
-                    settings.level = 7.0;
-                },
-                |error| panic!("{error}"),
-            );
-            wait(|| !document.inner.saving.get());
+                document.apply_change(
+                    "enabled",
+                    |settings: &mut TestSettings| {
+                        settings.enabled = true;
+                        settings.level = 7.0;
+                    },
+                    |error| panic!("{error}"),
+                );
+                wait(|| !document.inner.saving.get());
 
-            let reloaded = BigSettingsDocument::<TestSettings>::load_or_default(&path, 2)
-                .unwrap()
-                .snapshot();
-            assert_eq!(
-                reloaded,
-                TestSettings {
-                    enabled: true,
-                    level: 7.0,
-                }
-            );
-            let _ = fs::remove_file(path);
+                let reloaded = BigSettingsDocument::<TestSettings>::load_or_default(&path, 2)
+                    .unwrap()
+                    .snapshot();
+                assert_eq!(
+                    reloaded,
+                    TestSettings {
+                        enabled: true,
+                        level: 7.0,
+                    }
+                );
+                let _ = fs::remove_file(path);
+            });
         }
 
         #[test]
