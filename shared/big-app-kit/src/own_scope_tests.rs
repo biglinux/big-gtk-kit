@@ -163,7 +163,8 @@ fn launched_from(
 #[test]
 fn renderer_environment_reaches_program() {
     use big_os_kit::subprocess::DESKTOP_GPU;
-    if std::env::var_os(DESKTOP_GPU).is_none() {
+    const CHILD: &str = "BIG_APP_KIT_RENDERER_CHILD";
+    if std::env::var_os(CHILD).is_none() {
         // The desktop's variables have to be in this process's environment:
         // run this test again in a child that has them and, past what it needs
         // to run, nothing else, so a caller's renderer variables (the headless
@@ -192,6 +193,7 @@ fn renderer_environment_reaches_program() {
             .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
             .env("__VK_LAYER_NV_optimus", "NVIDIA_only")
             .env(DESKTOP_GPU, "mesa")
+            .env(CHILD, "1")
             .env("NOTIFY_SOCKET", "@desktop")
             // A person's own driver list, which leaves lavapipe out.
             .env("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/nvidia_icd.json")
@@ -473,7 +475,7 @@ fn given_token_reaches_bus_activatable_handler() {
 #[test]
 fn quoted_chromium_gets_page_tree() {
     use std::os::unix::fs::PermissionsExt as _;
-    if std::env::var_os("GNOME_ACCESSIBILITY").is_none() {
+    if std::env::var_os("GNOME_ACCESSIBILITY").is_none_or(|value| value != "1") {
         run_in_child(
             "own_scope::tests::quoted_chromium_gets_page_tree",
             &[("GNOME_ACCESSIBILITY", std::ffi::OsStr::new("1"))],
@@ -509,7 +511,7 @@ fn quoted_chromium_gets_page_tree() {
 
 #[test]
 fn entry_without_exec_is_refused() {
-    if std::env::var_os("GNOME_ACCESSIBILITY").is_none() {
+    if std::env::var_os("GNOME_ACCESSIBILITY").is_none_or(|value| value != "1") {
         // Only read while programs are asked for their accessibility tree:
         // run this test again in a child that asks.
         run_in_child(
