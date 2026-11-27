@@ -526,23 +526,18 @@ pub fn atomic_replace_document(
 /// names, and stays a link.
 ///
 /// # Errors
-/// Returns the refusals of those two, a link that names nothing, or the I/O
-/// failure.
+/// Returns the refusals of those two, [`std::io::ErrorKind::AlreadyExists`]
+/// for a file another program made after this looked, a link that names
+/// nothing, or the I/O failure.
 #[cfg(target_os = "linux")]
 pub fn atomic_save_document(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = written_through(path)?;
-    // Replace a file seen to exist at once: creating it first would write the
-    // whole document twice. A file made after this look still comes back as
-    // `AlreadyExists`.
     if fs::symlink_metadata(&target).is_ok() {
         return atomic_replace_document(&target, bytes, || true).map(drop);
     }
-    match atomic_create_document(&target, bytes) {
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            atomic_replace_document(&target, bytes, || true).map(drop)
-        }
-        written => written,
-    }
+    // A file another program made after the look is not replaced: nobody
+    // chose to write over it.
+    atomic_create_document(&target, bytes)
 }
 
 /// The file a document named `path` is written to: the one a link names.
