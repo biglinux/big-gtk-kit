@@ -74,6 +74,9 @@ fn keep_button_presses(handle: &gtk::WindowHandle) {
             time: event.time(),
             x,
             y,
+            mouse: event
+                .device()
+                .is_some_and(|device| device.source() == gdk::InputSource::Mouse),
         };
         // A press in a popover is in that popover's coordinates.
         if handle.native().and_then(|native| native.surface()) != event.surface() {
@@ -103,6 +106,8 @@ struct Press {
     time: u32,
     x: f64,
     y: f64,
+    /// GTK holds only a mouse's second press to the double-click distance.
+    mouse: bool,
 }
 
 impl Press {
@@ -112,8 +117,8 @@ impl Press {
     fn repeats(self, earlier: Self, settings: &gtk::Settings) -> bool {
         let distance = f64::from(settings.gtk_double_click_distance());
         self.time.wrapping_sub(earlier.time) <= settings.gtk_double_click_time().unsigned_abs()
-            && (self.x - earlier.x).abs() < distance
-            && (self.y - earlier.y).abs() < distance
+            && (!self.mouse
+                || ((self.x - earlier.x).abs() < distance && (self.y - earlier.y).abs() < distance))
     }
 }
 
@@ -201,9 +206,9 @@ mod tests {
         });
     }
 
-    /// A press far from the last one starts a click of its own, as GTK counts
-    /// it, so a drag from a button right after a press elsewhere still moves
-    /// the window.
+    /// A mouse press far from the last one starts a click of its own, as GTK
+    /// counts it, so a drag from a button right after a press elsewhere still
+    /// moves the window; a touch counts at any distance, as GTK counts it.
     #[test]
     fn far_press_is_no_repeat() {
         big_testkit::harness::require_gtk_test(|| {
@@ -214,8 +219,25 @@ mod tests {
                 time: 1000,
                 x: 10.0,
                 y: 10.0,
+                mouse: true,
             };
-            let at = |time, x| Press { time, x, y: 10.0 };
+            let at = |time, x| Press {
+                time,
+                x,
+                y: 10.0,
+                mouse: true,
+            };
+            let tap = Press {
+                mouse: false,
+                ..at(1001, 210.0)
+            };
+            assert!(tap.repeats(
+                Press {
+                    mouse: false,
+                    ..first
+                },
+                &settings
+            ));
             assert!(at(1000 + time, 10.0).repeats(first, &settings));
             assert!(at(1001, 10.0 + distance / 2.0).repeats(first, &settings));
             assert!(!at(1001, 10.0 + distance).repeats(first, &settings));
