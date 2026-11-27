@@ -490,12 +490,15 @@ def pattern_end(text: str, start: int, stop: int) -> int:
     return stop
 
 
+# a block, or an `unsafe` one, as a match's scrutinee
+BLOCK_SCRUTINEE = re.compile(r"\s*(?:unsafe\s*)?(?=\{)")
+
+
 def match_arms_brace(body: str, start: int) -> int:
     """Where the `{` that opens the arms of the `match` whose scrutinee starts at
     `start` is, or -1: past a block scrutinee and past braces inside brackets."""
     i = start
-    # a block, or an `unsafe` one, as the scrutinee
-    if block := re.compile(r"\s*(?:unsafe\s*)?(?=\{)").match(body, start):
+    if block := BLOCK_SCRUTINEE.match(body, start):
         i = block.end() + len(call_argument(body, block.end())) + 2
     depth = 0
     for j in range(i, len(body)):
