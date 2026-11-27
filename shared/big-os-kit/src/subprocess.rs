@@ -1058,8 +1058,8 @@ fn build_command(spec: &BigSubprocessSpec) -> std::process::Command {
                 // again below, cross exec: a library that opened a file without
                 // O_CLOEXEC (a GPU render node, a socket) does not reach the
                 // child. Marked close-on-exec, left open: std's exec error pipe
-                // is among them. A kernel before 5.11 lacks the call, and there
-                // the child inherits what exec passes on.
+                // is among them. Where the call fails (a kernel before 5.11, a
+                // seccomp filter), the child is refused rather than given ours.
                 let first: libc::c_uint = 3;
                 if libc::syscall(
                     libc::SYS_close_range,
@@ -1068,10 +1068,7 @@ fn build_command(spec: &BigSubprocessSpec) -> std::process::Command {
                     libc::CLOSE_RANGE_CLOEXEC,
                 ) < 0
                 {
-                    let error = std::io::Error::last_os_error();
-                    if error.raw_os_error() != Some(libc::ENOSYS) {
-                        return Err(error);
-                    }
+                    return Err(std::io::Error::last_os_error());
                 }
                 if unix_process_group {
                     rustix::process::setsid()?;
