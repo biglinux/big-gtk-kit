@@ -278,15 +278,21 @@ fn process_application() -> Option<gio::Application> {
         }),
     ];
     for (name, handler) in handlers {
-        let action = application
+        match application
             .lookup_action(name)
             .and_downcast::<gio::SimpleAction>()
-            .unwrap_or_else(|| {
+        {
+            Some(action) => {
+                action.connect_activate(move |_, _| handler());
+            }
+            // Handled before it is added: adding it emits `action-added`,
+            // whose handlers may already activate it.
+            None => {
                 let action = gio::SimpleAction::new(name, None);
+                action.connect_activate(move |_, _| handler());
                 application.add_action(&action);
-                action
-            });
-        action.connect_activate(move |_, _| handler());
+            }
+        }
     }
     Some(application)
 }
