@@ -928,6 +928,7 @@ class RepeatingSources(unittest.TestCase):
             "{ glib::ControlFlow::Continue }",
             '{ log("gone"); glib::ControlFlow::Continue }',
             "{ if retry() { return glib::ControlFlow::Continue; } glib::ControlFlow::Break }",
+            "match retry() { None => glib::ControlFlow::Continue, _ => glib::ControlFlow::Break }",
         ):
             with self.subTest(arm=arm):
                 self.assertIn(self.RULE, lint(case.replace("ARM", arm)))
@@ -1009,6 +1010,17 @@ class RepeatingSources(unittest.TestCase):
                         glib::ControlFlow::Continue
                     }
                     None => { /* not Continue */ glib::ControlFlow::Break }
+                });
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => match next() {
+                        Some(text) => {
+                            label.set_text(text);
+                            glib::ControlFlow::Continue
+                        }
+                        None => glib::ControlFlow::Continue,
+                    },
+                    None => glib::ControlFlow::Break,
                 });
                 let weak = label.downgrade();
                 glib::timeout_add_local(SECOND, move || {

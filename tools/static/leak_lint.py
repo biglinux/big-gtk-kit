@@ -834,7 +834,23 @@ def none_arm_continues(closure: str) -> bool:
     source after its target is gone. Only a `None` arm is read: a let-else, an
     `if let` with an `else`, a `_` arm, `map_or` or `is_none()` that continues on
     a failed upgrade is not seen."""
+    matches = []  # (arms brace, its close, whether the scrutinee upgrades)
+    for m in re.finditer(r"\bmatch\b", closure):
+        brace = match_arms_brace(closure, m.end())
+        if brace >= 0:
+            close = brace + len(call_argument(closure, brace)) + 1
+            upgrades = re.search(r"\.upgrade\(\)", closure[m.end() : brace]) is not None
+            matches.append((brace, close, upgrades))
+    # A match inside the arms of one on an upgrade (`Some(t) => match next() {…}`)
+    # is not about the upgrade: the outer `None` arm is.
+    nested = [
+        (lo, hi)
+        for lo, hi, _ in matches
+        if any(upgrades and outer < lo < end for outer, end, upgrades in matches)
+    ]
     for m in re.finditer(r"\bNone\s*(?:if\b[^;{}]*?)?=>\s*", closure):
+        if any(lo < m.start() < hi for lo, hi in nested):
+            continue
         if closure.startswith("{", m.end()):
             arm = call_argument(closure, m.end())
         else:
