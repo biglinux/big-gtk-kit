@@ -337,8 +337,9 @@ impl BigNotice {
         self.banner.set_revealed(false);
     }
 
-    /// `about` is stored before the strip changes, so a handler on the strip
-    /// that says something else from there keeps its own subject.
+    /// `about` is stored, the message said and its step-down armed before the
+    /// strip changes, so a handler on the strip that shows something else from
+    /// there has the last word, the subject and the timer.
     fn show(&self, message: &str, offer: Option<(&str, Offer)>, tone: Tone, about: Option<&str>) {
         self.stop_step_down();
         self.state.working.set(false);
@@ -353,15 +354,6 @@ impl BigNotice {
                 (tone != Tone::Passing).then(|| self.state.close_label.clone())
             }
         };
-        if tone == Tone::Warning {
-            self.banner.add_css_class(NOTICE_WAITS_CSS_CLASS);
-        } else {
-            self.banner.remove_css_class(NOTICE_WAITS_CSS_CLASS);
-        }
-        self.banner.set_title(message);
-        self.banner.set_button_label(label.as_deref());
-        self.banner.set_visible(true);
-        self.banner.set_revealed(true);
         // A strip sliding in makes no sound, so a screen reader is told.
         let priority = if tone == Tone::Warning {
             gtk::AccessibleAnnouncementPriority::High
@@ -372,6 +364,15 @@ impl BigNotice {
         if tone == Tone::Passing {
             self.step_down_later();
         }
+        if tone == Tone::Warning {
+            self.banner.add_css_class(NOTICE_WAITS_CSS_CLASS);
+        } else {
+            self.banner.remove_css_class(NOTICE_WAITS_CSS_CLASS);
+        }
+        self.banner.set_title(message);
+        self.banner.set_button_label(label.as_deref());
+        self.banner.set_visible(true);
+        self.banner.set_revealed(true);
     }
 
     /// Tell a screen reader `message`, from the strip's window: a strip
@@ -503,9 +504,9 @@ mod tests {
     }
 
     /// A warning said from a handler on the strip, while another one about
-    /// a subject comes in, keeps no subject of its own.
+    /// a subject comes in, has no subject: the outer one's does not carry over.
     #[test]
-    fn nested_warning_keeps_its_subject() {
+    fn nested_warning_has_no_subject() {
         big_testkit::harness::require_gtk_test(|| {
             let (notice, window) = shown_notice();
             let inner = notice.downgrade();
