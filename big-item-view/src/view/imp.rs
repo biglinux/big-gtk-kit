@@ -202,7 +202,9 @@ impl ObjectImpl for ItemView {
         obj.set_overflow(gtk::Overflow::Hidden);
         // Before the probes are ever styled: installed later, at realize, the
         // first styling happened without them and the colors never changed.
-        crate::palette::install_defaults();
+        // The default display until the view joins a window; realize covers
+        // a window on another one.
+        crate::palette::install_defaults(&obj.display());
         // The probes wait for the view to be shown: a view kept in a stack
         // for another mode (bigfiles keeps three per tab) never pays for them.
         crate::input::install(&obj);
@@ -255,7 +257,7 @@ impl ObjectImpl for ItemView {
 impl WidgetImpl for ItemView {
     fn realize(&self) {
         self.parent_realize();
-        crate::palette::install_defaults();
+        crate::palette::install_defaults(&self.obj().display());
     }
 
     fn map(&self) {

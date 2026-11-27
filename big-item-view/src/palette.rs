@@ -140,12 +140,9 @@ itemheader > button:active > box { color: currentColor; }
 /// Between the settings (400) and the application (600).
 const DEFAULT_PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_APPLICATION - 100;
 
-/// Give every open display the defaults, once each: a view constructed before
-/// it joins a window may be realized on any of them.
-pub(crate) fn install_defaults() {
-    for display in gdk::DisplayManager::get().list_displays() {
-        big_gtk_kit::css::install_for_display(&display, DEFAULT_CSS, DEFAULT_PRIORITY);
-    }
+/// Give `display` the defaults, once.
+pub(crate) fn install_defaults(display: &gdk::Display) {
+    big_gtk_kit::css::install_for_display(display, DEFAULT_CSS, DEFAULT_PRIORITY);
 }
 
 /// The colors read on one frame.
