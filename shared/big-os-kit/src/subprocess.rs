@@ -1288,11 +1288,8 @@ fn run_validated(
     // Reaped, so its pid may already name another process.
     drop(DropGuard::dismiss(child));
 
-    // The readers end when every write end of their pipes closes, which a
-    // grandchild outside a process group may hold long after the child: the
-    // output waits until the deadline, a refusal only a moment.
-    // The writer is waited for only until the deadline, as the readers are; when
-    // the call fails, the thread still ends by then.
+    // A grandchild outside a process group may hold the pipes long after the
+    // child: the readers and the writer end at the deadline either way.
     let _ = collect(stdin_writer, deadline);
     let (Some((stdout_buf, stdout_truncated)), Some(stderr_buf)) = (
         collect(stdout_reader, deadline),
