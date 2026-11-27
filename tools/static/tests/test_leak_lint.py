@@ -933,6 +933,15 @@ class Strict(unittest.TestCase):
                         2,
                     )
 
+    def test_directory_named_rs_is_no_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "crate.rs").mkdir()
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(leak_lint.main(["--no-icons", tmp]), 2)
+
 
 class Suppression(unittest.TestCase):
     def test_allow_with_a_reason_suppresses(self):

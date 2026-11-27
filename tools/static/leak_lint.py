@@ -959,7 +959,8 @@ def rust_files(paths: list[str]) -> list[Path]:
             out.extend(
                 f
                 for f in sorted(p.rglob("*.rs"))
-                if not ({"target", ".git"} & set(f.relative_to(p).parts))
+                if f.is_file()
+                and not ({"target", ".git"} & set(f.relative_to(p).parts))
             )
         else:
             raise ValueError(f"{raw} is neither a .rs file nor a directory")
