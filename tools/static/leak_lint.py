@@ -868,13 +868,16 @@ def rule_repeating_source_without_weak_exit(src: Source):
             continue  # the id is kept, returned or passed on
         closure = top_level_arguments(arg)[-1].strip()
         if re.fullmatch(r"\w+", closure):
-            # the binding visible here: in this fn, outside the blocks closed before the call
-            line = src.line_of(m.start())
-            fn_first = next(
-                (first for first, last in src.functions() if first < line <= last), 0
-            )
-            head = src.text[src.starts[fn_first] : m.start()]
-            open_at_end = in_scope_at_end(head)
+            # the binding visible here: in the fn whose body is open at the call,
+            # outside the blocks closed before it
+            fn_starts = [src.starts[first] for first, _ in src.functions()]
+            for start in reversed([0] + [s for s in fn_starts if s < m.start()]):
+                head = src.text[start : m.start()]
+                open_at_end = in_scope_at_end(head)
+                body = top_level_index(head, 0, len(head), "{")
+                bodiless = top_level_index(head, 0, body, ";") >= 0
+                if body >= 0 and not bodiless and open_at_end[body]:
+                    break
             local = [
                 binding
                 for binding in re.finditer(

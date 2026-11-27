@@ -880,7 +880,18 @@ class RepeatingSources(unittest.TestCase):
         )
 
     def test_callback_visible_at_call_is_read(self):
-        # The inner block's `tick` and the other fn's are gone at the call.
+        # The inner block's `tick` and the other fn's are gone at the call; a fn
+        # item between the binding and the call hides nothing.
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn setup(d: Duration, w: gtk::Widget) {
+                let tick = move || { w.queue_draw(); glib::ControlFlow::Continue };
+                fn helper() {}
+                glib::timeout_add_local(d, tick);
+            }
+        """),
+        )
         self.assertIn(
             self.RULE,
             lint("""
