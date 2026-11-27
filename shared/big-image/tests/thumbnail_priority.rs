@@ -67,7 +67,13 @@ fn thumbnail_loader_runs_niced() {
         .filter(|child| !before.contains(child))
         .collect();
     assert!(!loaders.is_empty(), "the loader is still running");
+    // Never below the runner's own: a test run at nice 15 keeps its loader there.
+    let own: i32 = nice_of("self").parse().expect("own nice value");
     for loader in loaders {
-        assert_eq!(nice_of(&loader), "10", "loader process {loader}");
+        assert_eq!(
+            nice_of(&loader),
+            own.max(10).to_string(),
+            "loader process {loader}"
+        );
     }
 }
