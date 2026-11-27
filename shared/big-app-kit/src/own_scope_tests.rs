@@ -439,15 +439,20 @@ fn given_token_reaches_bus_activatable_handler() {
             "[Default Applications]\nx-scheme-handler/x-big-open=org.example.BigOpen.desktop\n",
         )
         .expect("default handler");
-        run_in_child(
-            "own_scope::tests::given_token_reaches_bus_activatable_handler",
-            &[
-                (CHILD, dir.as_os_str()),
-                ("XDG_DATA_HOME", dir.join("data").as_os_str()),
-                ("XDG_CONFIG_HOME", dir.join("config").as_os_str()),
-            ],
-        );
+        let child = std::panic::catch_unwind(|| {
+            run_in_child(
+                "own_scope::tests::given_token_reaches_bus_activatable_handler",
+                &[
+                    (CHILD, dir.as_os_str()),
+                    ("XDG_DATA_HOME", dir.join("data").as_os_str()),
+                    ("XDG_CONFIG_HOME", dir.join("config").as_os_str()),
+                ],
+            );
+        });
         std::fs::remove_dir_all(&dir).expect("temporary directory removed");
+        if let Err(panic) = child {
+            std::panic::resume_unwind(panic);
+        }
         return;
     };
     glib::MainContext::default()

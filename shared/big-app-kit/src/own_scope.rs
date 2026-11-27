@@ -31,11 +31,17 @@ pub async fn open_uri(uri: &str, token: Option<&str>) -> Result<(), glib::Error>
     let context = launch_context(Renderer::DefaultGpu, token, None);
     // As in `launch`: a D-Bus-activated handler would not get the token.
     if token.is_some() {
-        let file = gio::File::for_uri(uri);
-        let handler = file
+        let handler = gio::File::for_uri(uri)
             .query_default_handler_future(glib::Priority::DEFAULT)
             .await?;
-        return start(&handler, &[file], context.as_ref());
+        // The caller's string, as GIO passes it: a URI made into a GFile and
+        // back loses parts of it (`mailto:` gains slashes, a fragment goes).
+        return spawned(&handler).as_ref().unwrap_or(&handler).launch_uris(
+            &[uri],
+            context
+                .as_ref()
+                .map(|context| context.upcast_ref::<gio::AppLaunchContext>()),
+        );
     }
     gio::AppInfo::launch_default_for_uri_future(uri, context.as_ref()).await
 }
@@ -278,13 +284,17 @@ fn start(
     files: &[gio::File],
     context: Option<&impl IsA<gio::AppLaunchContext>>,
 ) -> Result<(), glib::Error> {
-    let spawned = entry(application)
-        .filter(|keys| keys.boolean("Desktop Entry", "DBusActivatable") == Ok(true))
-        .and_then(|keys| big_relm4_components::desktop_entry::app_info_from_keyfile(&keys));
-    spawned
+    spawned(application)
         .as_ref()
         .unwrap_or(application)
         .launch(files, context.map(|context| context.upcast_ref()))
+}
+
+/// The copy of a `DBusActivatable` `application` GIO spawns from its keys.
+fn spawned(application: &gio::AppInfo) -> Option<gio::AppInfo> {
+    entry(application)
+        .filter(|keys| keys.boolean("Desktop Entry", "DBusActivatable") == Ok(true))
+        .and_then(|keys| big_relm4_components::desktop_entry::app_info_from_keyfile(&keys))
 }
 
 /// Whether a program can start on a GPU other than the one that drives the
