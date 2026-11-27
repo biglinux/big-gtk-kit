@@ -49,13 +49,16 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::mem::DropGuard;
-use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use bon::Builder;
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use rustix::io::Errno;
 use rustix::process::{Pid, Resource, Rlimit, Signal, getrlimit, kill_process_group, setrlimit};
 
 mod child;
@@ -1190,6 +1193,7 @@ fn run_validated(
         terminate_or_kill_child_group(spec, &mut child);
         let _ = child.wait();
     });
+    let deadline = Deadline::new(spec.timeout);
 
     // Drain stdout/stderr on dedicated threads. A child that writes more than
     // the OS pipe buffer (~64 KiB) blocks on write until a reader consumes it;
@@ -1197,41 +1201,56 @@ fn run_validated(
     // subprocess (`pw-dump` writes ~300 KiB) to the timeout.
     //
     // Each sends its bytes when its pipe closes, so the call can stop waiting
-    // for a pipe a grandchild still holds (see `collect`).
-    let stdout_reader = child.stdout.take().map(|mut pipe| {
+    // for a pipe a grandchild still holds (see `collect`), and gives up at the
+    // deadline, so such a grandchild does not keep the thread either.
+    let stdout_reader = child.stdout.take().map(|pipe| {
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let truncated = drain_capped(&mut pipe, &mut buf).unwrap_or(false);
-            let _ = sent.send((buf, truncated));
+            if let Some(output) = drain_by(pipe, deadline) {
+                let _ = sent.send(output);
+            }
         });
         received
     });
-    let stderr_reader = child.stderr.take().map(|mut pipe| {
+    let stderr_reader = child.stderr.take().map(|pipe| {
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = drain_capped(&mut pipe, &mut buf);
-            let _ = sent.send(buf);
+            if let Some((buf, _)) = drain_by(pipe, deadline) {
+                let _ = sent.send(buf);
+            }
         });
         received
     });
 
     // The stdin write happens here, after the drains exist. Written first, a
     // child that filled its stderr pipe with nobody reading would stop
-    // consuming stdin, and `write_all` would block before the timeout or the
+    // consuming stdin, and the write would block before the timeout or the
     // cancel flag could fire.
     //
     // On its own thread, so a child that never reads its stdin cannot block the
-    // deadline loop either. It ends when every reader of the pipe has gone,
-    // which a grandchild outside a process group may put off past the deadline.
+    // deadline loop either. It ends when every reader of the pipe has gone or
+    // at the deadline.
     let stdin_writer = match (spec.stdin.clone(), child.stdin.take()) {
         (Some(bytes), Some(mut stdin)) => {
+            // Only our end: the child's is another open file of the pipe.
+            fcntl_getfl(&stdin)
+                .and_then(|flags| fcntl_setfl(&stdin, flags | OFlags::NONBLOCK))
+                .map_err(|error| BigSubprocessError::Io(error.into()))?;
             let (sent, received) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                // A child that exits without reading gives EPIPE, which is its
-                // answer, not our failure.
-                let _ = stdin.write_all(&bytes);
+                let mut rest = bytes.as_slice();
+                while !rest.is_empty()
+                    && matches!(deadline.ready(stdin.as_fd(), PollFlags::OUT), Ok(true))
+                {
+                    match stdin.write(rest) {
+                        Ok(written) => rest = &rest[written..],
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        // A child that exits without reading gives EPIPE,
+                        // which is its answer, not our failure.
+                        Err(_) => break,
+                    }
+                }
                 drop(stdin);
                 let _ = sent.send(());
             });
@@ -1240,7 +1259,6 @@ fn run_validated(
         _ => None,
     };
 
-    let deadline = Deadline::new(spec.timeout);
     // Woken the moment the child ends; otherwise only as often as a cancel or
     // an observer needs looking at.
     let exited = child::pidfd(child.id());
@@ -1276,8 +1294,8 @@ fn run_validated(
     // The readers end when every write end of their pipes closes, which a
     // grandchild outside a process group may hold long after the child: the
     // output waits until the deadline, a refusal only a moment.
-    // The writer is waited for only until the deadline, as the readers are; past
-    // it, or when the call fails, the thread ends when the pipe's last reader does.
+    // The writer is waited for only until the deadline, as the readers are; when
+    // the call fails, the thread still ends by then.
     let _ = collect(stdin_writer, deadline);
     let (Some((stdout_buf, stdout_truncated)), Some(stderr_buf)) = (
         collect(stdout_reader, deadline),
@@ -1312,6 +1330,53 @@ impl Deadline {
 
     fn remaining(self) -> Duration {
         self.timeout.saturating_sub(self.started.elapsed())
+    }
+
+    /// Wait until `fd` is ready for `events`; `false` once the deadline
+    /// passes first.
+    fn ready(self, fd: BorrowedFd<'_>, events: PollFlags) -> std::io::Result<bool> {
+        loop {
+            let remaining = self.remaining();
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            // `None`, no limit, for a wait longer than `poll` can count.
+            let timeout = Timespec::try_from(remaining).ok();
+            match poll(
+                &mut [PollFd::from_borrowed_fd(fd, events)],
+                timeout.as_ref(),
+            ) {
+                Ok(0) | Err(Errno::INTR) => {}
+                Ok(_) => return Ok(true),
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+/// A pipe whose reads fail with `TimedOut` once its deadline passes.
+struct ReadBy<P> {
+    pipe: P,
+    deadline: Deadline,
+}
+
+impl<P: std::io::Read + AsFd> std::io::Read for ReadBy<P> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.deadline.ready(self.pipe.as_fd(), PollFlags::IN)? {
+            self.pipe.read(buf)
+        } else {
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+    }
+}
+
+/// Read `pipe` to its end as [`drain_capped`] does, with whether it was
+/// truncated; `None` when the deadline passes first.
+fn drain_by(pipe: impl std::io::Read + AsFd, deadline: Deadline) -> Option<(Vec<u8>, bool)> {
+    let mut buf = Vec::new();
+    match drain_capped(&mut ReadBy { pipe, deadline }, &mut buf) {
+        Err(BigSubprocessError::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut => None,
+        truncated => Some((buf, truncated.unwrap_or(false))),
     }
 }
 

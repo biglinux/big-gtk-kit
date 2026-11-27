@@ -1499,3 +1499,42 @@ fn panicking_observer_stops_the_child() {
     assert!(caught.is_err(), "the observer's panic reached the caller");
     assert!(!alive, "the child {pid} outlived the run");
 }
+
+/// A grandchild outside a process group that keeps the child's stdin and
+/// stdout open holds no writer or reader of ours past the deadline.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn pipe_threads_end_at_the_deadline() {
+    let pid_file = std::env::temp_dir().join(format!("big-pipe-pid-{}", std::process::id()));
+    let hand_on = "exec 3<&0; sleep 30 <&3 3<&- & echo $! > \"$1\"";
+    let run = BigSubprocessSpec::builder()
+        .program("sh")
+        .args(["-c", hand_on, "sh"])
+        .arg(&pid_file)
+        .stdin(vec![b'x'; 256 * 1024])
+        .timeout(Duration::from_millis(300))
+        .build()
+        .run();
+    let sleeper = std::fs::read_to_string(&pid_file).expect("the grandchild's pid");
+    let _ = std::fs::remove_file(&pid_file);
+    let sleeper = sleeper.trim();
+    let pipes =
+        [0, 1].map(|fd| std::fs::read_link(format!("/proc/{sleeper}/fd/{fd}")).expect("its stdio"));
+    let held = || {
+        std::fs::read_dir("/proc/self/fd")
+            .expect("our descriptors")
+            .filter_map(|fd| std::fs::read_link(fd.ok()?.path()).ok())
+            .filter(|link| pipes.contains(link))
+            .collect::<Vec<_>>()
+    };
+    let start = std::time::Instant::now();
+    while !held().is_empty() && start.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let still_held = held();
+    if let Ok(pid) = sleeper.parse() {
+        let _ = rustix::process::kill_process(Pid::from_raw(pid).expect("a pid"), Signal::KILL);
+    }
+    assert!(matches!(run, Err(BigSubprocessError::Timeout)), "{run:?}");
+    assert!(still_held.is_empty(), "still held: {still_held:?}");
+}
