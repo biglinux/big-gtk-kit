@@ -690,6 +690,33 @@ mod tests {
         assert!(matches!(watch_scoped_for(resources, || {}), Ok(None)));
     }
 
+    /// A module's copy that watches nothing still hears the watching copy's
+    /// pressure, though it registered no cache.
+    #[test]
+    fn module_copy_hears_process_pressure() {
+        if std::env::var_os(CHILD_RUN).is_none() {
+            run_alone(
+                "memory_pressure::tests::module_copy_hears_process_pressure",
+                &[("MEMORY_PRESSURE_WATCH", "/nonexistent/big-pressure")],
+            );
+            return;
+        }
+        // SAFETY: the child runs this one test, on the only thread that
+        // touches the environment.
+        unsafe { std::env::set_var(PROCESS_WATCHER, std::process::id().to_string()) };
+        let application = gio::Application::new(None, gio::ApplicationFlags::NON_UNIQUE);
+        let resources = big_os_kit::session_resources::shared().clone();
+        assert!(matches!(
+            watch_scoped_for(resources.clone(), || {}),
+            Ok(None)
+        ));
+        application
+            .lookup_action(PROCESS_PRESSURE_ACTION)
+            .expect("the copy joined the pressure action")
+            .activate(None);
+        assert!(resources.snapshot().under_pressure);
+    }
+
     /// The process actions run the hooks of the one thread that joined them:
     /// a second thread gets no application to run them twice through.
     #[test]
