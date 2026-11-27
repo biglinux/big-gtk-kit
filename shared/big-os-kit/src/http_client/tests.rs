@@ -202,11 +202,18 @@ fn stream_keeps_a_referer_home() {
 }
 
 /// A name that does not resolve is not asked again: the retry would only
-/// add its delay. Timed against one attempt made after it, which a
-/// resolver's cache can only make faster.
+/// add its delay. Timed against one attempt made after it; a first lookup
+/// warms the resolver's cache, so neither timed call pays for a cold one.
 #[test]
 fn unresolved_host_fails_at_once() {
     let url = "http://unresolved.invalid/";
+    let warm_up = http_get_bytes_capped(
+        url,
+        &RequestHeaders::default(),
+        1024,
+        Duration::from_secs(5),
+    );
+    assert!(warm_up.is_err(), "{warm_up:?}");
     let started = std::time::Instant::now();
     assert_eq!(http_get_with_retry(url, &[]), None);
     let retried = started.elapsed();
