@@ -75,6 +75,10 @@ fn keep_button_presses(handle: &gtk::WindowHandle) {
             x,
             y,
         };
+        // A press in a popover is in that popover's coordinates.
+        if handle.native().and_then(|native| native.surface()) != event.surface() {
+            return glib::Propagation::Proceed;
+        }
         if press_is_on_button(&handle, event) {
             let repeat = last_seen
                 .get()
