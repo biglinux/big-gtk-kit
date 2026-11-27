@@ -16,8 +16,8 @@ pub const GIT: &str = "/usr/bin/git";
 /// working tree confines the process. The empty `diff.external` replaces the
 /// repository's own, so a diff without `--no-ext-diff` fails instead of
 /// running it; a driver an attribute names still runs then.
-pub const HARDENING: [&str; 10] = {
-    let mut options = [""; 10];
+pub const HARDENING: [&str; 9] = {
+    let mut options = [""; 9];
     let mut index = 0;
     while index < HARDENING_KEEPING_HOOKS.len() {
         options[index] = HARDENING_KEEPING_HOOKS[index];
@@ -30,13 +30,13 @@ pub const HARDENING: [&str; 10] = {
 
 /// [`HARDENING`] with the repository's hooks left on, for a change the person
 /// asks for (staging, a commit, a pull), which runs them as a terminal would.
-pub const HARDENING_KEEPING_HOOKS: [&str; 8] = [
+pub const HARDENING_KEEPING_HOOKS: [&str; 7] = [
+    // Outranks `pager.<command>`, which `core.pager` does not.
+    "--no-pager",
     "-c",
     "core.fsmonitor=false",
     "-c",
     "diff.external=",
-    "-c",
-    "core.pager=cat",
     "-c",
     "log.showSignature=false",
 ];
@@ -95,5 +95,53 @@ mod tests {
             "{}",
             diff.stdout_lossy()
         );
+    }
+
+    /// On a terminal, git pages through `pager.<command>`, which outranks
+    /// `core.pager`; `script` gives the run one.
+    #[test]
+    fn repository_pager_never_runs() {
+        let repository = std::env::temp_dir().join(format!("big-git-pager-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repository);
+        std::fs::create_dir_all(&repository).unwrap();
+        let ran = repository.join("ran");
+        let git = |args: &[&str]| {
+            BigSubprocessSpec::builder()
+                .program(GIT)
+                .arg("-C")
+                .arg(&repository)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .build()
+                .run()
+                .expect("git runs")
+        };
+        assert!(git(&["init", "--quiet"]).status.success());
+        let mark = format!("touch {}", ran.display());
+        assert!(git(&["config", "pager.status", &mark]).status.success());
+        let command = [GIT]
+            .into_iter()
+            .chain(HARDENING)
+            .chain(["-C", &repository.to_string_lossy(), "status"])
+            .map(crate::shell_word::shell_word)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let on_terminal = BigSubprocessSpec::builder()
+            .program("script")
+            .args(["-qec", &command, "/dev/null"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .build()
+            .run()
+            .expect("script runs");
+        let pager_ran = ran.exists();
+        std::fs::remove_dir_all(&repository).unwrap();
+        assert!(
+            on_terminal.status.success(),
+            "{}",
+            on_terminal.stderr_lossy()
+        );
+        assert!(!pager_ran);
     }
 }
