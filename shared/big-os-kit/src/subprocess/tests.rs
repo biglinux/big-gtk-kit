@@ -1469,3 +1469,33 @@ fn unbounded_timeout_runs_to_exit() {
         .expect("the run ends with the child");
     assert!(output.status.success());
 }
+
+/// An observer that panics, caught by its caller, leaves no child running.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn panicking_observer_stops_the_child() {
+    let pid_file = std::env::temp_dir().join(format!("big-observer-pid-{}", std::process::id()));
+    let spec = BigSubprocessSpec::builder()
+        .program("sh")
+        .args(["-c", "echo $$ > \"$1\"; exec sleep 30", "sh"])
+        .arg(&pid_file)
+        .timeout(Duration::from_secs(30))
+        .build();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        spec.run_cancellable_observed(&AtomicBool::new(false), || {
+            match std::fs::read_to_string(&pid_file) {
+                Ok(pid) if pid.ends_with('\n') => panic!("the observer failed"),
+                _ => Ok(()),
+            }
+        })
+    }));
+    let pid = std::fs::read_to_string(&pid_file).expect("the child's pid");
+    let _ = std::fs::remove_file(&pid_file);
+    let pid = pid.trim();
+    let alive = std::path::Path::new("/proc").join(pid).exists();
+    if alive && let Ok(pid) = pid.parse() {
+        let _ = rustix::process::kill_process(Pid::from_raw(pid).expect("a pid"), Signal::KILL);
+    }
+    assert!(caught.is_err(), "the observer's panic reached the caller");
+    assert!(!alive, "the child {pid} outlived the run");
+}
