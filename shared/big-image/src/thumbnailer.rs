@@ -318,9 +318,13 @@ pub fn sandbox_works() -> bool {
         let Some(staging) = private_staging() else {
             return false;
         };
+        // Mounted by descriptor, as every render mounts its file.
+        let Some(source) = open_source(Path::new("/usr/bin/true")) else {
+            return false;
+        };
         sandboxed_command(
             &["/usr/bin/true"],
-            SandboxSource::Path(Path::new("/usr/bin/true")),
+            SandboxSource::Descriptor(source),
             staging.path(),
         )
         .run()
