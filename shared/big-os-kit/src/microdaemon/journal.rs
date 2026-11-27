@@ -164,6 +164,12 @@ fn quarantine_corrupt_journal(journal_path: &Path) -> io::Result<()> {
     let parent = journal_path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "journal path has no parent"))?;
+    // A bare file name's parent is empty: the working directory.
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
     // Synced before a new journal can take its name.
     File::open(parent)?.sync_all()
 }

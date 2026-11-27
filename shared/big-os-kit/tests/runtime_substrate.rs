@@ -328,6 +328,35 @@ fn streaming_daemon_survives_killed_client() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A journal named relative to the working directory has no parent in its
+/// path; quarantining a corrupt one must still sync that directory.
+#[test]
+fn bare_journal_name_quarantines() {
+    let dir = unique_temp_dir("daemon-bare-journal");
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    std::fs::write(dir.join("jobs.json"), b"not json").expect("corrupt journal");
+    let socket_path = dir.join("daemon.sock");
+    let mut daemon = BigSubprocessSpec::builder()
+        .program(test_daemon_bin())
+        .arg(socket_path.as_os_str())
+        .arg("jobs.json")
+        .cwd(dir.clone())
+        .build()
+        .spawn()
+        .expect("spawn test daemon");
+
+    wait_for_socket(&socket_path);
+    let mut client = connect_client(&socket_path);
+    write_command(&mut client, MicrodaemonCommand::Shutdown);
+    assert!(matches!(
+        read_event(&mut client),
+        MicrodaemonEvent::ShutdownAccepted
+    ));
+    let status = wait_for_child_exit(&mut daemon, EXIT_DEADLINE);
+    assert!(status.success(), "daemon failed to start: {status:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn spawn_test_daemon(
     socket_path: &std::path::Path,
     journal_path: &std::path::Path,
