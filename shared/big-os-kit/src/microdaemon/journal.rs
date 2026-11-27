@@ -260,6 +260,7 @@ mod tests {
     fn oversized_persist_keeps_last_valid_journal() {
         let path = journal_path("oversized-persist");
         persist_durable_job_journal(&path, 1, &[]).expect("seed valid journal");
+        let seeded = fs::read(&path).expect("read seeded journal");
         let oversized = DurableJobJournalRecord {
             snapshot: DurableJobSnapshot {
                 job_id: "oversized".to_owned(),
@@ -276,11 +277,7 @@ mod tests {
             .expect_err("oversized persist must fail");
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(
-            load_durable_job_journal(&path, &[1])
-                .expect("load previous journal")
-                .is_empty()
-        );
+        assert_eq!(fs::read(&path).expect("previous journal survives"), seeded);
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir(path.parent().expect("parent"));
     }
