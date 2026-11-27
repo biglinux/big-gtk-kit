@@ -30,7 +30,7 @@ pub struct BigSubprocessChild {
 /// thread/stack for the entire child lifetime. The reaper owns all such handles from one
 /// lazily-created thread, which sleeps until a child ends or a new one arrives.
 ///
-/// If the reaper cannot be created or has failed, the child is terminated and synchronously
+/// If the reaper cannot be created or has failed, the child is killed and synchronously
 /// reaped rather than being dropped into a zombie-prone state.
 pub fn reap_detached(mut child: BigSubprocessChild) {
     static REAPER: OnceLock<Option<(mpsc::Sender<BigSubprocessChild>, Arc<OwnedFd>)>> =
@@ -65,8 +65,13 @@ pub fn reap_detached(mut child: BigSubprocessChild) {
         return;
     }
 
-    let _ = child.terminate();
-    let _ = child.wait();
+    // SIGKILL, which no child can ignore, so the wait below ends.
+    match child.kill() {
+        Ok(()) => {
+            let _ = child.wait();
+        }
+        Err(error) => log::warn!("could not stop a detached child nobody can reap: {error}"),
+    }
 }
 
 /// How often to look at a child the kernel could not give a pidfd for.
