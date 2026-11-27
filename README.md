@@ -201,8 +201,8 @@ and the tools' own checks.
 `tools/headless-gate.sh` runs the tests in a private KWin session with a home
 of its own. The ignored tests take the activation, so they run one at a time;
 seven read the AT-SPI bridge, and `mount_change_is_seen` runs under
-`unshare -rm`, which needs unprivileged user namespaces. rustdoc runs the doc tests from `TMPDIR`, which must allow
-execution.
+`unshare -rm`, which needs unprivileged user namespaces. rustdoc runs the doc
+tests from `TMPDIR`, which must allow execution.
 
 Three tests of big-os-kit's document storage need the machine to offer what
 they check is kept, and fail saying what is missing: the user in a second group

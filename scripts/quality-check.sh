@@ -19,8 +19,9 @@ tools/headless-gate.sh cargo nextest run --workspace --all-features --locked --r
 tools/headless-gate.sh --accessible cargo nextest run --workspace --all-features --locked \
 	--run-ignored only -E "test(/::($bridge)\$/)"
 # Mounts in a mount namespace of its own, which goes away with the test.
-cargo test -p big-os-kit --lib --locked \
-	--config 'target."cfg(target_os = \"linux\")".runner="unshare -rm"' -- --ignored mount_change_is_seen
+cargo test -p big-os-kit --lib --all-features --locked \
+	--config 'target."cfg(target_os = \"linux\")".runner="unshare -rm"' -- \
+	--ignored --exact mount_table::tests::mount_change_is_seen
 tools/headless-gate.sh cargo test --workspace --all-features --locked --doc
 RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps --locked
 ast-grep scan
