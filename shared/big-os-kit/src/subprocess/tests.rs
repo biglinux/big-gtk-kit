@@ -1231,6 +1231,32 @@ fn failed_before_run_stops_the_child() {
     assert!(matches!(spec.run(), Err(BigSubprocessError::Cancelled)));
 }
 
+/// A run cancelled before it starts, or while it prepares, never starts the
+/// child: a program that does not exist reports `Cancelled`, not `Spawn`.
+#[test]
+fn cancelled_run_never_starts() {
+    let preparations = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&preparations);
+    let spec = BigSubprocessSpec::builder()
+        .program("/nonexistent/never-started")
+        .build()
+        .before_run(move |_| {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+    let cancelled = AtomicBool::new(true);
+    let run = spec.run_cancellable(&cancelled);
+    assert!(matches!(run, Err(BigSubprocessError::Cancelled)), "{run:?}");
+    assert_eq!(preparations.load(Ordering::Relaxed), 0);
+
+    let spec = spec.before_run(|cancel| {
+        cancel.store(true, Ordering::Relaxed);
+        Ok(())
+    });
+    let run = spec.run_cancellable(&AtomicBool::new(false));
+    assert!(matches!(run, Err(BigSubprocessError::Cancelled)), "{run:?}");
+}
+
 /// A module library links its own copy of this crate, which never saw the
 /// host raise the limit: it gives back the limit the host published.
 #[test]
@@ -1429,4 +1455,185 @@ fn helper_ends_with_its_parent() {
         let _ = helper.wait();
     }
     assert!(ended.is_some_and(|status| !status.success()), "{ended:?}");
+}
+
+/// A timeout past what an `Instant` can hold never ends the run.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn unbounded_timeout_runs_to_exit() {
+    let output = BigSubprocessSpec::builder()
+        .program("true")
+        .timeout(Duration::MAX)
+        .build()
+        .run()
+        .expect("the run ends with the child");
+    assert!(output.status.success());
+}
+
+/// An observer that panics, caught by its caller, leaves no child running.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn panicking_observer_stops_the_child() {
+    let pid_file = std::env::temp_dir().join(format!("big-observer-pid-{}", std::process::id()));
+    let spec = BigSubprocessSpec::builder()
+        .program("sh")
+        .args(["-c", "echo $$ > \"$1\"; exec sleep 30", "sh"])
+        .arg(&pid_file)
+        .timeout(Duration::from_secs(30))
+        .build();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        spec.run_cancellable_observed(&AtomicBool::new(false), || {
+            match std::fs::read_to_string(&pid_file) {
+                Ok(pid) if pid.ends_with('\n') => panic!("the observer failed"),
+                _ => Ok(()),
+            }
+        })
+    }));
+    let pid = std::fs::read_to_string(&pid_file).expect("the child's pid");
+    let _ = std::fs::remove_file(&pid_file);
+    let pid = pid.trim();
+    let alive = std::path::Path::new("/proc").join(pid).exists();
+    if alive && let Ok(pid) = pid.parse() {
+        let _ = rustix::process::kill_process(Pid::from_raw(pid).expect("a pid"), Signal::KILL);
+    }
+    assert!(caught.is_err(), "the observer's panic reached the caller");
+    assert!(!alive, "the child {pid} outlived the run");
+}
+
+/// A grandchild outside a process group that keeps the child's stdin and
+/// stdout open holds no writer or reader of ours past the deadline.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn pipe_threads_end_at_the_deadline() {
+    let pid_file = std::env::temp_dir().join(format!("big-pipe-pid-{}", std::process::id()));
+    let hand_on = "exec 3<&0; sleep 30 <&3 3<&- & echo $! > \"$1\"";
+    let run = BigSubprocessSpec::builder()
+        .program("sh")
+        .args(["-c", hand_on, "sh"])
+        .arg(&pid_file)
+        .stdin(vec![b'x'; 256 * 1024])
+        .timeout(Duration::from_millis(300))
+        .build()
+        .run();
+    let sleeper = std::fs::read_to_string(&pid_file).expect("the grandchild's pid");
+    let _ = std::fs::remove_file(&pid_file);
+    let sleeper = sleeper.trim();
+    let pipes =
+        [0, 1].map(|fd| std::fs::read_link(format!("/proc/{sleeper}/fd/{fd}")).expect("its stdio"));
+    let held = || {
+        std::fs::read_dir("/proc/self/fd")
+            .expect("our descriptors")
+            .filter_map(|fd| std::fs::read_link(fd.ok()?.path()).ok())
+            .filter(|link| pipes.contains(link))
+            .collect::<Vec<_>>()
+    };
+    let start = std::time::Instant::now();
+    while !held().is_empty() && start.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let still_held = held();
+    if let Ok(pid) = sleeper.parse() {
+        let _ = rustix::process::kill_process(Pid::from_raw(pid).expect("a pid"), Signal::KILL);
+    }
+    assert!(matches!(run, Err(BigSubprocessError::Timeout)), "{run:?}");
+    assert!(still_held.is_empty(), "still held: {still_held:?}");
+}
+
+/// Where `close_range` answers ENOSYS (a seccomp filter), a child that may keep
+/// only its own descriptors is refused rather than started with all of ours.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn missing_close_range_refuses_the_child() {
+    let started = std::thread::spawn(|| {
+        deny_close_range_on_this_thread();
+        BigSubprocessSpec::builder()
+            .program("true")
+            .unix_process_group(true)
+            .build()
+            .spawn()
+            .map(|mut child| child.wait())
+    })
+    .join()
+    .expect("the filtered thread");
+    assert!(
+        matches!(&started, Err(BigSubprocessError::Spawn(error)) if error.raw_os_error() == Some(libc::ENOSYS)),
+        "{started:?}"
+    );
+}
+
+/// Make `close_range` fail with ENOSYS on the calling thread and the children
+/// it starts; the filter ends with the thread.
+fn deny_close_range_on_this_thread() {
+    let code = |code: u32| u16::try_from(code).expect("a BPF opcode");
+    let close_range = u32::try_from(libc::SYS_close_range).expect("a syscall number");
+    let enosys = u32::try_from(libc::ENOSYS).expect("an errno");
+    let mut filter = [
+        // `seccomp_data.nr`, at offset 0.
+        libc::sock_filter {
+            code: code(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS),
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
+        libc::sock_filter {
+            code: code(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K),
+            jt: 0,
+            jf: 1,
+            k: close_range,
+        },
+        libc::sock_filter {
+            code: code(libc::BPF_RET | libc::BPF_K),
+            jt: 0,
+            jf: 0,
+            k: libc::SECCOMP_RET_ERRNO | enosys,
+        },
+        libc::sock_filter {
+            code: code(libc::BPF_RET | libc::BPF_K),
+            jt: 0,
+            jf: 0,
+            k: libc::SECCOMP_RET_ALLOW,
+        },
+    ];
+    let program = libc::sock_fprog {
+        len: u16::try_from(filter.len()).expect("a short filter"),
+        filter: filter.as_mut_ptr(),
+    };
+    // SAFETY: `program` points at `filter`, both alive for the call, which
+    // copies them; without a thread-sync flag the filter binds this thread alone.
+    let installed = unsafe {
+        libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0
+            && libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::c_ulong::from(libc::SECCOMP_MODE_FILTER),
+                &raw const program,
+            ) == 0
+    };
+    assert!(installed, "{}", std::io::Error::last_os_error());
+}
+
+/// `wait` closes a stdin nobody took, as `std::process::Child::wait` does, so
+/// a child that reads to its end of input ends.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn wait_closes_untaken_stdin() {
+    let mut child = BigSubprocessSpec::builder()
+        .program("cat")
+        .stdin(b"never written".to_vec())
+        .stdout(BigSubprocessOutputMode::Null)
+        .build()
+        .spawn()
+        .expect("cat");
+    let mut waiter = child.clone();
+    let (sent, waited) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sent.send(waiter.wait()));
+    let status = waited.recv_timeout(Duration::from_secs(5));
+    if status.is_err() {
+        let _ = child.kill();
+    }
+    assert!(
+        status
+            .as_ref()
+            .is_ok_and(|status| status.as_ref().is_ok_and(|status| status.success())),
+        "{status:?}"
+    );
 }

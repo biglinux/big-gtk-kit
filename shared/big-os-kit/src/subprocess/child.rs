@@ -30,7 +30,7 @@ pub struct BigSubprocessChild {
 /// thread/stack for the entire child lifetime. The reaper owns all such handles from one
 /// lazily-created thread, which sleeps until a child ends or a new one arrives.
 ///
-/// If the reaper cannot be created or has failed, the child is terminated and synchronously
+/// If the reaper cannot be created or has failed, the child is killed and synchronously
 /// reaped rather than being dropped into a zombie-prone state.
 pub fn reap_detached(mut child: BigSubprocessChild) {
     static REAPER: OnceLock<Option<(mpsc::Sender<BigSubprocessChild>, Arc<OwnedFd>)>> =
@@ -65,8 +65,13 @@ pub fn reap_detached(mut child: BigSubprocessChild) {
         return;
     }
 
-    let _ = child.terminate();
-    let _ = child.wait();
+    // SIGKILL, which no child can ignore, so the wait below ends.
+    match child.kill() {
+        Ok(()) => {
+            let _ = child.wait();
+        }
+        Err(error) => log::warn!("could not stop a detached child nobody can reap: {error}"),
+    }
 }
 
 /// How often to look at a child the kernel could not give a pidfd for.
@@ -220,7 +225,8 @@ impl BigSubprocessChild {
             .map_err(BigSubprocessError::Io)
     }
 
-    /// Block until the child exits.
+    /// Block until the child exits, first closing a stdin pipe nobody took,
+    /// as [`std::process::Child::wait`] does.
     ///
     /// Polls with short lock holds instead of a blocking `wait(2)` under the
     /// handle lock, so a concurrent [`Self::terminate`]/[`Self::kill`] from a
@@ -231,6 +237,7 @@ impl BigSubprocessChild {
     ///
     /// Returns [`BigSubprocessError::Io`] on a wait syscall failure.
     pub fn wait(&mut self) -> Result<BigSubprocessStatus, BigSubprocessError> {
+        drop(self.lock_child()?.stdin.take());
         // Blocks on a pidfd rather than on the child itself: the lock stays
         // free, so another holder can still kill it.
         let pidfd = pidfd(self.id());
@@ -320,8 +327,11 @@ impl BigSubprocessChild {
         // leaves the child for `std::process::Child`, and the lock keeps other
         // holders from reaping it before the kill below.
         let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-        if waitid(WaitId::Pid(pid), options).is_err() {
-            return Ok(());
+        match waitid(WaitId::Pid(pid), options) {
+            Ok(_) => {}
+            // Reaped already: the id may now name another group.
+            Err(Errno::CHILD) => return Ok(()),
+            Err(error) => return Err(BigSubprocessError::Io(error.into())),
         }
         // The child was spawned with `setsid`, so its pid is also the group id.
         match kill_process_group(pid, signal) {
