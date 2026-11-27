@@ -629,19 +629,24 @@ mod portal {
                 answered(answer);
             })
         };
-        let guard = bus.subscribe_to_signal(
-            Some(PORTAL),
-            Some(REQUEST),
-            Some("Response"),
-            Some(&path),
-            None,
-            gio::DBusSignalFlags::NONE,
-            {
+        let listen = {
+            let (bus, finish) = (bus.clone(), Rc::clone(&finish));
+            move |path: &str| {
                 let finish = Rc::clone(&finish);
-                move |signal: gio::DBusSignalRef<'_>| finish(Some(response(signal.parameters)))
-            },
-        );
-        subscription.borrow_mut().replace(guard);
+                bus.subscribe_to_signal(
+                    Some(PORTAL),
+                    Some(REQUEST),
+                    Some("Response"),
+                    Some(path),
+                    None,
+                    gio::DBusSignalFlags::NONE,
+                    move |signal: gio::DBusSignalRef<'_>| {
+                        finish(Some(response(signal.parameters)));
+                    },
+                )
+            }
+        };
+        subscription.borrow_mut().replace(listen(&path));
 
         let arguments = glib::Variant::tuple_from_iter([
             parent.to_variant(),
@@ -667,13 +672,23 @@ mod portal {
                 // one restarted under the same name knows nothing of this
                 // request. A name already gone is reported as vanished.
                 Ok(reply) if subscription.borrow().is_some() => {
-                    let Some(portal) = reply.sender() else {
+                    let handle = reply
+                        .body()
+                        .and_then(|body| body.get::<(glib::variant::ObjectPath,)>());
+                    let (Some(portal), Some((handle,))) = (reply.sender(), handle) else {
                         finish(Some(Err(glib::Error::new(
                             gtk::DialogError::Failed,
-                            "the file portal's reply named no sender",
+                            "the file portal sent a malformed reply",
                         ))));
                         return;
                     };
+                    // A portal older than `handle_token` answers on a path of
+                    // its own choosing. An answer it sent there before this
+                    // line is lost, as the portal's documentation accepts.
+                    if handle.as_str() != path {
+                        let moved = listen(handle.as_str());
+                        subscription.borrow_mut().replace(moved);
+                    }
                     let vanished = Rc::clone(&finish);
                     watcher.set(Some(gio::bus_watch_name_on_connection(
                         &connection,
@@ -959,7 +974,7 @@ mod tests {
     }
 
     /// An `OpenFile` that takes the request, sets `asked`, and names a
-    /// request handle of its own, never answering on it.
+    /// request handle other than the one the token asked for.
     fn take_request(asked: &Rc<Cell<bool>>) -> impl Fn(gio::DBusMethodInvocation) + 'static {
         let asked = Rc::clone(asked);
         move |invocation| {
@@ -1072,6 +1087,48 @@ mod tests {
                 assert!(
                     matches!(*answer.borrow(), Some(None)),
                     "not answered: fall back"
+                );
+            })
+            .expect("the context of this thread");
+    }
+
+    /// A portal that answers on a handle of its own rather than the one
+    /// `handle_token` asked for, as one older than that option does, is heard.
+    #[test]
+    #[ignore = "owns the portal's name: needs the private bus of tools/headless-gate.sh"]
+    fn portal_own_handle_is_heard() {
+        glib::MainContext::new()
+            .with_thread_default(|| {
+                let asked = Rc::new(Cell::new(false));
+                let (portal, _owner) = fake_portal(take_request(&asked));
+                let answer = ask_open();
+                let results = glib::VariantDict::new(None);
+                results.insert("uris", vec!["file:///a"]);
+                let response = (0u32, results).to_variant();
+                // Sent until heard: nothing tells the test when the asker has
+                // moved its subscription to the handle the portal named.
+                let heard = turn_until(&|| {
+                    if asked.get() {
+                        portal
+                            .emit_signal(
+                                None,
+                                "/org/freedesktop/portal/desktop/request/unanswered",
+                                "org.freedesktop.portal.Request",
+                                "Response",
+                                Some(&response),
+                            )
+                            .expect("sent");
+                    }
+                    answer.borrow().is_some()
+                });
+                assert!(heard, "an answer");
+                assert!(
+                    matches!(
+                        &*answer.borrow(),
+                        Some(Some(Ok(files)))
+                            if files.iter().map(gio::File::uri).eq(["file:///a"])
+                    ),
+                    "the file the portal chose"
                 );
             })
             .expect("the context of this thread");
