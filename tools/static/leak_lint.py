@@ -285,6 +285,9 @@ def rule_embedded_image_icon(src: Source, names: set[str]):
 
 
 CLOSURE = re.compile(r"(move\s*)?\|([^|]*)\|")
+CLOSURE_RETURN = re.compile(r"\s*->")
+# a char literal, not a lifetime (`'a`) or a loop label (`'outer:`)
+CHAR_LITERAL = r"'(?:\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.)|[^'\\\n])'"
 # the source may be a path (`self.networks.downgrade()`): its last segment is the name
 LET_CLONE = r"let\s+(?:mut\s+)?(\w+)\s*=\s*(?:((?:\w+\.)*\w+)\s*\.\s*clone\(\)|Rc::clone\(&\s*((?:\w+\.)*\w+)\s*\))\s*;"
 LET_WEAK = r"let\s+(?:mut\s+)?(\w+)\s*=\s*(?:((?:\w+\.)*\w+)\s*\.\s*downgrade\(\)|Rc::downgrade\(&\s*((?:\w+\.)*\w+)\s*\))\s*;"
@@ -487,12 +490,15 @@ def pattern_end(text: str, start: int, stop: int) -> int:
     return stop
 
 
+# a block, or an `unsafe` one, as a match's scrutinee
+BLOCK_SCRUTINEE = re.compile(r"\s*(?:unsafe\s*)?(?=\{)")
+
+
 def match_arms_brace(body: str, start: int) -> int:
     """Where the `{` that opens the arms of the `match` whose scrutinee starts at
     `start` is, or -1: past a block scrutinee and past braces inside brackets."""
     i = start
-    # a block, or an `unsafe` one, as the scrutinee
-    if block := re.compile(r"\s*(?:unsafe\s*)?(?=\{)").match(body, start):
+    if block := BLOCK_SCRUTINEE.match(body, start):
         i = block.end() + len(call_argument(body, block.end())) + 2
     depth = 0
     for j in range(i, len(body)):
@@ -559,11 +565,11 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     if not closure:
         return set()  # a function path: captures nothing
     pre, body = arg[: closure.start()], arg[closure.end() :]
-    # Words in strings and comments are not names; one pass, so a quote inside
-    # a comment opens no string.
+    # Words in strings, chars and comments are not names; one pass, so a quote
+    # inside a comment opens no string.
     body = re.sub(
-        r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*',
-        lambda m: '""' if m.group().startswith('"') else " ",
+        r'"(?:\\.|[^"\\])*"|' + CHAR_LITERAL + r"|/\*.*?\*/|//[^\n]*",
+        lambda m: '""' if m.group()[0] in "\"'" else " ",
         body,
         flags=re.DOTALL,
     )
@@ -585,7 +591,13 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
             # a `let` binds after its statement: its right-hand side still sees the outer name
             hi, where, until = m.end(1), m.start(1), len(body)
             if binder is binders[2]:
-                until = expression_end(body, m.end())
+                start = m.end()
+                if (
+                    CLOSURE_RETURN.match(body, start)
+                    and (brace := body.find("{", start)) >= 0
+                ):
+                    start = brace  # past a return type's generics, to the body
+                until = expression_end(body, start)
             if binder is binders[0]:
                 hi = pattern_end(body, m.start(1), m.end(1))
                 conditional = re.search(r"\b(if|while)\s*$|&&\s*$", body[: m.start()])
@@ -842,11 +854,12 @@ def none_arm_continues(closure: str) -> bool:
             upgrades = re.search(r"\.upgrade\(\)", closure[m.end() : brace]) is not None
             matches.append((brace, close, upgrades))
     # A match inside the arms of one on an upgrade (`Some(t) => match next() {…}`)
-    # is not about the upgrade: the outer `None` arm is.
+    # is not about the upgrade unless it upgrades too: the outer `None` arm is.
     nested = [
         (lo, hi)
-        for lo, hi, _ in matches
-        if any(upgrades and outer < lo < end for outer, end, upgrades in matches)
+        for lo, hi, inner_upgrades in matches
+        if not inner_upgrades
+        and any(upgrades and outer < lo < end for outer, end, upgrades in matches)
     ]
     for m in re.finditer(r"\bNone\s*(?:if\b[^;{}]*?)?=>\s*", closure):
         if any(lo < m.start() < hi for lo, hi in nested):
@@ -868,13 +881,16 @@ def rule_repeating_source_without_weak_exit(src: Source):
             continue  # the id is kept, returned or passed on
         closure = top_level_arguments(arg)[-1].strip()
         if re.fullmatch(r"\w+", closure):
-            # the binding visible here: in this fn, outside the blocks closed before the call
-            line = src.line_of(m.start())
-            fn_first = next(
-                (first for first, last in src.functions() if first < line <= last), 0
-            )
-            head = src.text[src.starts[fn_first] : m.start()]
-            open_at_end = in_scope_at_end(head)
+            # the binding visible here: in the fn whose body is open at the call,
+            # outside the blocks closed before it
+            fn_starts = [src.starts[first] for first, _ in src.functions()]
+            for start in reversed([0] + [s for s in fn_starts if s < m.start()]):
+                head = src.text[start : m.start()]
+                open_at_end = in_scope_at_end(head)
+                body = top_level_index(head, 0, len(head), "{")
+                bodiless = top_level_index(head, 0, body, ";") >= 0
+                if body >= 0 and not bodiless and open_at_end[body]:
+                    break
             local = [
                 binding
                 for binding in re.finditer(
