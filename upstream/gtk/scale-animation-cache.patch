@@ -18,12 +18,12 @@ multiple of 1/120 is drawn as before.
 Fills and strokes too large for the atlas snap their clipped bounds to
 the same grid, so they are rendered at the scale they are placed at.
 ---
- gsk/gpu/gskgpucachedfill.c    |  34 +++-
- gsk/gpu/gskgpucachedstroke.c  |  34 +++-
+ gsk/gpu/gskgpucachedfill.c    |  34 ++-
+ gsk/gpu/gskgpucachedstroke.c  |  34 ++-
  gsk/gpu/gskgpunodeprocessor.c |  32 ++-
- gsk/gpu/gskgpuutilsprivate.h  |  29 +++
- testsuite/gsk/misc.c          | 356 ++++++++++++++++++++++++++++++++++
- 5 files changed, 461 insertions(+), 24 deletions(-)
+ gsk/gpu/gskgpuutilsprivate.h  |  35 +++
+ testsuite/gsk/misc.c          | 451 ++++++++++++++++++++++++++++++++++
+ 5 files changed, 562 insertions(+), 24 deletions(-)
 
 diff --git a/gsk/gpu/gskgpucachedfill.c b/gsk/gpu/gskgpucachedfill.c
 index a3f9d89ad1..0c816a043d 100644
@@ -292,7 +292,7 @@ index c5bb9e3a32..f549b34b70 100644
                                             &glyph_offset);
  
 diff --git a/gsk/gpu/gskgpuutilsprivate.h b/gsk/gpu/gskgpuutilsprivate.h
-index 42c3410a46..b9c2040504 100644
+index 42c3410a46..3e8abb9a9b 100644
 --- a/gsk/gpu/gskgpuutilsprivate.h
 +++ b/gsk/gpu/gskgpuutilsprivate.h
 @@ -3,6 +3,11 @@
@@ -307,7 +307,7 @@ index 42c3410a46..b9c2040504 100644
  GskGpuConversion        gsk_gpu_color_state_get_conversion              (GdkColorState                  *color_state);
  GdkColorState *         gsk_gpu_color_state_apply_conversion            (GdkColorState                  *color_state,
                                                                           GskGpuConversion                conversion);
-@@ -21,3 +26,27 @@ gsk_gpu_mipmap_levels (gsize width,
+@@ -21,3 +26,33 @@ gsk_gpu_mipmap_levels (gsize width,
  {
    return g_bit_nth_msf (MAX (width, height), -1) + 1;
  }
@@ -333,10 +333,16 @@ index 42c3410a46..b9c2040504 100644
 +static inline float
 +gsk_gpu_scale_ceil_to_step (float scale)
 +{
-+  return MAX (ceilf (scale * GSK_GPU_SCALE_STEPS - 0.001f), 1) / GSK_GPU_SCALE_STEPS;
++  float steps = scale * GSK_GPU_SCALE_STEPS;
++
++  /* Below one step, the next step is any number of times the scale */
++  if (steps < 1)
++    return scale;
++
++  return ceilf (steps - 0.001f) / GSK_GPU_SCALE_STEPS;
 +}
 diff --git a/testsuite/gsk/misc.c b/testsuite/gsk/misc.c
-index a1dc9c8274..e84d8df72d 100644
+index a1dc9c8274..16758f905f 100644
 --- a/testsuite/gsk/misc.c
 +++ b/testsuite/gsk/misc.c
 @@ -1,11 +1,18 @@
@@ -358,7 +364,7 @@ index a1dc9c8274..e84d8df72d 100644
  static void
  test_rendernode_gvalue (void)
  {
-@@ -224,6 +231,351 @@ test_gl_renderer (void)
+@@ -224,6 +231,445 @@ test_gl_renderer (void)
  #endif
  }
  
@@ -707,10 +713,104 @@ index a1dc9c8274..e84d8df72d 100644
 +#endif
 +}
 +
++static void
++test_gl_renderer_scaled_tiny_mask (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  /* A 546th of the smallest scale step */
++  const float scale = 1.f / 65536;
++  GskPathBuilder *builder;
++  GskPath *path;
++  GskStroke *stroke;
++  GskRenderNode *color, *nodes[2];
++  GskTransform *transform;
++  guint32 data[2][100 * 100];
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  if (display == NULL)
++    {
++      g_test_skip ("Could not open a second display");
++      return;
++    }
++
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  /* A circle 90 pixels across on the screen, filled and stroked 4 pixels
++   * wide: its masks must keep the tiny scale, since at the step's they
++   * would be 546 times as wide and tall, too large for a texture */
++  builder = gsk_path_builder_new ();
++  gsk_path_builder_add_circle (builder, &GRAPHENE_POINT_INIT (50 / scale, 50 / scale), 45 / scale);
++  path = gsk_path_builder_free_to_path (builder);
++  stroke = gsk_stroke_new (4 / scale);
++  color = gsk_color_node_new (&(GdkRGBA) { 0, 0, 0, 1 }, &GRAPHENE_RECT_INIT (0, 0, 100 / scale, 100 / scale));
++  nodes[0] = gsk_fill_node_new (color, path, GSK_FILL_RULE_WINDING);
++  nodes[1] = gsk_stroke_node_new (color, path, stroke);
++  transform = gsk_transform_scale (NULL, scale, scale);
++
++  for (guint i = 0; i < G_N_ELEMENTS (nodes); i++)
++    {
++      GskRenderNode *node;
++      GdkTexture *texture;
++
++      node = gsk_transform_node_new (nodes[i], transform);
++      texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 100, 100));
++      gdk_texture_download (texture, (guchar *) data[i], 100 * 4);
++
++      g_object_unref (texture);
++      gsk_render_node_unref (node);
++    }
++
++  /* Pixels more than 1.5 pixels inside an edge are covered, pixels more
++   * than 1.5 pixels outside are not */
++  for (int y = 0; y < 100; y++)
++    for (int x = 0; x < 100; x++)
++      {
++        float distance = hypotf (x + 0.5f - 50, y + 0.5f - 50);
++        guchar fill = data[0][y * 100 + x] >> 24;
++        guchar ring = data[1][y * 100 + x] >> 24;
++
++        if (distance < 43.5f)
++          g_assert_cmpint (fill, ==, 255);
++        else if (distance > 46.5f)
++          g_assert_cmpint (fill, ==, 0);
++
++        if (fabsf (distance - 45) < 0.5f)
++          g_assert_cmpint (ring, ==, 255);
++        else if (fabsf (distance - 45) > 3.5f)
++          g_assert_cmpint (ring, ==, 0);
++      }
++
++  gsk_transform_unref (transform);
++  gsk_render_node_unref (nodes[1]);
++  gsk_render_node_unref (nodes[0]);
++  gsk_render_node_unref (color);
++  gsk_stroke_free (stroke);
++  gsk_path_unref (path);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
  static void
  test_vulkan_renderer (void)
  {
-@@ -336,6 +688,10 @@ main (int argc, char *argv[])
+@@ -336,6 +782,11 @@ main (int argc, char *argv[])
    g_test_add_func ("/rendernode/container/disjoint", test_container_disjoint);
    g_test_add_func ("/renderer/cairo", test_cairo_renderer);
    g_test_add_func ("/renderer/gl", test_gl_renderer);
@@ -718,6 +818,7 @@ index a1dc9c8274..e84d8df72d 100644
 +  g_test_add_func ("/renderer/gl/scaled-fill", test_gl_renderer_scaled_fill);
 +  g_test_add_func ("/renderer/gl/scaled-large-mask", test_gl_renderer_scaled_large_mask);
 +  g_test_add_func ("/renderer/gl/scaled-tiny-text", test_gl_renderer_scaled_tiny_text);
++  g_test_add_func ("/renderer/gl/scaled-tiny-mask", test_gl_renderer_scaled_tiny_mask);
    g_test_add_func ("/renderer/vulkan", test_vulkan_renderer);
    g_test_add_func ("/gradient/opaque", test_gradient_opaque);
    g_test_add_func ("/rendernode/radial-gradient/opaque", test_radial_gradient_opaque);
