@@ -486,5 +486,6 @@ install (void)
   sigemptyset (&census);
   sigaddset (&census, SIGUSR2);
   pthread_sigmask (SIG_BLOCK, &census, NULL);
-  g_idle_add (install_signal, NULL);
+  // Ahead of the program's own idle work, which could otherwise hold it off.
+  g_idle_add_full (G_PRIORITY_HIGH, install_signal, NULL, NULL);
 }
