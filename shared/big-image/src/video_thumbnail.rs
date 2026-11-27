@@ -497,7 +497,10 @@ mod tests {
     /// A real song's tags, read through the confined `ffprobe`.
     #[test]
     fn song_shows_title_artist_length() {
-        if !Path::new(FFMPEG_PATH).exists() || !Path::new(FFPROBE_PATH).exists() {
+        if !Path::new(FFMPEG_PATH).exists()
+            || !Path::new(FFPROBE_PATH).exists()
+            || !crate::thumbnailer::sandbox_works()
+        {
             return;
         }
         let directory =
