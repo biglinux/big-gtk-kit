@@ -107,14 +107,10 @@ pub(super) fn submenu_door_row(door: &BigMenuActionItem) -> gtk::Button {
         .hexpand(true)
         .build();
     row.set_accessible_role(gtk::AccessibleRole::MenuItem);
-    row.update_property(&[
-        gtk::accessible::Property::Label(label),
-        gtk::accessible::Property::HasPopup(true),
-    ]);
+    row.update_property(&[gtk::accessible::Property::Label(label)]);
     if let Some(subtitle) = &door.subtitle {
         row.update_property(&[gtk::accessible::Property::Description(subtitle)]);
     }
-    row.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
     big_gtk_kit::accessible::relate(
         &row,
         gtk::AccessibleRelation::LabelledBy,

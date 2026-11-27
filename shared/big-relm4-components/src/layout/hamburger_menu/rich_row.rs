@@ -315,10 +315,7 @@ pub(super) fn build_inline(
                 .build();
             button.set_tooltip_text(Some(&door.label));
             button.set_accessible_role(gtk::AccessibleRole::MenuItem);
-            button.update_property(&[
-                gtk::accessible::Property::Label(&door.label),
-                gtk::accessible::Property::HasPopup(true),
-            ]);
+            button.update_property(&[gtk::accessible::Property::Label(&door.label)]);
             super::cascade::attach(build, &button, &door, &submenu);
             row.append(&button);
             continue;

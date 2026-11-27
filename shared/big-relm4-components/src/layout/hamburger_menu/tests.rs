@@ -1564,6 +1564,35 @@ fn verb_strip_is_one_row() {
     });
 }
 
+/// A strip's door says it opens a menu, and that it is closed, before it ever
+/// opened, as a door row does.
+#[test]
+fn strip_door_is_closed_popup() {
+    big_testkit::harness::require_gtk_test(|| {
+        let more = gio::Menu::new();
+        more.append(Some("Move to…"), Some("view.move"));
+        let menu = gio::Menu::new();
+        append_strip_section(
+            &menu,
+            None,
+            &[
+                described_item("Copy", None, Some("edit-copy-symbolic"), "view.copy"),
+                gio::MenuItem::new_submenu(Some("More"), &more),
+            ],
+        );
+        let popover = build_menu_model_action_popover_menu(&menu, &popover_labels(), &[], &[]);
+        let door = find_button_with_label(popover.upcast_ref(), "More").expect("the strip's door");
+        assert!(gtk::test_accessible_has_property(
+            &door,
+            gtk::AccessibleProperty::HasPopup
+        ));
+        assert!(gtk::test_accessible_has_state(
+            &door,
+            gtk::AccessibleState::Expanded
+        ));
+    });
+}
+
 /// Down passes over a strip whose buttons are all off, which the focus cannot
 /// enter, instead of stopping on it for good.
 #[test]
