@@ -653,6 +653,26 @@ class HeldThroughShapes(unittest.TestCase):
         """),
         )
 
+    def test_shadowed_closure_call_holds_nothing(self):
+        # Only a call of the outer `refresh` holds what it captured.
+        case = """
+            fn present() {
+                let entry = gtk::SearchEntry::new();
+                let refresh = {
+                    let entry = entry.clone();
+                    move || entry.set_text("")
+                };
+                entry.connect_search_changed(move |_| BODY);
+            }
+        """
+        for body, expected in (
+            ("{ let refresh = make_refresh(); refresh() }", []),
+            ("match pick() { Some(refresh) => refresh(), None => () }", []),
+            ("{ refresh(); let refresh = make_refresh(); refresh() }", [self.HOLDS]),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(lint(case.replace("BODY", body)), expected)
+
     def test_builder_child_and_controller_inside(self):
         self.assertIn(
             self.HOLDS,
