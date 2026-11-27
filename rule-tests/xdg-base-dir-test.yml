@@ -1,0 +1,19 @@
+id: xdg-base-dir
+valid:
+  - |
+    #[cfg(test)]
+    #[allow(dead_code)]
+    mod tests {
+        fn t() { let _ = std::env::var("XDG_CONFIG_HOME"); }
+    }
+  - |
+    fn home() { let _ = std::env::var("HOME"); }
+invalid:
+  - |
+    fn p() { let _ = std::env::var_os("XDG_CACHE_HOME"); }
+  - |
+    #[cfg(test)]
+    fn helper() {}
+    mod prod {
+        fn p() { let _ = std::env::var("XDG_CONFIG_HOME"); }
+    }

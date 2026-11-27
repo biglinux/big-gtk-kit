@@ -1,0 +1,7 @@
+id: rgb-hex
+valid:
+  - |
+    fn other(r: u8) -> String { format!("{:02x}", r) }
+invalid:
+  - |
+    fn hex(r: u8, g: u8, b: u8) -> String { format!("#{:02x}{:02x}{:02x}", r, g, b) }

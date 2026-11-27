@@ -1,0 +1,11 @@
+id: pidfd
+valid:
+  - |
+    fn other() { let _ = libc::SYS_getpid; }
+invalid:
+  - |
+    fn path() { let _ = libc::SYS_pidfd_open; }
+  - |
+    use libc::{SYS_pidfd_send_signal, syscall};
+  - |
+    fn bare() { let _ = SYS_pidfd_open; }

@@ -2,3 +2,6 @@
 # them, such as a literal argument. `ast-grep scan` lists every site.
 ruleDirs:
   - rules
+# Each rule's accepted and refused snippets: `ast-grep test --skip-snapshot-tests`.
+testConfigs:
+  - testDir: rule-tests
