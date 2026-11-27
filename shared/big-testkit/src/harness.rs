@@ -484,9 +484,16 @@ pub fn painted_pixel_at(widget: &impl IsA<gtk::Widget>, x: i32, y: i32) -> [u8; 
             .is_some(),
         "a widget in a realized window"
     );
+    // Nothing painted, or no frame drawn yet.
     let Some(texture) = big_gtk_kit::capture::widget_texture(widget) else {
-        return [0; 4]; // it paints nothing
+        return [0; 4];
     };
+    // The texture starts at the border box, before the widget's own origin by
+    // its padding and border.
+    let origin = widget
+        .compute_bounds(widget)
+        .map_or((0, 0), |bounds| (bounds.x() as i32, bounds.y() as i32));
+    let (x, y) = (x - origin.0, y - origin.1);
     let mut downloader = gtk::gdk::TextureDownloader::new(&texture);
     downloader.set_format(gtk::gdk::MemoryFormat::R8g8b8a8);
     let (pixels, stride) = downloader.download_bytes();

@@ -54,6 +54,7 @@ impl BigTaskToken {
     }
 
     /// Return a cloneable signal for worker threads or subprocess wrappers.
+    ///
     /// Bind the token first and keep it for the operation:
     /// `let signal = BigTaskToken::new(d).signal();` drops the token at the end
     /// of the statement, which cancels the signal it just returned.
