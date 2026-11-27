@@ -6,6 +6,9 @@
 //! Rows are grouped by section in the order the sections first appear:
 //! editable rows first, then the fixed rows a widget owns.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use adw::prelude::*;
 use big_gtk_kit::tooltip::name_control;
 use gtk::{gdk, glib};
@@ -228,7 +231,7 @@ pub enum BigShortcutEditorInput {
     ReplaceConflict,
     /// Cancel the active keyboard capture.
     CancelCapture,
-    /// The capture dialog closed, by whatever way.
+    /// The capture dialog closed other than by the editor ending the capture.
     CaptureClosed,
 }
 
@@ -281,6 +284,8 @@ pub struct BigShortcutEditorWidgets {
     conflict_label: gtk::Label,
     replace_button: gtk::Button,
     capture_content: gtk::Box,
+    /// Set while [`close_capture`] closes the dialog.
+    closing_itself: Rc<Cell<bool>>,
 }
 
 impl Component for BigShortcutEditor {
@@ -375,7 +380,7 @@ impl Component for BigShortcutEditor {
             }
             BigShortcutEditorInput::CancelCapture => {
                 if self.end_capture(&sender) {
-                    widgets.dialog.close();
+                    close_capture(widgets);
                 }
             }
             BigShortcutEditorInput::CaptureClosed => {
@@ -549,11 +554,17 @@ fn capture_dialog(
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&content));
     dialog.set_child(Some(&toolbar));
-    // However the dialog goes (Cancel, Escape, a click outside), the capture
-    // ends with it; a commit has already cleared it by then.
+    // However else the dialog goes (its Cancel, a click outside), the capture
+    // ends with it. `closed` is emitted inside `close()`, so a close the editor
+    // made itself, having ended its capture, sends nothing that a capture
+    // begun after it could take for its own.
+    let closing_itself = Rc::new(Cell::new(false));
     let input = sender.input_sender().clone();
+    let closed_itself = Rc::clone(&closing_itself);
     dialog.connect_closed(move |_| {
-        let _ = input.send(BigShortcutEditorInput::CaptureClosed);
+        if !closed_itself.get() {
+            let _ = input.send(BigShortcutEditorInput::CaptureClosed);
+        }
     });
 
     let key = gtk::EventControllerKey::new();
@@ -593,7 +604,15 @@ fn capture_dialog(
         conflict_label,
         replace_button,
         capture_content: content,
+        closing_itself,
     }
+}
+
+/// Close the capture dialog for a capture the editor has already ended.
+fn close_capture(widgets: &BigShortcutEditorWidgets) {
+    widgets.closing_itself.set(true);
+    widgets.dialog.close();
+    widgets.closing_itself.set(false);
 }
 
 impl BigShortcutEditor {
@@ -698,7 +717,7 @@ impl BigShortcutEditor {
             return;
         }
         self.active_action = None;
-        widgets.dialog.close();
+        close_capture(widgets);
         self.set_accel(sender, index, &accel);
     }
 
@@ -718,7 +737,7 @@ impl BigShortcutEditor {
             self.set_accel(sender, owner, "");
         }
         self.active_action = None;
-        widgets.dialog.close();
+        close_capture(widgets);
         self.set_accel(sender, index, &accel);
     }
 
@@ -1274,6 +1293,31 @@ mod tests {
                 [BigShortcutEditorOutput::CaptureCancelled {
                     action: "next".to_owned()
                 }]
+            );
+            window.destroy();
+        });
+    }
+
+    /// The close of a cancelled capture's dialog leaves the next capture be.
+    #[test]
+    fn cancel_spares_next_capture() {
+        big_testkit::harness::require_gtk_test(|| {
+            use relm4::ComponentController;
+            let (editor, window, outputs) = shown_editor();
+            editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
+            editor.emit(BigShortcutEditorInput::CancelCapture);
+            editor.emit(BigShortcutEditorInput::BeginCapture("play".to_owned()));
+            big_testkit::harness::pump();
+            editor.emit(BigShortcutEditorInput::CommitCapture("p".to_owned()));
+            big_testkit::harness::pump();
+            assert_eq!(
+                *outputs.borrow(),
+                [
+                    BigShortcutEditorOutput::CaptureCancelled {
+                        action: "next".to_owned()
+                    },
+                    changed("play", "p"),
+                ]
             );
             window.destroy();
         });
