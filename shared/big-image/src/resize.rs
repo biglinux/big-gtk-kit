@@ -212,6 +212,18 @@ mod tests {
         assert!(shrink_rgb16(&bytes[..6], usize::MAX, (1, 2), (1, 1)).is_none());
     }
 
+    /// A buffer that does not match its size is refused even when nothing
+    /// is scaled.
+    #[test]
+    fn short_buffer_refused_at_same_size() {
+        let mut short = flat(1, 1);
+        short.rgba.truncate(3);
+        assert!(matches!(
+            resize_rgba(&short, 1, 1),
+            Err(BigImageError::InvalidBytePixels)
+        ));
+    }
+
     #[test]
     fn impossible_target_is_refused() {
         for (width, height) in [(0, 10), (10, -1), (20_000, 20_000)] {
