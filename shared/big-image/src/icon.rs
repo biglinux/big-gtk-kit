@@ -81,7 +81,9 @@ thread_local! {
     static WAITERS: RefCell<HashMap<String, Vec<Waiter>>> = RefCell::new(HashMap::new());
     /// Decodes not yet started, in request order.
     static PENDING: RefCell<VecDeque<PendingSvg>> = const { RefCell::new(VecDeque::new()) };
-    /// Bytes of SVG source retained by `PENDING`, kept in step with it.
+    /// Jobs of handed-in bytes in `PENDING`, and the bytes they retain, kept in
+    /// step with it.
+    static PENDING_BYTE_JOBS: Cell<usize> = const { Cell::new(0) };
     static PENDING_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Decodes running right now.
     static IN_FLIGHT: Cell<usize> = const { Cell::new(0) };
@@ -504,17 +506,16 @@ pub fn file_texture(
         deliver(texture);
         return;
     }
-    let path = path.to_path_buf();
-    glib::spawn_future_local(async move {
-        let Ok(Some(bytes)) = gio::spawn_blocking(move || {
-            big_os_kit::file_io::read_bounded(&path, MAX_ICON_FILE_BYTES).ok()
-        })
-        .await
-        else {
-            return;
-        };
-        svg_texture(key, glib::Bytes::from_owned(bytes), height, deliver);
-    });
+    svg_answer(
+        key,
+        SvgSource::File(path.to_path_buf()),
+        height,
+        |texture| {
+            if let Some(texture) = texture {
+                deliver(texture);
+            }
+        },
+    );
 }
 
 /// Deliver the SVG compiled into the program at `resource_path`, drawn
@@ -608,12 +609,13 @@ fn svg_answer(
     if let SvgSource::Bytes(bytes) = &source {
         // Refused past either ceiling, and not remembered: a later request
         // decodes it.
-        let over_budget = PENDING.with(|pending| pending.borrow().len()) >= MAX_PENDING_JOBS
+        let over_budget = PENDING_BYTE_JOBS.with(Cell::get) >= MAX_PENDING_JOBS
             || PENDING_BYTES.with(Cell::get).saturating_add(bytes.len()) > MAX_PENDING_BYTES;
         if over_budget {
             answer_waiters(&key, None);
             return;
         }
+        PENDING_BYTE_JOBS.with(|jobs| jobs.set(jobs.get() + 1));
         PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
     }
     PENDING.with(|pending| {
@@ -635,6 +637,7 @@ fn start_pending_decodes() {
             return;
         };
         if let SvgSource::Bytes(bytes) = &job.source {
+            PENDING_BYTE_JOBS.with(|jobs| jobs.set(jobs.get().saturating_sub(1)));
             PENDING_BYTES.with(|total| total.set(total.get().saturating_sub(bytes.len())));
         }
         IN_FLIGHT.with(|count| count.set(count.get() + 1));
@@ -1032,10 +1035,13 @@ mod tests {
 
             // A regular name the theme has only a symbolic file for.
             let display = gdk::Display::default().expect("a display");
-            gtk::IconTheme::for_display(&display).add_search_path(&dir);
+            let theme = gtk::IconTheme::for_display(&display);
+            let search_path = theme.search_path();
+            theme.add_search_path(&dir);
             std::fs::copy(&named, dir.join("big-icon-trap-symbolic.svg")).unwrap();
             let regular: gio::Icon = gio::ThemedIcon::new("big-icon-trap").upcast();
             let (from_theme, _) = answer(&regular);
+            theme.set_search_path(&search_path.iter().map(PathBuf::as_path).collect::<Vec<_>>());
             let _ = std::fs::remove_dir_all(&dir);
             assert!(from_theme.is_ok(), "{from_theme:?}");
 
@@ -1048,7 +1054,8 @@ mod tests {
     }
 
     /// More icon files than the decode queue holds for handed-in bytes are all
-    /// drawn: a file waits for its turn instead of being refused.
+    /// drawn, a file waiting for its turn instead of being refused, and bytes
+    /// handed in during the burst still get their place.
     #[test]
     fn crowded_queue_draws_every_file() {
         big_testkit::harness::require_gtk_test(|| {
@@ -1071,8 +1078,27 @@ mod tests {
                     sink.borrow_mut().push(answer.is_ok());
                 });
             }
+            // Bytes handed in meanwhile are not crowded out by the files.
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while PENDING.with(|pending| pending.borrow().len()) < MAX_PENDING_JOBS {
+                assert!(
+                    Instant::now() < deadline,
+                    "the files never filled the queue"
+                );
+                glib::MainContext::default().iteration(false);
+            }
+            let handed_in = std::rc::Rc::new(Cell::new(false));
+            let drawn_bytes = handed_in.clone();
+            svg_texture(
+                format!("crowded-bytes-{}", std::process::id()),
+                glib::Bytes::from_static(
+                    br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>"#,
+                ),
+                16,
+                move |_| drawn_bytes.set(true),
+            );
             let deadline = Instant::now() + Duration::from_secs(120);
-            while answers.borrow().len() < count {
+            while answers.borrow().len() < count || !handed_in.get() {
                 assert!(
                     Instant::now() < deadline,
                     "{} answers",
