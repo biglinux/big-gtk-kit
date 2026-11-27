@@ -285,6 +285,9 @@ def rule_embedded_image_icon(src: Source, names: set[str]):
 
 
 CLOSURE = re.compile(r"(move\s*)?\|([^|]*)\|")
+CLOSURE_RETURN = re.compile(r"\s*->")
+# a char literal, not a lifetime (`'a`) or a loop label (`'outer:`)
+CHAR_LITERAL = r"'(?:\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.)|[^'\\\n])'"
 # the source may be a path (`self.networks.downgrade()`): its last segment is the name
 LET_CLONE = r"let\s+(?:mut\s+)?(\w+)\s*=\s*(?:((?:\w+\.)*\w+)\s*\.\s*clone\(\)|Rc::clone\(&\s*((?:\w+\.)*\w+)\s*\))\s*;"
 LET_WEAK = r"let\s+(?:mut\s+)?(\w+)\s*=\s*(?:((?:\w+\.)*\w+)\s*\.\s*downgrade\(\)|Rc::downgrade\(&\s*((?:\w+\.)*\w+)\s*\))\s*;"
@@ -559,11 +562,11 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     if not closure:
         return set()  # a function path: captures nothing
     pre, body = arg[: closure.start()], arg[closure.end() :]
-    # Words in strings and comments are not names; one pass, so a quote inside
-    # a comment opens no string.
+    # Words in strings, chars and comments are not names; one pass, so a quote
+    # inside a comment opens no string.
     body = re.sub(
-        r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*',
-        lambda m: '""' if m.group().startswith('"') else " ",
+        r'"(?:\\.|[^"\\])*"|' + CHAR_LITERAL + r"|/\*.*?\*/|//[^\n]*",
+        lambda m: '""' if m.group()[0] in "\"'" else " ",
         body,
         flags=re.DOTALL,
     )
@@ -585,7 +588,13 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
             # a `let` binds after its statement: its right-hand side still sees the outer name
             hi, where, until = m.end(1), m.start(1), len(body)
             if binder is binders[2]:
-                until = expression_end(body, m.end())
+                start = m.end()
+                if (
+                    CLOSURE_RETURN.match(body, start)
+                    and (brace := body.find("{", start)) >= 0
+                ):
+                    start = brace  # past a return type's generics, to the body
+                until = expression_end(body, start)
             if binder is binders[0]:
                 hi = pattern_end(body, m.start(1), m.end(1))
                 conditional = re.search(r"\b(if|while)\s*$|&&\s*$", body[: m.start()])
