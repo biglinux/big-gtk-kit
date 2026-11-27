@@ -19,7 +19,7 @@ pub(crate) const DEFAULT_DIDACTIC_DESCRIPTION_MAX_CHARS: i32 = 76;
 pub enum BigDidacticCardLayout {
     /// Illustration on the left, text + optional control on the right.
     Horizontal,
-    /// Illustration spans the full width above the text column.
+    /// Illustration beside the text, the control under both across the card.
     FullWidth,
     /// Like `Horizontal` but with no embedded control widget.
     Summary,
@@ -86,7 +86,7 @@ impl BigDidacticCardSpec {
         }
     }
 
-    /// Switch the layout to `FullWidth` (illustration spans card).
+    /// Switch the layout to `FullWidth` (control spans the card).
     #[must_use]
     pub fn full_width(mut self) -> Self {
         self.layout = BigDidacticCardLayout::FullWidth;
