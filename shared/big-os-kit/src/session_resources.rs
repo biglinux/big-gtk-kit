@@ -256,7 +256,11 @@ impl SessionResources {
     }
 
     fn note_pressure_at(&self, now: Instant) {
-        self.state().quiet_until = now.checked_add(PRESSURE_QUIET_PERIOD);
+        let mut state = self.state();
+        // The later deadline: `now` was read before the lock, maybe long before.
+        state.quiet_until = state
+            .quiet_until
+            .max(now.checked_add(PRESSURE_QUIET_PERIOD));
     }
 }
 

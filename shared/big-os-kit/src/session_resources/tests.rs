@@ -135,6 +135,17 @@ fn pressure_bursts_extend_quiet_period() {
     assert!(!r.snapshot_at(now + Duration::from_secs(8)).under_pressure);
 }
 
+/// An event sampled earlier but recorded later, by a caller paused between
+/// the two, does not cut short the quiet a later event began.
+#[test]
+fn late_older_pressure_keeps_quiet_period() {
+    let r = owner();
+    let now = Instant::now();
+    r.note_pressure_at(now + Duration::from_secs(3));
+    r.note_pressure_at(now);
+    assert!(r.snapshot_at(now + Duration::from_secs(6)).under_pressure);
+}
+
 #[test]
 fn background_work_leaves_interactive_capacity() {
     let r = owner();
