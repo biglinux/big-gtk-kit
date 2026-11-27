@@ -77,7 +77,8 @@ pub struct HoverCards {
     /// What the running timer does: open this row's card, or close.
     settle_to: Option<usize>,
     /// Whether a timer runs, or fired and its [`CardEvent::Settled`] waits: an
-    /// owner that queues events may hand one over after a cancel.
+    /// owner that queues events may hand one over after a cancel, or after the
+    /// next timer was armed, which [`OnceTimer::is_pending`] tells.
     settling: bool,
     timer: OnceTimer,
     emit: Rc<dyn Fn(CardEvent)>,
@@ -202,7 +203,7 @@ impl HoverCards {
                 }
             }
             CardEvent::Settled => {
-                if by_pointer && std::mem::take(&mut self.settling) {
+                if by_pointer && !self.timer.is_pending() && std::mem::take(&mut self.settling) {
                     match self.settle_to.or(self.hovered) {
                         Some(index) => {
                             self.show(index, Opener::Pointer);
@@ -347,8 +348,14 @@ mod tests {
             hover.handle(CardEvent::CardEntered);
             hover.handle(CardEvent::Settled);
             assert_eq!(hover.open(), Some(0), "a cancelled grace closes nothing");
+            // Queued behind it, a leave armed the grace again.
             hover.handle(CardEvent::CardLeft);
             assert!(big_testkit::harness::pump_until(|| settled() == 2));
+            hover.handle(CardEvent::CardEntered);
+            hover.handle(CardEvent::CardLeft);
+            hover.handle(CardEvent::Settled);
+            assert_eq!(hover.open(), Some(0), "a grace armed again runs whole");
+            assert!(big_testkit::harness::pump_until(|| settled() == 3));
             hover.handle(CardEvent::Settled);
             assert_eq!(hover.open(), None);
             assert!(!cards[0].is_visible());
