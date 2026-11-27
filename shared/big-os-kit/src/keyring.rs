@@ -114,7 +114,9 @@ impl BigSecretValue {
     }
 
     /// Copy this secret into a sealed anonymous file descriptor suitable for
-    /// an inherited command input such as `sshpass -d`.
+    /// an inherited command input such as `sshpass -d`, followed by a line
+    /// break. A reader of one line, `sshpass` among them, takes a multiline
+    /// secret only up to its first line break.
     ///
     /// The descriptor starts at offset zero, is close-on-exec by default, and
     /// cannot be modified, grown, or shrunk after this method returns. Callers
