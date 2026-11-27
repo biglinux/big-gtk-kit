@@ -1610,3 +1610,30 @@ fn deny_close_range_on_this_thread() {
     };
     assert!(installed, "{}", std::io::Error::last_os_error());
 }
+
+/// `wait` closes a stdin nobody took, as `std::process::Child::wait` does, so
+/// a child that reads to its end of input ends.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn wait_closes_untaken_stdin() {
+    let mut child = BigSubprocessSpec::builder()
+        .program("cat")
+        .stdin(b"never written".to_vec())
+        .stdout(BigSubprocessOutputMode::Null)
+        .build()
+        .spawn()
+        .expect("cat");
+    let mut waiter = child.clone();
+    let (sent, waited) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sent.send(waiter.wait()));
+    let status = waited.recv_timeout(Duration::from_secs(5));
+    if status.is_err() {
+        let _ = child.kill();
+    }
+    assert!(
+        status
+            .as_ref()
+            .is_ok_and(|status| status.as_ref().is_ok_and(|status| status.success())),
+        "{status:?}"
+    );
+}

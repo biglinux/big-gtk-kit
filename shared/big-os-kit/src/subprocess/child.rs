@@ -220,7 +220,8 @@ impl BigSubprocessChild {
             .map_err(BigSubprocessError::Io)
     }
 
-    /// Block until the child exits.
+    /// Block until the child exits, first closing a stdin pipe nobody took,
+    /// as [`std::process::Child::wait`] does.
     ///
     /// Polls with short lock holds instead of a blocking `wait(2)` under the
     /// handle lock, so a concurrent [`Self::terminate`]/[`Self::kill`] from a
@@ -231,6 +232,7 @@ impl BigSubprocessChild {
     ///
     /// Returns [`BigSubprocessError::Io`] on a wait syscall failure.
     pub fn wait(&mut self) -> Result<BigSubprocessStatus, BigSubprocessError> {
+        drop(self.lock_child()?.stdin.take());
         // Blocks on a pidfd rather than on the child itself: the lock stays
         // free, so another holder can still kill it.
         let pidfd = pidfd(self.id());
