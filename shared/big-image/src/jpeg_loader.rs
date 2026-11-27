@@ -10,17 +10,12 @@
 
 use std::path::{Path, PathBuf};
 
-/// Where each shipping package installs the loader binary.
-const INSTALLED_LOADERS: &[&str] = &[
-    "/usr/lib/bigimages/glycin-jpegturbo",
-    "/usr/lib/big-host/glycin-jpegturbo",
-];
-
-/// Point this process at the reduced-size JPEG and PNG loader, if it is
-/// available.
+/// Point this process at the reduced-size JPEG and PNG loader: the one beside
+/// this executable (a development build), else `installed`, where the program's
+/// package puts it.
 ///
-/// A no-op (system loaders unchanged) when the loader binary is missing, so a
-/// partial build still runs.
+/// A no-op (system loaders unchanged) when neither exists, so a partial build
+/// still runs.
 ///
 /// # Safety
 ///
@@ -28,8 +23,8 @@ const INSTALLED_LOADERS: &[&str] = &[
 /// with a concurrent environment reader, so the caller must run this before any
 /// other thread and before anything asks GLib for its data directories, i.e. at
 /// the very top of `main`.
-pub unsafe fn activate() {
-    if let Some(loader) = find_loader() {
+pub unsafe fn activate(installed: &Path) {
+    if let Some(loader) = find_loader(installed) {
         // SAFETY: the caller upholds the contract above.
         unsafe { activate_with(&loader) }
     }
@@ -187,8 +182,8 @@ fn claims(conf_d: &Path, mime_type: &str) -> bool {
         })
 }
 
-/// The loader binary: beside this executable (a dev build) or an install path.
-fn find_loader() -> Option<PathBuf> {
+/// The loader binary: beside this executable (a dev build), else `installed`.
+fn find_loader(installed: &Path) -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
@@ -197,10 +192,7 @@ fn find_loader() -> Option<PathBuf> {
             return Some(beside);
         }
     }
-    INSTALLED_LOADERS
-        .iter()
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
+    installed.is_file().then(|| installed.to_path_buf())
 }
 
 #[cfg(test)]
