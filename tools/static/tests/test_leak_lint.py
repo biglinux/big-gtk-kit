@@ -706,18 +706,23 @@ class RepeatingSources(unittest.TestCase):
 
     def test_break_on_upgrade_success_warns(self):
         # A failed upgrade continues: the source outlives its target.
-        self.assertIn(
-            self.RULE,
-            lint("""
+        case = """
             fn watch(label: &gtk::Label) {
                 let weak = label.downgrade();
                 glib::timeout_add_local(SECOND, move || match weak.upgrade() {
                     Some(_) => glib::ControlFlow::Break,
-                    None => glib::ControlFlow::Continue,
+                    None => ARM
                 });
             }
-        """),
-        )
+        """
+        for arm in (
+            "glib::ControlFlow::Continue,",
+            "{ glib::ControlFlow::Continue }",
+            '{ log("gone"); glib::ControlFlow::Continue }',
+            "{ if retry() { return glib::ControlFlow::Continue; } glib::ControlFlow::Break }",
+        ):
+            with self.subTest(arm=arm):
+                self.assertIn(self.RULE, lint(case.replace("ARM", arm)))
 
     def test_bounded_sources_are_fine(self):
         self.assertEqual(
@@ -759,6 +764,14 @@ class RepeatingSources(unittest.TestCase):
                         glib::ControlFlow::Continue
                     }
                     None => glib::ControlFlow::Break,
+                });
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => {
+                        label.set_text("x");
+                        glib::ControlFlow::Continue
+                    }
+                    None => { glib::ControlFlow::Break }
                 });
                 let weak = label.downgrade();
                 glib::timeout_add_local(SECOND, move || {
