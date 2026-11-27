@@ -70,6 +70,8 @@ pub(super) fn attach(
     submenu: &gio::MenuModel,
 ) {
     row.add_css_class(OPENER_CSS_CLASS);
+    row.update_property(&[gtk::accessible::Property::HasPopup(true)]);
+    row.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
 
     let child = gtk::Popover::new();
     child.add_css_class("menu");

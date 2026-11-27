@@ -315,10 +315,7 @@ pub(super) fn build_inline(
                 .build();
             button.set_tooltip_text(Some(&door.label));
             button.set_accessible_role(gtk::AccessibleRole::MenuItem);
-            button.update_property(&[
-                gtk::accessible::Property::Label(&door.label),
-                gtk::accessible::Property::HasPopup(true),
-            ]);
+            button.update_property(&[gtk::accessible::Property::Label(&door.label)]);
             super::cascade::attach(build, &button, &door, &submenu);
             row.append(&button);
             continue;
@@ -577,11 +574,25 @@ pub(super) fn build_scale_row(
             scale.unblock_signal(&write_state);
         })
     };
+    // GTK follows an actionable's action into its sensitivity; this slider
+    // writes the state by hand, so it follows the action's switch itself.
+    let item_enabled = item.enabled;
+    scale.set_sensitive(item_enabled && group.is_action_enabled(&action_name));
+    let read_enabled = {
+        let weak_scale = scale.downgrade();
+        group.connect_action_enabled_changed(Some(&action_name), move |_, _, enabled| {
+            if let Some(scale) = weak_scale.upgrade() {
+                scale.set_sensitive(item_enabled && enabled);
+            }
+        })
+    };
     let group = group.downgrade();
-    let read_state = Cell::new(Some(read_state));
+    let handlers = Cell::new(Some([read_state, read_enabled]));
     scale.connect_destroy(move |_| {
-        if let (Some(group), Some(handler)) = (group.upgrade(), read_state.take()) {
-            group.disconnect(handler);
+        if let (Some(group), Some(handlers)) = (group.upgrade(), handlers.take()) {
+            for handler in handlers {
+                group.disconnect(handler);
+            }
         }
     });
     row

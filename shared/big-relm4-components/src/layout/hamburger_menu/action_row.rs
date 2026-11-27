@@ -107,14 +107,10 @@ pub(super) fn submenu_door_row(door: &BigMenuActionItem) -> gtk::Button {
         .hexpand(true)
         .build();
     row.set_accessible_role(gtk::AccessibleRole::MenuItem);
-    row.update_property(&[
-        gtk::accessible::Property::Label(label),
-        gtk::accessible::Property::HasPopup(true),
-    ]);
+    row.update_property(&[gtk::accessible::Property::Label(label)]);
     if let Some(subtitle) = &door.subtitle {
         row.update_property(&[gtk::accessible::Property::Description(subtitle)]);
     }
-    row.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
     big_gtk_kit::accessible::relate(
         &row,
         gtk::AccessibleRelation::LabelledBy,
@@ -240,8 +236,6 @@ fn focus_menu_item(item: &gtk::Widget) {
         // keyboard on a strip's last button when the menu opens.
         if let Some(first) = first_focusable(item) {
             let _ = first.grab_focus();
-        } else {
-            let _ = item.child_focus(gtk::DirectionType::TabForward);
         }
     } else {
         let _ = item.grab_focus();
@@ -262,7 +256,8 @@ fn first_focusable(widget: &gtk::Widget) -> Option<gtk::Widget> {
 
 /// The rows Up and Down step through: menu-item buttons, plus each rich row as
 /// one stop (focusing a strip lands on its first button, a slider row on its
-/// slider).
+/// slider). A rich row whose controls are all off is no stop: the focus could
+/// not enter it.
 fn collect_page_menu_items(widget: &gtk::Widget, items: &mut Vec<gtk::Widget>) {
     let is_menu_item = matches!(
         widget.accessible_role(),
@@ -270,11 +265,11 @@ fn collect_page_menu_items(widget: &gtk::Widget, items: &mut Vec<gtk::Widget>) {
             | gtk::AccessibleRole::MenuItemCheckbox
             | gtk::AccessibleRole::MenuItemRadio
     );
-    if (is_menu_item || widget.has_css_class(super::rich_row::RICH_ROW_CSS_CLASS))
-        && widget.is_sensitive()
-        && widget.is_visible()
-    {
-        items.push(widget.clone());
+    let is_rich_row = widget.has_css_class(super::rich_row::RICH_ROW_CSS_CLASS);
+    if (is_menu_item || is_rich_row) && widget.is_sensitive() && widget.is_visible() {
+        if !is_rich_row || first_focusable(widget).is_some() {
+            items.push(widget.clone());
+        }
         return;
     }
     for node in children(widget) {

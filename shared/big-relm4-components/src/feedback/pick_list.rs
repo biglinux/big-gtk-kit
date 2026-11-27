@@ -164,8 +164,12 @@ pub fn present(
     // Weak everywhere a handler inside the dialog reaches the dialog or its own
     // widgets: a strong capture keeps every closed dialog alive.
     let empty_text = Rc::new(std::cell::RefCell::new(empty_text.to_owned()));
+    // The query the list answers: `search-changed` comes a moment after the
+    // typing, and Enter can come before it.
+    let shown_query = Rc::new(std::cell::RefCell::new(String::new()));
     let refresh: Rc<dyn Fn()> = Rc::new({
         let empty_text = Rc::clone(&empty_text);
+        let shown_query = Rc::clone(&shown_query);
         let (entry, body, empty, selection) = (
             entry.downgrade(),
             body.downgrade(),
@@ -202,6 +206,7 @@ pub fn present(
                 selection.set_selected(0);
                 body.set_visible_child_name("rows");
             }
+            shown_query.replace(query);
         }
     });
     refresh();
@@ -252,6 +257,7 @@ pub fn present(
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed({
+        let refresh = Rc::clone(&refresh);
         let (list, entry, dialog, selection) = (
             list.downgrade(),
             entry.downgrade(),
@@ -282,9 +288,13 @@ pub fn present(
                     dialog.close();
                     glib::Propagation::Stop
                 }
-                gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter
-                    if selection.selected() != gtk::INVALID_LIST_POSITION =>
-                {
+                gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+                    if *shown_query.borrow() != entry.text() {
+                        refresh();
+                    }
+                    if selection.selected() == gtk::INVALID_LIST_POSITION {
+                        return glib::Propagation::Proceed;
+                    }
                     let how = if modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
                         Pick::Beside
                     } else {
@@ -531,6 +541,57 @@ mod tests {
             list.emit_by_name::<()>("activate", &[&0_u32]);
             assert!(big_testkit::harness::pump_until(|| ran.borrow().is_some()));
             assert_eq!(ran.borrow().as_deref(), Some("home"));
+        });
+    }
+
+    /// Enter right after typing, before the list has caught up with the query,
+    /// picks the best match for what was typed, not the row the list still
+    /// showed.
+    #[test]
+    fn enter_answers_typed_query() {
+        big_testkit::harness::require_gtk_test(|| {
+            use gtk::gdk::{Key, ModifierType};
+            let window = adw::Window::new();
+            window.present();
+            let picked = Rc::new(RefCell::new(None));
+            let row = |title: &str| PickRow {
+                title: title.to_owned(),
+                subtitle: String::new(),
+                key: title.to_owned(),
+            };
+            present(
+                window.upcast_ref(),
+                PickLabels::command_palette(str::to_owned),
+                "",
+                move |query| {
+                    ["Stop", "Go Home"]
+                        .into_iter()
+                        .filter(|title| matches(title, query))
+                        .map(row)
+                        .collect()
+                },
+                {
+                    let picked = Rc::clone(&picked);
+                    move |_, row, query, _| *picked.borrow_mut() = Some((row.key, query))
+                },
+            );
+            let (entry, _) = picker_parts(&window);
+            entry.set_text("home");
+            let content = entry.parent().expect("the content");
+            assert!(big_testkit::harness::press_key(
+                &content,
+                Some(gtk::PropagationPhase::Capture),
+                Key::Return,
+                ModifierType::empty(),
+            ));
+            assert!(big_testkit::harness::pump_until(|| picked
+                .borrow()
+                .is_some()));
+            assert_eq!(
+                *picked.borrow(),
+                Some(("Go Home".to_owned(), "home".to_owned()))
+            );
+            window.destroy();
         });
     }
 
