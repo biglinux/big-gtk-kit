@@ -1231,6 +1231,32 @@ fn failed_before_run_stops_the_child() {
     assert!(matches!(spec.run(), Err(BigSubprocessError::Cancelled)));
 }
 
+/// A run cancelled before it starts, or while it prepares, never starts the
+/// child: a program that does not exist reports `Cancelled`, not `Spawn`.
+#[test]
+fn cancelled_run_never_starts() {
+    let preparations = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&preparations);
+    let spec = BigSubprocessSpec::builder()
+        .program("/nonexistent/never-started")
+        .build()
+        .before_run(move |_| {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+    let cancelled = AtomicBool::new(true);
+    let run = spec.run_cancellable(&cancelled);
+    assert!(matches!(run, Err(BigSubprocessError::Cancelled)), "{run:?}");
+    assert_eq!(preparations.load(Ordering::Relaxed), 0);
+
+    let spec = spec.before_run(|cancel| {
+        cancel.store(true, Ordering::Relaxed);
+        Ok(())
+    });
+    let run = spec.run_cancellable(&AtomicBool::new(false));
+    assert!(matches!(run, Err(BigSubprocessError::Cancelled)), "{run:?}");
+}
+
 /// A module library links its own copy of this crate, which never saw the
 /// host raise the limit: it gives back the limit the host published.
 #[test]
