@@ -42,8 +42,9 @@ impl AppShellActivation {
     }
 
     /// Arguments after the executable name, interpreted as file or URI open
-    /// targets. The first `--` only ends the options, so `prog -- -name.png`
-    /// opens `-name.png`; a later `--` is a file of that name.
+    /// targets. The first `--`, wherever it is, only ends the options, so
+    /// `prog -- -name.png` opens `-name.png`; a later `--` is a file of that
+    /// name.
     ///
     /// Relative paths are resolved against the invoking process's working
     /// directory, including remote activations. A URI with a local path, such
@@ -55,20 +56,26 @@ impl AppShellActivation {
     /// [`Self::arguments`] when the native OS form is required.
     #[must_use]
     pub fn file_arguments(&self) -> Vec<String> {
-        let mut targets = self.arguments.iter().skip(1).peekable();
-        targets.next_if(|argument| *argument == "--");
+        let open_target = |argument: &OsString| {
+            let file = self.cwd.as_ref().map_or_else(
+                || gio::File::for_commandline_arg(argument),
+                |cwd| gio::File::for_commandline_arg_and_cwd(argument, cwd),
+            );
+            file.path().map_or_else(
+                || file.uri().to_string(),
+                |path| path.to_string_lossy().into_owned(),
+            )
+        };
+        let mut options_ended = false;
+        let mut targets = Vec::new();
+        for argument in self.arguments.iter().skip(1) {
+            if !options_ended && argument == "--" {
+                options_ended = true;
+                continue;
+            }
+            targets.push(open_target(argument));
+        }
         targets
-            .map(|argument| {
-                let file = self.cwd.as_ref().map_or_else(
-                    || gio::File::for_commandline_arg(argument),
-                    |cwd| gio::File::for_commandline_arg_and_cwd(argument, cwd),
-                );
-                file.path().map_or_else(
-                    || file.uri().to_string(),
-                    |path| path.to_string_lossy().into_owned(),
-                )
-            })
-            .collect()
     }
 }
 
@@ -555,7 +562,7 @@ mod tests {
     #[test]
     fn first_double_dash_ends_options() {
         let activation = AppShellActivation {
-            arguments: ["demo", "--", "-name.png", "--"]
+            arguments: ["demo", "a.png", "--", "-name.png", "--"]
                 .map(OsString::from)
                 .to_vec(),
             cwd: Some(PathBuf::from("/invoker")),
@@ -563,7 +570,7 @@ mod tests {
 
         assert_eq!(
             activation.file_arguments(),
-            ["/invoker/-name.png", "/invoker/--"]
+            ["/invoker/a.png", "/invoker/-name.png", "/invoker/--"]
         );
     }
 
