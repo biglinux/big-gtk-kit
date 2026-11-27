@@ -54,9 +54,7 @@ fn inner_handle(widget: &gtk::Widget) -> Option<gtk::WindowHandle> {
 /// a drag that starts on a button moves the window; presses between the
 /// buttons reach it as before.
 fn keep_button_presses(handle: &gtk::WindowHandle) {
-    // The handle counts a press as the second of a double-click when it comes
-    // within the double-click time of the last press the handle saw.
-    let last_seen = Cell::new(None::<u32>);
+    let last_seen = Cell::new(None::<Press>);
     let controller = gtk::EventControllerLegacy::new();
     controller.connect_event(move |controller, event| {
         let primary = match event.event_type() {
@@ -66,27 +64,53 @@ fn keep_button_presses(handle: &gtk::WindowHandle) {
                 .is_some_and(|press| press.button() == gdk::BUTTON_PRIMARY),
             _ => return glib::Propagation::Proceed,
         };
-        let Some(handle) = controller.widget().and_downcast::<gtk::WindowHandle>() else {
+        let (Some(handle), Some((x, y))) = (
+            controller.widget().and_downcast::<gtk::WindowHandle>(),
+            event.position(),
+        ) else {
             return glib::Propagation::Proceed;
         };
-        let time = event.time();
+        let press = Press {
+            time: event.time(),
+            x,
+            y,
+        };
         if press_is_on_button(&handle, event) {
-            let double_click = handle.settings().gtk_double_click_time().unsigned_abs();
             let repeat = last_seen
                 .get()
-                .is_some_and(|seen| time.wrapping_sub(seen) <= double_click);
+                .is_some_and(|seen| press.repeats(seen, &handle.settings()));
             // Secondary and middle presses open the window menu or lower the
             // window on their first press.
             if repeat || !primary {
                 return glib::Propagation::Stop;
             }
         }
-        last_seen.set(Some(time));
+        last_seen.set(Some(press));
         glib::Propagation::Proceed
     });
     // A widget runs its last-added controller first, and a handled event stops
     // there, so the handle's own click and drag gestures never see the press.
     handle.add_controller(controller);
+}
+
+/// A press the handle saw, in surface coordinates.
+#[derive(Clone, Copy)]
+struct Press {
+    time: u32,
+    x: f64,
+    y: f64,
+}
+
+impl Press {
+    /// Whether the handle counts this press as the second of a double-click
+    /// after `earlier`: within the double-click time and distance, as
+    /// `GtkGestureClick` judges it.
+    fn repeats(self, earlier: Self, settings: &gtk::Settings) -> bool {
+        let distance = f64::from(settings.gtk_double_click_distance());
+        self.time.wrapping_sub(earlier.time) <= settings.gtk_double_click_time().unsigned_abs()
+            && (self.x - earlier.x).abs() < distance
+            && (self.y - earlier.y).abs() < distance
+    }
 }
 
 fn press_is_on_button(handle: &gtk::WindowHandle, event: &gdk::Event) -> bool {
@@ -170,6 +194,29 @@ mod tests {
             let (x, y) = center_of(&gap, &handle);
             assert!(!button_at(&handle, x, y), "a gap goes to the handle");
             window.destroy();
+        });
+    }
+
+    /// A press far from the last one starts a click of its own, as GTK counts
+    /// it, so a drag from a button right after a press elsewhere still moves
+    /// the window.
+    #[test]
+    fn far_press_is_no_repeat() {
+        big_testkit::harness::require_gtk_test(|| {
+            let settings = gtk::Settings::default().expect("a display");
+            let time = settings.gtk_double_click_time().unsigned_abs();
+            let distance = f64::from(settings.gtk_double_click_distance());
+            let first = Press {
+                time: 1000,
+                x: 10.0,
+                y: 10.0,
+            };
+            let at = |time, x| Press { time, x, y: 10.0 };
+            assert!(at(1000 + time, 10.0).repeats(first, &settings));
+            assert!(at(1001, 10.0 + distance / 2.0).repeats(first, &settings));
+            assert!(!at(1001, 10.0 + distance).repeats(first, &settings));
+            assert!(!at(1001, 210.0).repeats(first, &settings));
+            assert!(!at(1001 + time + 1, 10.0).repeats(first, &settings));
         });
     }
 
