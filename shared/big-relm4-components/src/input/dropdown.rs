@@ -6,6 +6,8 @@
 use crate::layout::widget_container::{children, descendants};
 use adw::prelude::*;
 use relm4::gtk;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Build a native choice row for preferences and dialog forms.
 ///
@@ -61,23 +63,58 @@ pub fn from_strings(labels: &[&str]) -> gtk::DropDown {
 /// The drop-down `builder` describes, as [`build_drop_down`] makes it, read by
 /// a screen reader as the field `name` and its choice: "`name`: choice", or
 /// `name` alone while nothing is chosen. `name` is already translated.
+///
+/// The choice is what the expression gives for the chosen item, followed as
+/// the item's properties change; GTK's own factory shows the text as it was
+/// when the item was bound, so items that change need a factory that binds it.
 #[must_use]
 pub fn named_drop_down(builder: gtk::builders::DropDownBuilder, name: &str) -> gtk::DropDown {
     let dropdown = build_drop_down(builder);
     // GTK names the drop-down, and through it its button, after the item the
     // button shows, by a labelled-by relation that outranks any label.
     dropdown.reset_relation(gtk::AccessibleRelation::LabelledBy);
-    label_with_choice(&dropdown, name);
-    let field = name.to_owned();
-    dropdown.connect_selected_item_notify(move |dropdown| label_with_choice(dropdown, &field));
-    let field = name.to_owned();
-    dropdown.connect_expression_notify(move |dropdown| label_with_choice(dropdown, &field));
+    let field: Rc<str> = name.into();
+    // The shown text also changes when a property the expression reads
+    // changes on the chosen item, which neither notify below reports.
+    let watch = Rc::new(RefCell::new(None::<gtk::ExpressionWatch>));
+    let follow = Rc::new({
+        let watch = Rc::clone(&watch);
+        move |dropdown: &gtk::DropDown| {
+            if let Some(old) = watch.take() {
+                old.unwatch();
+            }
+            label_with_choice(dropdown, &field);
+            if let (Some(expression), Some(item)) =
+                (dropdown.expression(), dropdown.selected_item())
+            {
+                let weak = dropdown.downgrade();
+                let field = Rc::clone(&field);
+                watch.replace(Some(expression.watch(Some(&item), move || {
+                    if let Some(dropdown) = weak.upgrade() {
+                        label_with_choice(&dropdown, &field);
+                    }
+                })));
+            }
+        }
+    });
+    follow(&dropdown);
+    dropdown.connect_selected_item_notify({
+        let follow = Rc::clone(&follow);
+        move |dropdown| follow(dropdown)
+    });
+    dropdown.connect_expression_notify(move |dropdown| follow(dropdown));
+    // The chosen item may outlive the drop-down, and its watch with it.
+    dropdown.connect_destroy(move |_| {
+        if let Some(old) = watch.take() {
+            old.unwatch();
+        }
+    });
     dropdown
 }
 
-/// Label `dropdown` as the field `name` and the text it shows for its choice:
-/// the choice's string through the drop-down's expression, else a
-/// [`gtk::StringObject`]'s string.
+/// Label `dropdown` as the field `name` and its choice: the drop-down's
+/// expression evaluated on the chosen item, else a [`gtk::StringObject`]'s
+/// string.
 fn label_with_choice(dropdown: &gtk::DropDown, name: &str) {
     let shown = dropdown
         .selected_item()
@@ -528,6 +565,31 @@ mod tests {
             assert_eq!(reads(c"Camera: Rear lens"), None);
             dropdown.set_model(Some(&gtk::StringList::new(&[])));
             assert_eq!(reads(c"Camera"), None);
+        });
+    }
+
+    /// The name follows a property the expression reads on the chosen item,
+    /// changed without replacing the item.
+    #[test]
+    fn named_drop_down_follows_item_property() {
+        big_testkit::harness::require_gtk_test(|| {
+            let choices = gtk::gio::ListStore::new::<gtk::Label>();
+            let front = gtk::Label::new(Some("Front"));
+            choices.append(&front);
+            let dropdown = named_drop_down(
+                gtk::DropDown::builder()
+                    .model(&choices)
+                    .expression(gtk::PropertyExpression::new(
+                        gtk::Label::static_type(),
+                        None::<gtk::Expression>,
+                        "label",
+                    )),
+                "Camera",
+            );
+            let reads = |name: &std::ffi::CStr| name_mismatch(dropdown.upcast_ref(), name);
+            assert_eq!(reads(c"Camera: Front"), None);
+            front.set_label("Rear");
+            assert_eq!(reads(c"Camera: Rear"), None);
         });
     }
 
