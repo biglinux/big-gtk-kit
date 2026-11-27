@@ -96,7 +96,10 @@ fn strict_request_rejects_unsafe_sources() {
         Err(BigImageError::InvalidSource { .. })
     ));
     assert!(matches!(
-        stage_request(&BigImageSpec::natural(&directory)),
+        stage_request(&BigImageSpec {
+            bound: None,
+            ..BigImageSpec::bounded(&directory, 1, 1)
+        }),
         Err(BigImageError::InvalidDisplayBound)
     ));
     assert!(matches!(
