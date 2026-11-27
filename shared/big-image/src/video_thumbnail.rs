@@ -185,16 +185,19 @@ fn extract_frame(
     seek: bool,
     cancellation: &AtomicBool,
 ) -> Result<BigRgbaImage, FrameFailure> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(FrameFailure::Transient);
+    }
+    if bound <= 0 || i64::from(bound) * i64::from(bound) > MAX_VIDEO_FRAME_PIXELS {
+        return Err(FrameFailure::NoPicture);
+    }
     // `ffmpeg` parses whatever the file holds, and a folder opened in the file
     // manager has every video in it thumbnailed without a click, so it runs
     // only in the thumbnailers' confinement: the system, the one file
     // read-only, an empty /tmp and no network. Where bubblewrap cannot run,
     // the file shows its type's icon.
-    if cancellation.load(Ordering::Acquire) || !crate::thumbnailer::sandbox_works() {
+    if !crate::thumbnailer::sandbox_works() {
         return Err(FrameFailure::Transient);
-    }
-    if bound <= 0 || i64::from(bound) * i64::from(bound) > MAX_VIDEO_FRAME_PIXELS {
-        return Err(FrameFailure::NoPicture);
     }
     // Through any links, as a document's page is: anything but a plain file,
     // or a loop of links, has no picture; anything else that stops the open
@@ -336,10 +339,8 @@ mod tests {
         if !Path::new(FFMPEG_PATH).exists() || !Path::new(FFPROBE_PATH).exists() {
             return;
         }
-        if std::env::var_os(WITHOUT_SANDBOX).is_none() {
-            if !Path::new(big_os_kit::confinement::BWRAP).exists() {
-                return;
-            }
+        // Where bubblewrap cannot run, this process already is the place.
+        if std::env::var_os(WITHOUT_SANDBOX).is_none() && crate::thumbnailer::sandbox_works() {
             // Run this test again in a namespace that may not make another,
             // where bubblewrap fails the way it does with user namespaces off.
             let out = BigSubprocessSpec::builder()
@@ -496,7 +497,10 @@ mod tests {
     /// A real song's tags, read through the confined `ffprobe`.
     #[test]
     fn song_shows_title_artist_length() {
-        if !Path::new(FFMPEG_PATH).exists() || !Path::new(FFPROBE_PATH).exists() {
+        if !Path::new(FFMPEG_PATH).exists()
+            || !Path::new(FFPROBE_PATH).exists()
+            || !crate::thumbnailer::sandbox_works()
+        {
             return;
         }
         let directory =

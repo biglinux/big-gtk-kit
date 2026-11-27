@@ -318,12 +318,6 @@ where
         let primary_window = component_root_window(controller.widget());
         let has_primary_window = primary_window.is_some();
         let primary_window = Rc::new(RefCell::new(primary_window));
-        if let Some(window) = primary_window.borrow().as_ref() {
-            let primary_window_for_destroy = Rc::clone(&primary_window);
-            window.connect_destroy(move |_| {
-                primary_window_for_destroy.borrow_mut().take();
-            });
-        }
         Self {
             controller,
             primary_window,
@@ -343,11 +337,22 @@ where
     }
 
     fn bind_primary_window(&self, app: &adw::Application) {
-        if let Some(window) = self.primary_window()
-            && window.application().as_ref() != Some(app.upcast_ref())
-        {
+        let Some(window) = self.primary_window() else {
+            return;
+        };
+        if window.application().as_ref() != Some(app.upcast_ref()) {
             window.set_application(Some(app));
         }
+        // A destroyed window leaves the application, but while this slot holds
+        // it, it is never disposed of and `destroy` never comes.
+        let primary_window = Rc::clone(&self.primary_window);
+        // leak-guard: allow(process-object-handler) AppShell wires one root per process
+        app.connect_window_removed(move |_, removed| {
+            let mut primary = primary_window.borrow_mut();
+            if primary.as_ref() == Some(removed) {
+                primary.take();
+            }
+        });
     }
 
     fn window_for_presentation(
@@ -444,6 +449,9 @@ impl AppShell {
                 return glib::ExitCode::FAILURE;
             }
         }
+        // GTK would set it again when it starts, after `start_threads` may have
+        // started a thread that reads it.
+        gtk::disable_setlocale();
         run_root_with_args::<C, OsString>(spec, process_args())
     }
 }
@@ -478,13 +486,13 @@ where
         return glib::ExitCode::FAILURE;
     };
     let _relm_app = relm4::RelmApp::<()>::from_app(app.clone());
-    let (root, deferred_local_command_line) = connect_root_activation::<C>(&app, watch_dark_mode);
+    let (root, local_command_line) = connect_root_activation::<C>(&app, watch_dark_mode);
     // Nothing changes the environment past here.
     if let Some(start) = spec.start_threads {
         start();
     }
     let application_exit_code = run_application_with_os_args(app.upcast_ref(), &args);
-    let exit_code = deferred_local_command_line
+    let exit_code = local_command_line
         .borrow_mut()
         .take()
         .map_or(application_exit_code, |command_line| {
@@ -771,20 +779,20 @@ pub fn install_focus_ring() {
 }
 
 type RootControllerSlot<C> = Rc<RefCell<Option<AppShellController<C>>>>;
-type DeferredLocalCommandLineSlot = Rc<RefCell<Option<gio::ApplicationCommandLine>>>;
+type LocalCommandLineSlot = Rc<RefCell<Option<gio::ApplicationCommandLine>>>;
 
 fn connect_root_activation<C>(
     app: &adw::Application,
     watch_dark_mode: bool,
-) -> (RootControllerSlot<C>, DeferredLocalCommandLineSlot)
+) -> (RootControllerSlot<C>, LocalCommandLineSlot)
 where
     C: AppShellComponent + 'static,
     C::Root: IsA<glib::Object>,
 {
     let root = Rc::new(RefCell::new(None::<AppShellController<C>>));
     let root_for_activation = Rc::clone(&root);
-    let deferred_local_command_line = Rc::new(RefCell::new(None));
-    let deferred_local_command_line_for_activation = Rc::clone(&deferred_local_command_line);
+    let local_command_line = Rc::new(RefCell::new(None));
+    let local_command_line_for_activation = Rc::clone(&local_command_line);
     app.connect_command_line(move |app, command_line| {
         let activation = AppShellActivation::from_command_line(command_line);
         let (request, tracker) = AppShellActivationRequest::new(activation);
@@ -799,24 +807,20 @@ where
                 tracker.fail_before_defer(AppShellActivationError::new(ACTIVATION_PANIC_ERROR, 1))
             }
         }
-        match tracker.resolve_or_defer(app.upcast_ref(), command_line) {
-            Some(Ok(())) => glib::ExitCode::SUCCESS,
+        let exit_code = match tracker.resolve_or_defer(app.upcast_ref(), command_line) {
+            Some(Ok(())) | None => glib::ExitCode::SUCCESS,
             Some(Err(error)) => {
                 print_command_line_error(command_line, error.message());
                 glib::ExitCode::from(error.status())
             }
-            None => {
-                if !command_line.is_remote()
-                    && deferred_local_command_line_for_activation
-                        .borrow()
-                        .is_none()
-                {
-                    *deferred_local_command_line_for_activation.borrow_mut() =
-                        Some(command_line.clone());
-                }
-                glib::ExitCode::SUCCESS
-            }
+        };
+        // `g_application_run` answers 0 once its main loop has turned, so the
+        // local launch's status is read back from its command line.
+        if !command_line.is_remote() && local_command_line_for_activation.borrow().is_none() {
+            command_line.set_exit_code(exit_code);
+            *local_command_line_for_activation.borrow_mut() = Some(command_line.clone());
         }
+        exit_code
     });
     if watch_dark_mode {
         let root_for_dark_mode = Rc::clone(&root);
@@ -833,7 +837,7 @@ where
             });
         });
     }
-    (root, deferred_local_command_line)
+    (root, local_command_line)
 }
 
 fn drive_root_activation<C>(

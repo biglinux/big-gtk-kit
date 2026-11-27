@@ -29,6 +29,14 @@ use gtk::{gdk, gio, glib};
 /// No program handles `uri`, or it could not be started.
 pub async fn open_uri(uri: &str, token: Option<&str>) -> Result<(), glib::Error> {
     let context = launch_context(Renderer::DefaultGpu, token, None);
+    // As in `launch`: a D-Bus-activated handler would not get the token.
+    if token.is_some() {
+        let file = gio::File::for_uri(uri);
+        let handler = file
+            .query_default_handler_future(glib::Priority::DEFAULT)
+            .await?;
+        return start(&handler, &[file], context.as_ref());
+    }
     gio::AppInfo::launch_default_for_uri_future(uri, context.as_ref()).await
 }
 
@@ -123,9 +131,10 @@ const CHROMIUM_FAMILY: &[&str] = &[
 /// person when it did not.
 fn with_page_accessibility(application: &gio::AppInfo) -> Option<gio::AppInfo> {
     std::env::var_os("GNOME_ACCESSIBILITY").filter(|value| value == "1")?;
-    // An entry without `Exec` has no executable, and gio reads that NULL as a path.
-    application.commandline()?;
-    let program = application.executable();
+    // Parsed from `Exec`: GIO's executable keeps the quotes of a quoted
+    // program, and an entry without `Exec` has none.
+    let argv = glib::shell_parse_argv(application.commandline()?).ok()?;
+    let program = std::path::Path::new(argv.first()?);
     if !CHROMIUM_FAMILY.contains(&program.file_name()?.to_str()?) {
         return None;
     }

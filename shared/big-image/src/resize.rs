@@ -86,7 +86,9 @@ pub fn shrink_rgb16(
     if width == 0 || height == 0 || width > from_width || height > from_height {
         return None;
     }
-    if stride < from_width * 6 || bytes.len() < stride * (from_height - 1) + from_width * 6 {
+    let row = from_width.checked_mul(6)?;
+    let span = stride.checked_mul(from_height - 1)?.checked_add(row)?;
+    if stride < row || bytes.len() < span {
         return None;
     }
     let column: Vec<usize> = (0..from_width).map(|x| x * width / from_width).collect();
@@ -207,6 +209,8 @@ mod tests {
         assert_eq!(means, [3, 250, 32768, 8, 8, 8]);
         assert!(shrink_rgb16(&bytes, 18, (3, 2), (4, 1)).is_none());
         assert!(shrink_rgb16(&bytes[..30], 18, (3, 2), (2, 1)).is_none());
+        // A stride whose second row lies past any buffer.
+        assert!(shrink_rgb16(&bytes[..6], usize::MAX, (1, 2), (1, 1)).is_none());
     }
 
     #[test]

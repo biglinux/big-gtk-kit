@@ -387,27 +387,129 @@ fn chromium_starts_with_page_tree() {
     );
 }
 
+/// Run `test` again in a child with `variables`, for what this process reads
+/// once: its environment, GIO's index of desktop files.
+fn run_in_child(test: &str, variables: &[(&str, &std::ffi::OsStr)]) {
+    let mut child = big_os_kit::subprocess::BigSubprocessSpec::builder()
+        .program(std::env::current_exe().expect("test binary"))
+        .args(["--exact", test, "--quiet"]);
+    for (name, value) in variables {
+        child = child.env(*name, *value);
+    }
+    let out = child
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .run()
+        .expect("child test runs");
+    assert!(
+        out.status.success() && out.stdout_lossy().contains("1 passed"),
+        "{}",
+        out.stdout_lossy()
+    );
+}
+
+/// A token given for the press reaches the default handler of a URI, also
+/// one whose entry the session bus would start, which passes no environment.
+#[test]
+fn given_token_reaches_bus_activatable_handler() {
+    const CHILD: &str = "BIG_APP_KIT_OPEN_URI_DIR";
+    let Some(dir) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+        let dir = glib::mkdtemp(std::env::temp_dir().join("big-app-kit-open-XXXXXX"))
+            .expect("temporary directory");
+        let applications = dir.join("data/applications");
+        std::fs::create_dir_all(&applications).expect("applications folder");
+        std::fs::create_dir_all(dir.join("config")).expect("config folder");
+        std::fs::write(
+            dir.join("record"),
+            "printf '%s %s' \"$XDG_ACTIVATION_TOKEN\" \"$1\" > \"$0.part\" && mv \"$0.part\" \"$0.out\"\n",
+        )
+        .expect("script");
+        std::fs::write(
+            applications.join("org.example.BigOpen.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Open\n\
+                 Exec=sh \"{}\" %u\nMimeType=x-scheme-handler/x-big-open;\n\
+                 DBusActivatable=true\nStartupNotify=true\n",
+                dir.join("record").display()
+            ),
+        )
+        .expect("desktop file");
+        std::fs::write(
+            dir.join("config/mimeapps.list"),
+            "[Default Applications]\nx-scheme-handler/x-big-open=org.example.BigOpen.desktop\n",
+        )
+        .expect("default handler");
+        run_in_child(
+            "own_scope::tests::given_token_reaches_bus_activatable_handler",
+            &[
+                (CHILD, dir.as_os_str()),
+                ("XDG_DATA_HOME", dir.join("data").as_os_str()),
+                ("XDG_CONFIG_HOME", dir.join("config").as_os_str()),
+            ],
+        );
+        std::fs::remove_dir_all(&dir).expect("temporary directory removed");
+        return;
+    };
+    glib::MainContext::default()
+        .block_on(open_uri("x-big-open:page", Some("press-token")))
+        .expect("handler started");
+    let seen = dir.join("record.out");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !seen.exists() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&seen).expect("the handler ran"),
+        "press-token x-big-open:page"
+    );
+}
+
+/// A Chromium entry whose `Exec` quotes the program still gets the page tree.
+#[test]
+fn quoted_chromium_gets_page_tree() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if std::env::var_os("GNOME_ACCESSIBILITY").is_none() {
+        run_in_child(
+            "own_scope::tests::quoted_chromium_gets_page_tree",
+            &[("GNOME_ACCESSIBILITY", std::ffi::OsStr::new("1"))],
+        );
+        return;
+    }
+    let dir = glib::mkdtemp(std::env::temp_dir().join("big-app-kit-chromium-XXXXXX"))
+        .expect("temporary directory");
+    let program = dir.join("chromium");
+    std::fs::write(&program, "#!/bin/sh\n").expect("program");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let entry = dir.join("org.example.Web.desktop");
+    std::fs::write(
+        &entry,
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Web\nExec=\"{}\" %U\n",
+            program.display()
+        ),
+    )
+    .expect("desktop file");
+    let application =
+        big_testkit::desktop_entry::app_info_from_file(&entry).expect("valid desktop file");
+    let accessible = with_page_accessibility(&application).and_then(|copy| copy.commandline());
+    std::fs::remove_dir_all(&dir).expect("temporary directory removed");
+    let commandline = accessible.expect("a Chromium-family entry");
+    assert!(
+        commandline
+            .to_string_lossy()
+            .contains("--force-renderer-accessibility"),
+        "{commandline:?}"
+    );
+}
+
 #[test]
 fn entry_without_exec_is_refused() {
     if std::env::var_os("GNOME_ACCESSIBILITY").is_none() {
         // Only read while programs are asked for their accessibility tree:
         // run this test again in a child that asks.
-        let out = big_os_kit::subprocess::BigSubprocessSpec::builder()
-            .program(std::env::current_exe().expect("test binary"))
-            .args([
-                "--exact",
-                "own_scope::tests::entry_without_exec_is_refused",
-                "--quiet",
-            ])
-            .env("GNOME_ACCESSIBILITY", "1")
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .run()
-            .expect("child test runs");
-        assert!(
-            out.status.success() && out.stdout_lossy().contains("1 passed"),
-            "{}",
-            out.stdout_lossy()
+        run_in_child(
+            "own_scope::tests::entry_without_exec_is_refused",
+            &[("GNOME_ACCESSIBILITY", std::ffi::OsStr::new("1"))],
         );
         return;
     }

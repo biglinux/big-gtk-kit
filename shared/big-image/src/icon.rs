@@ -233,7 +233,8 @@ fn missing_icon() -> gio::Icon {
     gio::ThemedIcon::new("image-missing-symbolic").upcast()
 }
 
-/// A cache key for `path` drawn `px` tall with `variant` (a tint, or empty).
+/// A cache key for `path` drawn `px` tall with `variant` (a tint, a shape, or
+/// empty).
 ///
 /// The file's length and modification time are part of it, so an icon theme
 /// update stops matching the entries of the icon it replaced.
@@ -350,33 +351,7 @@ pub fn gicon_texture(
         raster_texture(path, (px, px), key, deliver);
         return;
     }
-    if let Some(texture) = memory_hit(&key) {
-        deliver(Some(texture));
-        return;
-    }
-    if failed_lately(&key) {
-        deliver(None);
-        return;
-    }
-    // Read the cached bitmap (or, on a miss, the SVG) off the main thread, and
-    // decode off the main thread too. Opening a menu of many icons must never
-    // block the UI reading them from a slow disk: the tile keeps its placeholder
-    // until the texture lands a moment later. The rendered bitmap already on disk
-    // is authoritative, so it is honored before the SVG is read and decoded
-    // again. GTK's own guidance is `spawn_blocking` for this file I/O; the SVG
-    // decode already runs in the glycin sandbox.
-    glib::spawn_future_local(async move {
-        let cache_key = key.clone();
-        if let Ok(Some((width, height, stride, pixels))) =
-            gio::spawn_blocking(move || read_disk_rgba(&cache_key)).await
-        {
-            let texture = texture_from_rgba(width, height, stride, pixels);
-            memory_put(key, texture.clone());
-            deliver(Some(texture));
-            return;
-        }
-        svg_answer(key, SvgSource::File(path), px, deliver);
-    });
+    svg_answer(key, SvgSource::File(path), px, deliver);
 }
 
 /// Deliver the raster at `path` fitted inside `bound`: from memory at once,
@@ -491,10 +466,11 @@ pub fn file_texture(
     deliver: impl FnOnce(gdk::Texture) + 'static,
 ) {
     let height = (px * scale.max(1)).max(1);
-    let key = source_key(path, height, "");
     if path.extension().and_then(|ext| ext.to_str()) != Some("svg") {
         // As wide as a banner may reasonably be; the height is what was asked.
+        // Keyed apart from the icon of that height, which fits a square.
         let bound = (height.saturating_mul(8), height);
+        let key = source_key(path, height, "banner");
         raster_texture(path.to_path_buf(), bound, key, |texture| {
             if let Some(texture) = texture {
                 deliver(texture);
@@ -502,6 +478,7 @@ pub fn file_texture(
         });
         return;
     }
+    let key = source_key(path, height, "");
     if let Some(texture) = memory_hit(&key) {
         deliver(texture);
         return;
@@ -563,9 +540,9 @@ pub fn own_png_texture(path: &Path, deliver: impl FnOnce(gdk::Texture) + 'static
 }
 
 /// Deliver the texture for SVG `bytes` drawn `height_px` tall, as wide as that
-/// height makes it: from a cache at once, else from the sandboxed decoder when
-/// it is done. `deliver` runs on the main thread either way, and not at all when
-/// the sandbox could not draw it.
+/// height makes it: from memory at once, else from the disk cache or the
+/// sandboxed decoder a moment later. `deliver` runs on the main thread either
+/// way, and not at all when the sandbox could not draw it.
 ///
 /// `key` names the source (see [`source_key`]); two callers asking for the same
 /// key while a decode is in flight share it.
@@ -598,11 +575,6 @@ fn svg_answer(
         deliver(None);
         return;
     }
-    if let Some(texture) = disk_hit(&key) {
-        memory_put(key, texture.clone());
-        deliver(Some(texture));
-        return;
-    }
     if !join_waiters(&key, Box::new(deliver)) {
         return;
     }
@@ -618,14 +590,36 @@ fn svg_answer(
         PENDING_BYTE_JOBS.with(|jobs| jobs.set(jobs.get() + 1));
         PENDING_BYTES.with(|total| total.set(total.get().saturating_add(bytes.len())));
     }
-    PENDING.with(|pending| {
-        pending.borrow_mut().push_back(PendingSvg {
-            key,
-            source,
-            height_px,
+    // The bitmap already on disk is read off the main thread, where a slow
+    // home would hold a menu of icons; only a miss is decoded again.
+    glib::spawn_future_local(async move {
+        let cache_key = key.clone();
+        if let Ok(Some((width, height, stride, pixels))) =
+            gio::spawn_blocking(move || read_disk_rgba(&cache_key)).await
+        {
+            if let SvgSource::Bytes(bytes) = &source {
+                release_pending_bytes(bytes);
+            }
+            let texture = texture_from_rgba(width, height, stride, pixels);
+            memory_put(key.clone(), texture.clone());
+            answer_waiters(&key, Some(&texture));
+            return;
+        }
+        PENDING.with(|pending| {
+            pending.borrow_mut().push_back(PendingSvg {
+                key,
+                source,
+                height_px,
+            });
         });
+        start_pending_decodes();
     });
-    start_pending_decodes();
+}
+
+/// Take a queued job of handed-in `bytes` off the queue's ceilings.
+fn release_pending_bytes(bytes: &glib::Bytes) {
+    PENDING_BYTE_JOBS.with(|jobs| jobs.set(jobs.get().saturating_sub(1)));
+    PENDING_BYTES.with(|total| total.set(total.get().saturating_sub(bytes.len())));
 }
 
 fn start_pending_decodes() {
@@ -637,8 +631,7 @@ fn start_pending_decodes() {
             return;
         };
         if let SvgSource::Bytes(bytes) = &job.source {
-            PENDING_BYTE_JOBS.with(|jobs| jobs.set(jobs.get().saturating_sub(1)));
-            PENDING_BYTES.with(|total| total.set(total.get().saturating_sub(bytes.len())));
+            release_pending_bytes(bytes);
         }
         IN_FLIGHT.with(|count| count.set(count.get() + 1));
         glib::MainContext::default().spawn_local(async move {
@@ -843,11 +836,6 @@ fn texture_from_rgba(width: i32, height: i32, stride: usize, pixels: Vec<u8>) ->
     .upcast()
 }
 
-fn disk_hit(key: &str) -> Option<gdk::Texture> {
-    let (width, height, stride, pixels) = read_disk_rgba(key)?;
-    Some(texture_from_rgba(width, height, stride, pixels))
-}
-
 /// Write `texture` for `key`, for the other programs. Best effort: a cache that
 /// cannot be written is a cache that is empty, not an error anybody sees.
 fn disk_put(key: &str, texture: &gdk::Texture) {
@@ -1008,6 +996,68 @@ mod tests {
             let (linked, _) = answer(&file_icon(&link));
             let _ = std::fs::remove_dir_all(&dir);
             assert!(linked.is_ok(), "{linked:?}");
+        });
+    }
+
+    /// A wide picture drawn as a banner, then as an icon of the same height,
+    /// gives each its own size: the banner its width, the icon a square's.
+    #[test]
+    fn banner_and_icon_kept_apart() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dir = scratch("banner");
+            let wide = dir.join("wide.png");
+            let pixels = glib::Bytes::from_owned(vec![200u8; 256 * 32 * 4]);
+            let png =
+                gdk::MemoryTexture::new(256, 32, gdk::MemoryFormat::R8g8b8a8, &pixels, 256 * 4)
+                    .save_to_png_bytes();
+            std::fs::write(&wide, &png).unwrap();
+            let slot = std::rc::Rc::new(RefCell::new(None));
+            let sink = slot.clone();
+            file_texture(&wide, 32, 1, move |texture| {
+                sink.replace(Some(texture));
+            });
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while slot.borrow().is_none() {
+                assert!(Instant::now() < deadline, "no banner");
+                glib::MainContext::default().iteration(false);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let banner = slot.take().expect("a banner");
+            let (icon, _) = answer(&file_icon(&wide));
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!((banner.width(), banner.height()), (256, 32));
+            assert_eq!(icon.expect("an icon").width(), 32);
+        });
+    }
+
+    /// A bitmap on disk is read off the main thread: it arrives after the call
+    /// returns, and the bytes handed in are not decoded again.
+    #[test]
+    fn disk_hit_arrives_later() {
+        big_testkit::harness::require_gtk_test(|| {
+            let key = format!("test:disk-hit-{}|", std::process::id());
+            disk_put(&key, &texture_from_rgba(4, 4, 16, vec![255; 4 * 4 * 4]));
+            let entry = disk_path(&key).expect("a disk path");
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !entry.exists() {
+                assert!(Instant::now() < deadline, "no disk entry");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let slot = std::rc::Rc::new(RefCell::new(None));
+            let sink = slot.clone();
+            // Bytes the sandbox cannot draw: only the disk entry answers.
+            svg_texture(key, glib::Bytes::from_static(b"<svg"), 4, move |texture| {
+                sink.replace(Some(texture));
+            });
+            let at_once = slot.borrow().is_some();
+            while slot.borrow().is_none() {
+                assert!(Instant::now() < deadline, "no answer");
+                glib::MainContext::default().iteration(false);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let _ = std::fs::remove_file(&entry);
+            assert!(!at_once, "read on the main thread");
+            assert_eq!(slot.take().expect("an answer").width(), 4);
         });
     }
 

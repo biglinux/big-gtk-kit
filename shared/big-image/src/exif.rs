@@ -150,10 +150,9 @@ pub(crate) fn read_exif(bytes: &[u8]) -> BigExif {
     exif
 }
 
-/// The TIFF block of `raw` for a copy whose pixels stand upright: Orientation 1,
-/// and no thumbnail, which shows the picture before its turn, crop and resize.
-/// `None` when the first directory cannot be read, or the thumbnail lies before
-/// the second directory, where the first one's data is.
+/// The TIFF block of `raw` for an upright copy: Orientation 1, and no thumbnail,
+/// which shows the picture before its turn, crop and resize. `None` when no
+/// thumbnail can be cut out safely, or the first directory cannot be read.
 #[must_use]
 pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
     let tiff = raw.strip_prefix(b"Exif\0\0").unwrap_or(raw);
@@ -165,6 +164,9 @@ pub(crate) fn upright(raw: &[u8]) -> Option<Vec<u8>> {
     let second = usize::try_from(reader.u32_at(next)?).ok()?;
     let mut dropped = Vec::new();
     if second != 0 {
+        if thumbnail::in_strips(&reader, second) {
+            return None;
+        }
         let entries = usize::from(reader.u16_at(second).unwrap_or(0));
         dropped.push(second..second.saturating_add(2 + entries * 12 + 4));
         dropped.extend(thumbnail::thumbnail_span(&reader, second));
@@ -510,6 +512,17 @@ mod tests {
         tiff.splice(26..26, *b"IFD0DATA");
         tiff[44..48].copy_from_slice(&26u32.to_le_bytes());
         tiff[56..60].copy_from_slice(&8u32.to_le_bytes());
+        assert_eq!(upright(&tiff), None);
+    }
+
+    /// An uncompressed thumbnail in strips holds the picture before its crop:
+    /// the copy goes without EXIF rather than with those pixels.
+    #[test]
+    fn upright_refuses_strip_thumbnail() {
+        let mut tiff = thumbnail::tests::camera_tiff(6, Some(&[0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9]));
+        // The second directory at 26 names StripOffsets and StripByteCounts.
+        tiff[28..30].copy_from_slice(&0x0111u16.to_le_bytes());
+        tiff[40..42].copy_from_slice(&0x0117u16.to_le_bytes());
         assert_eq!(upright(&tiff), None);
     }
 
