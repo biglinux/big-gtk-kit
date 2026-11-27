@@ -433,6 +433,7 @@ fn file_listings_are_sorted_real_files() {
     fs::write(&b, "name = \"b\"\n").unwrap();
     fs::write(&a, "name = \"a\"\n").unwrap();
     fs::write(&ignored, "ignored").unwrap();
+    fs::create_dir(dir.join("folder.toml")).unwrap();
 
     assert_eq!(read_to_string(&a).unwrap(), "name = \"a\"\n");
     assert_eq!(
