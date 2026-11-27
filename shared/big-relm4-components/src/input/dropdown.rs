@@ -58,6 +58,46 @@ pub fn from_strings(labels: &[&str]) -> gtk::DropDown {
     build_drop_down(gtk::DropDown::builder().model(&gtk::StringList::new(labels)))
 }
 
+/// The drop-down `builder` describes, as [`build_drop_down`] makes it, read by
+/// a screen reader as the field `name` and its choice: "`name`: choice", or
+/// `name` alone while nothing is chosen. `name` is already translated.
+#[must_use]
+pub fn named_drop_down(builder: gtk::builders::DropDownBuilder, name: &str) -> gtk::DropDown {
+    let dropdown = build_drop_down(builder);
+    // GTK names the drop-down, and through it its button, after the item the
+    // button shows, by a labelled-by relation that outranks any label.
+    dropdown.reset_relation(gtk::AccessibleRelation::LabelledBy);
+    label_with_choice(&dropdown, name);
+    let field = name.to_owned();
+    dropdown.connect_selected_item_notify(move |dropdown| label_with_choice(dropdown, &field));
+    let field = name.to_owned();
+    dropdown.connect_expression_notify(move |dropdown| label_with_choice(dropdown, &field));
+    dropdown
+}
+
+/// Label `dropdown` as the field `name` and the text it shows for its choice:
+/// the choice's string through the drop-down's expression, else a
+/// [`gtk::StringObject`]'s string.
+fn label_with_choice(dropdown: &gtk::DropDown, name: &str) {
+    let shown = dropdown
+        .selected_item()
+        .and_then(|item| match dropdown.expression() {
+            Some(expression) => expression
+                .evaluate(Some(&item))
+                .and_then(|value| value.get::<Option<String>>().ok().flatten()),
+            None => item
+                .downcast::<gtk::StringObject>()
+                .ok()
+                .map(|choice| choice.string().into()),
+        })
+        .filter(|shown| !shown.is_empty());
+    let label = match shown {
+        Some(shown) => format!("{name}: {shown}"),
+        None => name.to_owned(),
+    };
+    dropdown.update_property(&[gtk::accessible::Property::Label(&label)]);
+}
+
 /// The widest a choice in the open list grows before it wraps, in characters.
 const LIST_WRAP_CHARS: i32 = 40;
 
@@ -455,6 +495,143 @@ mod tests {
                 popover.popdown();
                 assert!(big_testkit::harness::pump_until(|| !popover.is_mapped()));
             }
+            window.destroy();
+        });
+    }
+
+    /// The field's name stays first through every change of what is chosen.
+    #[test]
+    fn named_drop_down_follows_choice() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dropdown = named_drop_down(
+                gtk::DropDown::builder().model(&gtk::StringList::new(&[])),
+                "Camera",
+            );
+            let reads = |name: &std::ffi::CStr| name_mismatch(dropdown.upcast_ref(), name);
+            assert!(!gtk::test_accessible_has_relation(
+                &dropdown,
+                gtk::AccessibleRelation::LabelledBy
+            ));
+            assert_eq!(reads(c"Camera"), None);
+            dropdown.set_model(Some(&gtk::StringList::new(&["Front", "Rear"])));
+            assert_eq!(reads(c"Camera: Front"), None);
+            dropdown.set_selected(1);
+            assert_eq!(reads(c"Camera: Rear"), None);
+            // The drop-down shows what its expression says, not the item's string.
+            dropdown.set_expression(Some(gtk::ClosureExpression::with_callback(
+                [] as [gtk::Expression; 0],
+                |values| {
+                    let item = values[0].get::<gtk::StringObject>().expect("a choice");
+                    format!("{} lens", item.string())
+                },
+            )));
+            assert_eq!(reads(c"Camera: Rear lens"), None);
+            dropdown.set_model(Some(&gtk::StringList::new(&[])));
+            assert_eq!(reads(c"Camera"), None);
+        });
+    }
+
+    /// The `(role, name)` of each node of `application` in tree order whose
+    /// AT-SPI role is one of `roles`, as a screen reader reads them.
+    fn heard(
+        bus: &gtk::gio::DBusConnection,
+        application: &str,
+        roles: &[&str],
+    ) -> Vec<(String, String)> {
+        let call =
+            |path: &str, interface: &str, method: &str, arguments: Option<gtk::glib::Variant>| {
+                gtk::glib::MainContext::default()
+                    .block_on(bus.call_future(
+                        Some(application),
+                        path,
+                        interface,
+                        method,
+                        arguments.as_ref(),
+                        None,
+                        gtk::gio::DBusCallFlags::NONE,
+                        5000,
+                    ))
+                    .expect("the application answers")
+            };
+        let mut found = Vec::new();
+        let mut pending = vec!["/org/a11y/atspi/accessible/root".to_owned()];
+        while let Some(path) = pending.pop() {
+            let role = call(&path, "org.a11y.atspi.Accessible", "GetRoleName", None)
+                .child_value(0)
+                .get::<String>()
+                .expect("a role name");
+            if roles.contains(&role.as_str()) {
+                let name = call(
+                    &path,
+                    "org.freedesktop.DBus.Properties",
+                    "Get",
+                    Some(("org.a11y.atspi.Accessible", "Name").to_variant()),
+                )
+                .child_value(0)
+                .as_variant()
+                .and_then(|name| name.get::<String>())
+                .expect("a name");
+                found.push((role, name));
+            }
+            let children = call(&path, "org.a11y.atspi.Accessible", "GetChildren", None);
+            let children: Vec<String> = children
+                .child_value(0)
+                .iter()
+                .filter_map(|child| child.child_value(1).get::<gtk::glib::variant::ObjectPath>())
+                .map(|path| path.as_str().to_owned())
+                .collect();
+            pending.extend(children.into_iter().rev());
+        }
+        found
+    }
+
+    /// The combo box and the button that takes its focus are both read as the
+    /// field and its choice, empty and after a choice made in its list.
+    #[test]
+    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-relm4-components -- --ignored"]
+    fn named_drop_down_heard_with_choice() {
+        big_testkit::harness::require_gtk_test(|| {
+            use big_testkit::atspi::{accessibility_bus, settle};
+            let empty = named_drop_down(
+                gtk::DropDown::builder().model(&gtk::StringList::new(&[])),
+                "Microphone",
+            );
+            let chosen = named_drop_down(
+                gtk::DropDown::builder().model(&gtk::StringList::new(&["Front", "Rear"])),
+                "Camera",
+            );
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            column.append(&empty);
+            column.append(&chosen);
+            let window = gtk::Window::builder().child(&column).build();
+            window.present();
+            settle();
+            let (bus, application) =
+                accessibility_bus().expect("the AT-SPI bridge (headless-gate.sh --accessible)");
+            let read = || heard(&bus, &application, &["combo box", "toggle button"]);
+            let expected = |choice: &str| {
+                [
+                    ("combo box", "Microphone"),
+                    ("toggle button", "Microphone"),
+                    ("combo box", choice),
+                    ("toggle button", choice),
+                ]
+                .map(|(role, name)| (role.to_owned(), name.to_owned()))
+            };
+            assert_eq!(read(), expected("Camera: Front"));
+
+            gtk::prelude::WidgetExt::activate(&chosen);
+            let popover = first_descendant::<gtk::Popover>(chosen.upcast_ref()).expect("popup");
+            let list = first_descendant::<gtk::ListView>(popover.upcast_ref()).expect("list");
+            // A click selects the row in the list, then activates it.
+            list.model()
+                .and_downcast::<gtk::SingleSelection>()
+                .expect("the list's selection")
+                .set_selected(1);
+            list.emit_by_name::<()>("activate", &[&1_u32]);
+            settle();
+            assert_eq!(chosen.selected(), 1);
+            assert_eq!(read(), expected("Camera: Rear"));
             window.destroy();
         });
     }
