@@ -39,9 +39,18 @@ pub fn turned_jpeg(bytes: &[u8], quarter_turns: u8, mirrored: bool) -> Option<Ve
     // readers expect first.
     let mut insert_at = 2;
     loop {
+        // Fill bytes may precede a marker.
+        while bytes.get(at) == Some(&0xFF) && bytes.get(at + 1) == Some(&0xFF) {
+            at += 1;
+        }
         let marker = *bytes.get(at..at + 2)?.get(1)?;
         if bytes[at] != 0xFF || marker == 0xDA || marker == 0xD9 {
             break;
+        }
+        // Standalone markers carry no length.
+        if matches!(marker, 0x01 | 0xD0..=0xD7) {
+            at += 2;
+            continue;
         }
         let length = usize::from(u16::from_be_bytes([
             *bytes.get(at + 2)?,
@@ -257,6 +266,21 @@ mod tests {
         );
         jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
         assert_eq!(turned_jpeg(&jpeg, 1, false), None);
+    }
+
+    /// Fill bytes before a marker are stepped over to the orientation.
+    #[test]
+    fn fill_bytes_before_exif_skipped() {
+        let once = turned_jpeg(&plain_jpeg(), 1, false).expect("rewritten");
+        let app1 = once
+            .windows(2)
+            .position(|window| window == [0xFF, 0xE1])
+            .expect("an EXIF block");
+        let mut filled = once;
+        filled.insert(app1, 0xFF);
+        let turned = turned_jpeg(&filled, 1, false).expect("rewritten through the fill");
+        assert_eq!(orientation_of(&turned), 3);
+        assert_eq!(turned.len(), filled.len());
     }
 
     #[test]
