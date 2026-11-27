@@ -278,7 +278,8 @@ pub async fn send_clipboard(connection: &Connection, id: &str) -> zbus::Result<(
 }
 
 /// Ticks whenever the list of phones may have changed: a device appeared,
-/// went away or changed reachability, or the daemon started or stopped.
+/// went away, changed reachability or its plugins, or the daemon started or
+/// stopped.
 ///
 /// # Errors
 /// The bus refused the subscriptions.
@@ -293,7 +294,20 @@ pub async fn phones_changed(connection: &Connection) -> zbus::Result<impl Stream
         .receive_name_owner_changed_with_args(&[(0, SERVICE)])
         .await?
         .map(|_| ());
-    Ok(futures_util::stream::select(devices, owner))
+    // Any device's: turning sharing off on a phone changes no device list.
+    let plugins_rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(SERVICE)?
+        .interface("org.kde.kdeconnect.device")?
+        .member("pluginsChanged")?
+        .build();
+    let plugins = zbus::MessageStream::for_match_rule(plugins_rule, connection, None)
+        .await?
+        .map(|_| ());
+    Ok(futures_util::stream::select(
+        futures_util::stream::select(devices, owner),
+        plugins,
+    ))
 }
 
 /// Call `changed` with the phones running `plugin` now, and again after each
