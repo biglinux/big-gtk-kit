@@ -526,6 +526,23 @@ class WarningRules(unittest.TestCase):
                     lint(case.replace("INNER", inner)),
                 )
 
+    def test_quote_in_comment_hides_no_capture(self):
+        # Each comment's quote stays in its comment: the use between them counts.
+        self.assertIn(
+            ("handler-holds-owner", "warning"),
+            lint("""
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |_, _, _, _| {
+                    /* " */ widget.grab_focus(); /* " */
+                    Stop
+                });
+                widget.add_controller(keys);
+            }
+        """),
+        )
+
     def test_inner_closure_binding_holds_to_its_end(self):
         # The inner closure's `widget` reaches its last use: no capture.
         case = """
