@@ -46,8 +46,8 @@ big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
 loading in glycin's sandbox), `big-relm4-components` (Relm4 and libadwaita
 components), `big-app-kit` (the application shell) and `big-testkit` (the test
 harness). Each is a git dependency the same way, at the same revision as the
-kit. `big-image` calls what only this repository's copy
-of glycin has (`third_party/glycin/BIGLINUX-PATCH.md`), and Cargo reads
+kit. `big-image` calls what only this repository's copy of glycin has
+(`third_party/glycin/BIGLINUX-PATCH.md`), and Cargo reads
 `[patch]` only in the workspace it builds, so a program that uses it names the
 copy in its own `Cargo.toml`:
 

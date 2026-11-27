@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 BigLinux contributors
 // SPDX-License-Identifier: MIT
+
 //! Option rows that show their value and open a card of choices beside them.
 //!
 //! A click or Enter on a row opens its card on the window's overlay, beside
@@ -10,14 +11,16 @@
 //! crosses rows on its way elsewhere.
 //!
 //! The widgets' handlers only report [`CardEvent`]s; the owner passes them
-//! back to [`SideCards::handle`], so no handler holds a widget. Callers pass
-//! every string already translated.
+//! back to [`SideCards::handle`] once the handler that reported one returns,
+//! so no handler holds a widget: a choice is reported before the tile's own
+//! click picks it. Callers pass every string already translated.
 
-use crate::widget_tree::descendants;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
+
+use crate::widget_tree::descendants;
 
 /// The card's width; [`card`] holds its content to it.
 pub const CARD_WIDTH: i32 = 340;
@@ -156,7 +159,8 @@ impl SideCards {
     /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`; a row or an
     /// index without a card opens nothing. A row reports
     /// [`CardEvent::Activated`] itself: a [`ValueRow`] in a `gtk::ListBox`
-    /// does through `activated`.
+    /// does through `activated`. The cards and controllers stay on `layer` and
+    /// the rows for their lifetime: make one for each layer.
     pub fn new(
         layer: &gtk::Overlay,
         rows: Vec<gtk::Widget>,

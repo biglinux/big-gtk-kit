@@ -302,9 +302,10 @@ pub fn local_paths(answer: Result<Vec<gio::File>, glib::Error>) -> Vec<PathBuf> 
             .filter_map(|file| {
                 let path = file.path();
                 if path.is_none() {
+                    // The scheme alone: a remote URI may carry a user name.
                     log::warn!(
-                        "the file dialog chose {}, which is not on this computer",
-                        file.uri()
+                        "the file dialog chose a {} file, which is not on this computer",
+                        file.uri_scheme().unwrap_or_default()
                     );
                 }
                 path

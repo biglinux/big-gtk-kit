@@ -116,6 +116,10 @@ fn ask(
 /// and [`choose_future`](Self::choose_future), on the parent it was made for:
 /// a dialog once shown as a sheet cannot be shown in a window of its own.
 ///
+/// Each opening puts the focus on the field set as the dialog's focus, else on
+/// the first shown field that takes typing, else on the default response; a
+/// button set as the focus is passed over, as libadwaita sets one itself.
+///
 /// An `Alert` kept past its closing may hold the dialog while it asks
 /// something else: its [`close`](Self::close) then does nothing, and a
 /// [`WeakAlert`] stops upgrading. Everything else reached through the

@@ -212,8 +212,7 @@ fn first_field(dialog: &adw::Dialog) -> Option<gtk::Widget> {
 /// end of its closing, or with its window. Not at `closed`, which comes as the
 /// closing starts and before the `response` that closed an alert; in an idle,
 /// because one closing without animation leaves before that `response` too.
-/// From its second map on it takes the focus, which libadwaita gives a dialog
-/// only the first time.
+/// Each map places the focus, which libadwaita does only on the first.
 ///
 /// Only for a dialog made for [`presents_in_window`]. One that was shown in a
 /// window of its own all the same (its parent's window changed) is never given
@@ -290,6 +289,10 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
 /// something else: its [`close`](Self::close) then does nothing, and a
 /// [`WeakDialog`] stops upgrading. Everything else reached through the
 /// deref acts on whatever the dialog shows now.
+///
+/// Each opening puts the focus on the field set as the dialog's focus, else on
+/// the first shown field that takes typing, else on the default widget; a
+/// button set as the focus is passed over, as libadwaita sets one itself.
 ///
 /// Content sizes go through [`Self::set_content_width`],
 /// [`Self::set_content_height`] or [`Self::builder`]: [`present`](Self::present)
