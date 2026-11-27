@@ -9,7 +9,7 @@ cache's list; it does not avoid the listing. bigicons-papient has 38 directories
 plus 38 scaled ones, 23 130 files and 24 627 links; Adwaita has 34 directories
 and 804 files.
 
-`icon-cache-lookup.patch` (6 files, +434 −58) applies on 4.24.1 and on main
+`icon-cache-lookup.patch` (6 files, +438 −58) applies on 4.24.1 and on main
 b9cd9290d5. The commit message is at the top of the patch.
 
 ## Change
@@ -49,7 +49,10 @@ The patch adds `icontheme-cached` to `testsuite/gtk/meson.build`: the
 `16x16/cache-only.png`, and the file is removed after the cache is written, so
 only a lookup in the cache can find it. `/icontheme/cache` checks
 `has_icon()`, `get_icon_names()` and the lookup of that name; on the uncached
-themes it is skipped.
+themes it is skipped. `icontheme-cached` exists only in native builds: the cache
+is written by the `gtk4-update-icon-cache` just built, which a cross build
+cannot run (`meson introspect --tests` lists it natively and not with a cross
+file); `icontheme` runs in both.
 
 With this patch and image-missing-recursion, `meson test icontheme
 icontheme-cached` (wayland setup, headless compositor) passes on 4.24.1 and on

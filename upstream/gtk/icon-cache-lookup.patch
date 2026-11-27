@@ -24,8 +24,8 @@ icon-theme.cache, one of which lists an icon that is not on disk.
  gtk/gtkicontheme.c                 | 282 ++++++++++++++++++++++++-----
  testsuite/gtk/cache-icon-themes.py |  29 +++
  testsuite/gtk/icontheme.c          |  27 +++
- testsuite/gtk/meson.build          |  27 +++
- 6 files changed, 434 insertions(+), 58 deletions(-)
+ testsuite/gtk/meson.build          |  31 ++++
+ 6 files changed, 438 insertions(+), 58 deletions(-)
  create mode 100755 testsuite/gtk/cache-icon-themes.py
 
 diff --git a/gtk/gtkiconcache.c b/gtk/gtkiconcache.c
@@ -767,38 +767,42 @@ index b290cfe680..943c97685c 100644
    return g_test_run();
  }
 diff --git a/testsuite/gtk/meson.build b/testsuite/gtk/meson.build
-index df507ca828..80aff476da 100644
+index df507ca828..b30c284afd 100644
 --- a/testsuite/gtk/meson.build
 +++ b/testsuite/gtk/meson.build
-@@ -167,6 +167,22 @@ foreach flag: common_cflags
+@@ -167,6 +167,26 @@ foreach flag: common_cflags
    endif
  endforeach
  
-+# icontheme runs a second time on copies of its themes with an icon-theme.cache
-+cached_icon_themes = custom_target('cached-icon-themes',
-+  output: 'cached-icon-themes',
-+  command: [
-+    find_program('cache-icon-themes.py'),
-+    gtk4_update_icon_cache,
-+    meson.current_source_dir(),
-+    '@OUTPUT@',
-+  ],
-+  # Copies the whole test themes, so it follows any file in them
-+  build_always_stale: true,
-+)
++# icontheme runs a second time on copies of its themes with an icon-theme.cache.
++# The cache is written by the gtk4-update-icon-cache just built, which only
++# runs on the build machine in a native build.
++if not meson.is_cross_build()
++  cached_icon_themes = custom_target('cached-icon-themes',
++    output: 'cached-icon-themes',
++    command: [
++      find_program('cache-icon-themes.py'),
++      gtk4_update_icon_cache,
++      meson.current_source_dir(),
++      '@OUTPUT@',
++    ],
++    # Copies the whole test themes, so it follows any file in them
++    build_always_stale: true,
++  )
 +
-+cached_icon_themes_env = test_env
-+cached_icon_themes_env.set('G_TEST_SRCDIR', cached_icon_themes.full_path())
++  cached_icon_themes_env = test_env
++  cached_icon_themes_env.set('G_TEST_SRCDIR', cached_icon_themes.full_path())
++endif
 +
  foreach t : tests
    test_name = t.get('name')
    test_srcs = ['@0@.c'.format(test_name)] + t.get('sources', [])
-@@ -195,6 +211,17 @@ foreach t : tests
+@@ -195,6 +215,17 @@ foreach t : tests
      env: test_env,
      suite: ['gtk'] + test_extra_suites,
    )
 +
-+  if test_name == 'icontheme'
++  if test_name == 'icontheme' and not meson.is_cross_build()
 +    test('icontheme-cached', test_exe,
 +      args: [ '--tap', '-k' ],
 +      protocol: 'tap',
