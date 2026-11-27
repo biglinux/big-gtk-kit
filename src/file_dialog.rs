@@ -1068,7 +1068,8 @@ mod tests {
                 );
                 // The reply on the bus before the portal leaves it, so the call
                 // succeeds and only the name watch can answer: a reply lost
-                // with the connection is an error, never a fallback.
+                // with the connection would fall back through the bus's
+                // `NoReply` as well, and pass without the watch.
                 portal.flush_sync(gio::Cancellable::NONE).expect("flushed");
                 // Unowned first: gio-rs unwraps the connection GIO hands a
                 // closed one's `name_lost` as NULL.
