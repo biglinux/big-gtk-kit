@@ -776,7 +776,10 @@ mod tests {
         }
         let batch = reader.next_batch(2);
         fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(batch.len(), 2, "{order:?}");
+        // The two names after the vanished ones, which only a reader that met
+        // them in this order and read on gives.
+        let names: Vec<_> = batch.into_iter().map(|entry| entry.name).collect();
+        assert_eq!(names, order[skip + 2..skip + 4], "{order:?}");
         assert!(!reader.incomplete());
     }
 
