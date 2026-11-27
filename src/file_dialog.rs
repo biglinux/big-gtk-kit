@@ -169,13 +169,14 @@ impl FileRequest {
 }
 
 /// The glob `*.suffix` in any letter case, written as GTK writes a suffix
-/// filter for the portal: `mp3` gives `*.[mM][pP]3`.
+/// filter for the portal: `mp3` gives `*.[mM][pP]3`, and `ß`, whose
+/// uppercase `SS` no bracket can hold, stays `ß`.
 fn suffix_glob(suffix: &str) -> String {
     let mut glob = String::from("*.");
     for character in suffix.chars() {
         let lower = character.to_lowercase().collect::<String>();
         let upper = character.to_uppercase().collect::<String>();
-        if lower == upper {
+        if lower == upper || lower.chars().count() > 1 || upper.chars().count() > 1 {
             if matches!(character, '*' | '?' | '[' | ']') {
                 glob.push('[');
                 glob.push(character);
@@ -916,6 +917,10 @@ mod tests {
         assert_eq!(suffix_glob("mp3"), "*.[mM][pP]3");
         assert_eq!(suffix_glob("tar.gz"), "*.[tT][aA][rR].[gG][zZ]");
         assert_eq!(suffix_glob("a*b"), "*.[aA][*][bB]");
+        // GLib's one-character mapping, which GTK's glob uses: `ß` has no
+        // uppercase of its own, `ẞ` lowercases to `ß`.
+        assert_eq!(suffix_glob("straße"), "*.[sS][tT][rR][aA]ß[eE]");
+        assert_eq!(suffix_glob("ẞ"), "*.[ßẞ]");
         let request = FileRequest::open_files().offering_suffixes("Audio", &["mp3", "ogg"]);
         assert_eq!(request.types[0].patterns, ["*.[mM][pP]3", "*.[oO][gG][gG]"]);
     }
