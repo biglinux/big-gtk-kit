@@ -5,6 +5,7 @@
 //! Products supply buttons with their own navigation, middle-click and edit
 //! actions. This module owns only fitting, separators and the ancestor menu.
 
+use crate::layout::widget_container::children;
 use big_gtk_kit::tooltip::name_control;
 use gtk::prelude::*;
 
@@ -178,12 +179,8 @@ fn fit(overflow: &gtk::MenuButton, menu: &gtk::Box, available: i32) {
             hidden += 2;
         }
     }
-    let mut entry = menu.first_child();
-    let mut index = 0;
-    while let Some(widget) = entry {
-        entry = widget.next_sibling();
+    for (index, widget) in children(menu).enumerate() {
         widget.set_visible(index < hidden / 2);
-        index += 1;
     }
 }
 
@@ -265,12 +262,8 @@ mod tests {
                     hidden += usize::from(!button.get_visible());
                 }
                 assert_eq!(trail.overflow.get_visible(), hidden > 0);
-                let mut entry = trail.menu.first_child();
-                let mut index = 0;
-                while let Some(widget) = entry {
-                    entry = widget.next_sibling();
+                for (index, widget) in children(&trail.menu).enumerate() {
                     assert_eq!(widget.get_visible(), index < hidden);
-                    index += 1;
                 }
             }
             fit(&trail.overflow, &trail.menu, 1);
