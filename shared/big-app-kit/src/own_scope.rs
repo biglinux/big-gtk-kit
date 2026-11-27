@@ -234,9 +234,10 @@ const SOFTWARE_RENDERING: [(&str, &str); 8] = [
 /// a Vulkan program that picks the dedicated GPU by itself (DXVK) on the
 /// integrated one; the non-default GPU is turned on first where
 /// `big-dgpu-power` has it off. That asks the system bus first; a failure of
-/// that lookup shows in the log only, and the program starts as [`launch`]
-/// would start an entry without a preference. Such a launch answers before
-/// the program starts: `failed` hears why it could not.
+/// that lookup shows in the log only, and the program starts with the
+/// session's environment, less the NVIDIA offload variables when the default
+/// GPU was asked for. Such a launch answers before the program starts:
+/// `failed` hears why it could not.
 ///
 /// # Errors
 ///
