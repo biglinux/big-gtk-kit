@@ -47,8 +47,8 @@ pub fn handed_file() -> PathBuf {
 /// A session unlocked without a password (`loginctl unlock-session`) waits on
 /// until a password unlocks it; a watch that cannot be made, or that ends
 /// with its folder removed, runs `then` at once, since a password window
-/// beats a program that never asks. A thread
-/// that cannot start drops `then` unrun, which the log says.
+/// beats a program that never asks. A thread that cannot start drops `then`
+/// unrun, which the log says.
 pub fn when_handed(then: impl FnOnce() + 'static) {
     wait_in(&glib::user_runtime_dir(), then);
 }
