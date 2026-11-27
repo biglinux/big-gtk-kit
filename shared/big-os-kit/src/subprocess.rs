@@ -407,6 +407,9 @@ impl BigSubprocessSpec {
     }
 
     fn prepare(&self, cancel: &AtomicBool) -> Result<(), BigSubprocessError> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BigSubprocessError::Cancelled);
+        }
         match &self.before_run {
             Some(prepare) => (prepare.0)(cancel),
             None => Ok(()),
@@ -1183,6 +1186,11 @@ fn run_validated(
 ) -> Result<BigSubprocessOutput, BigSubprocessError> {
     use std::io::Write;
 
+    // A cancel that came during the preparation: a child started now could
+    // finish its work before the loop below looks at the flag.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(BigSubprocessError::Cancelled);
+    }
     let mut cmd = build_command(spec);
     let mut child = cmd.spawn().map_err(BigSubprocessError::Spawn)?;
 
