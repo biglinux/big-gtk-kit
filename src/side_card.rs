@@ -314,9 +314,7 @@ impl SideCards {
         let (Some(row), Some(card)) = (self.rows.get(index), self.cards.get(index)) else {
             return;
         };
-        // A card taller than the overlay scrolls.
-        card.set_max_content_height((self.layer.height() - 2 * GAP).max(0));
-        if !place_beside(&self.layer, row, card.upcast_ref(), &self.bridge) {
+        if !place_beside(&self.layer, row, card, &self.bridge) {
             return;
         }
         row.add_css_class("card-open");
@@ -405,8 +403,13 @@ pub fn card(description: &str, choices: &impl IsA<gtk::Widget>) -> gtk::Scrolled
         .maximum_size(CARD_WIDTH)
         .tightening_threshold(CARD_WIDTH)
         .build();
+    scrolling_card(&clamp)
+}
+
+/// `content` in a card that [`place_beside`] can hold to the overlay's height.
+pub(crate) fn scrolling_card(content: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
-        .child(&clamp)
+        .child(content)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_width(true)
         .propagate_natural_height(true)
@@ -488,10 +491,11 @@ pub(crate) fn install_css() {
 /// Show `card` beside `row` on `layer`, joined by `bridge`, on whichever side
 /// has room, else below the row without the bridge, always inside the
 /// overlay; `false`, and nothing shown, when the row is not on the overlay.
+/// A card taller than the overlay scrolls.
 pub(crate) fn place_beside(
     layer: &gtk::Overlay,
     row: &gtk::Widget,
-    card: &gtk::Widget,
+    card: &gtk::ScrolledWindow,
     bridge: &gtk::Box,
 ) -> bool {
     let Some(bounds) = row.compute_bounds(layer) else {
@@ -499,8 +503,13 @@ pub(crate) fn place_beside(
     };
     let (x, y) = (bounds.x() as i32, bounds.y() as i32);
     let (width, height) = (bounds.width() as i32, bounds.height() as i32);
-    // Hidden, a card would measure 0.
+    // Hidden, a card would measure 0; a measure counts the margins, which
+    // still place it where it last opened.
     card.set_visible(true);
+    card.set_margin_start(0);
+    card.set_margin_end(0);
+    card.set_margin_top(0);
+    card.set_max_content_height((layer.height() - 2 * GAP).max(0));
     // Margins count from the start edge, which is the right one in a
     // right-to-left layout.
     let rtl = layer.direction() == gtk::TextDirection::Rtl;
@@ -799,6 +808,48 @@ mod tests {
                 .compute_bounds(&layer)
                 .expect("the row's bounds");
             assert!(card.y() + card.height() <= row.y(), "{card:?} over {row:?}");
+            fixture.window.destroy();
+        });
+    }
+
+    /// A card opened again lands where it opened the first time, beside its
+    /// row.
+    #[test]
+    fn reopened_card_keeps_place() {
+        big_testkit::harness::require_gtk_test(|| {
+            let mut fixture = Fixture::new();
+            let layer = fixture
+                .row
+                .row
+                .ancestor(gtk::Overlay::static_type())
+                .expect("the layer");
+            layer.set_halign(gtk::Align::Start);
+            layer.set_size_request(450, -1);
+            let list = fixture.row.row.parent().expect("the list");
+            list.set_halign(gtk::Align::Start);
+            list.set_size_request(200, -1);
+            assert!(big_testkit::harness::pump_frame(&fixture.window));
+            let mut opened = Vec::new();
+            for _ in 0..2 {
+                fixture.cards.handle(CardEvent::Activated(0));
+                assert!(big_testkit::harness::pump_frame(&fixture.window));
+                let card = fixture.cards.cards[0]
+                    .compute_bounds(&layer)
+                    .expect("the card's bounds");
+                opened.push((card.x(), card.y(), card.width(), card.height()));
+                fixture.cards.close();
+                assert!(big_testkit::harness::pump_frame(&fixture.window));
+            }
+            assert_eq!(opened[0], opened[1]);
+            let row = fixture
+                .row
+                .row
+                .compute_bounds(&layer)
+                .expect("the row's bounds");
+            assert!(
+                opened[1].0 >= row.x() + row.width(),
+                "{opened:?} over {row:?}"
+            );
             fixture.window.destroy();
         });
     }
