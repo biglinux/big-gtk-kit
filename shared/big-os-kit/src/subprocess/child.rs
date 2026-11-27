@@ -227,7 +227,9 @@ impl BigSubprocessChild {
     }
 
     /// Block until the child exits, first closing a stdin pipe nobody took,
-    /// as [`std::process::Child::wait`] does.
+    /// as [`std::process::Child::wait`] does. Every clone shares that pipe: a
+    /// reaper thread that waits on a clone at once closes it for the owner,
+    /// who takes stdin with [`Self::take_stdin`] before handing the clone over.
     ///
     /// Polls with short lock holds instead of a blocking `wait(2)` under the
     /// handle lock, so a concurrent [`Self::terminate`]/[`Self::kill`] from a
