@@ -362,7 +362,7 @@ def bindings(text: str) -> tuple[dict[str, str], dict[str, str]]:
 
 
 def top_level_arguments(arguments: str) -> list[str]:
-    """`a, f(b, c), d` -> [`a`, `f(b, c)`, `d`]."""
+    """`a, f(b, c), d` and `a, f(b, c), d,` -> [`a`, `f(b, c)`, `d`]."""
     parts, depth, current = [], 0, []
     for c in arguments:
         if c in "([{":
@@ -374,7 +374,9 @@ def top_level_arguments(arguments: str) -> list[str]:
             current = []
         else:
             current.append(c)
-    parts.append("".join(current))
+    tail = "".join(current)
+    if tail.strip() or not parts:
+        parts.append(tail)
     return parts
 
 
@@ -489,10 +491,9 @@ def match_arms_brace(body: str, start: int) -> int:
     """Where the `{` that opens the arms of the `match` whose scrutinee starts at
     `start` is, or -1: past a block scrutinee and past braces inside brackets."""
     i = start
-    while i < len(body) and body[i].isspace():
-        i += 1
-    if body.startswith("{", i):  # a block as the scrutinee
-        i += len(call_argument(body, i)) + 2
+    # a block, or an `unsafe` one, as the scrutinee
+    if block := re.compile(r"\s*(?:unsafe\s*)?(?=\{)").match(body, start):
+        i = block.end() + len(call_argument(body, block.end())) + 2
     depth = 0
     for j in range(i, len(body)):
         c = body[j]
@@ -529,8 +530,8 @@ def match_arm_patterns(body: str) -> list[tuple[int, int, int]]:
                 comma = re.match(r"\s*,", body[arm:close])
                 start = arm + (comma.end() if comma else 0)
             else:
-                comma = top_level_index(body, arm, close, ",")
-                if comma < 0:
+                comma = expression_end(body, arm)
+                if comma >= close:
                     break  # the last arm
                 start = comma + 1
         if not arms:  # `match never {}`, or a brace this reader took for the arms
@@ -617,8 +618,12 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
             continue  # the binding itself
         if not any(lo <= m.start() < hi for lo, hi in shadowed.get(name, ())):
             used.add(name)  # outside every inner binding: the outer one, captured
-    # a local closure is used by calling it
-    calls = set(re.findall(r"(?<![.\w:])([a-z_]\w*)\s*\(", body)) - params
+    # a local closure is used by calling it, unless an inner binding of its name is called
+    calls = {
+        m.group(1)
+        for m in re.finditer(r"(?<![.\w:])([a-z_]\w*)\s*\(", body)
+        if not any(lo <= m.start() < hi for lo, hi in shadowed.get(m.group(1), ()))
+    } - params
     used -= params
     used -= {
         "self",
@@ -657,9 +662,16 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     return held
 
 
-# A handler connected on a local or on a field of `self`: `picker.open` is the
-# field of another value, never the local `open`.
-CONNECT = re.compile(r"(?<![\w.])((?:\w+\.)*\w+)\s*\.\s*connect_\w+\s*\(")
+CONNECT = re.compile(r"(?<![\w.])((?:\w+\s*\.\s*)*\w+)\s*\.\s*connect_\w+\s*\(")
+
+
+def connected_locals(text: str):
+    """(match, name) of each handler connected on a local or on a field of `self`:
+    `picker.open` is the field of another value, never the local `open`."""
+    for m in CONNECT.finditer(text):
+        target = source_name(re.sub(r"\s+", "", m.group(1)))
+        if "." not in target:
+            yield m, target
 
 
 def rule_handler_holds_owner(src: Source):
@@ -699,10 +711,7 @@ def rule_handler_holds_owner(src: Source):
                 if more:
                     parents |= more
                     changed = True
-        for m in CONNECT.finditer(text):
-            target = source_name(m.group(1))
-            if "." in target:
-                continue  # a field of another value, not a local
+        for m, target in connected_locals(text):
             index = max(i for i, st in enumerate(starts) if st <= m.start())
             strong = handler_captures(text, m.end(), text[: m.start()], values)
             if target in strong:
@@ -734,10 +743,7 @@ def rule_mutual_siblings(src: Source):
             starts.append(pos)
             pos += len(line) + 1
         holds: dict[str, tuple[set[str], int]] = {}
-        for m in CONNECT.finditer(text):
-            target = source_name(m.group(1))
-            if "." in target:
-                continue  # a field of another value, not a local
+        for m, target in connected_locals(text):
             index = max(i for i, st in enumerate(starts) if st <= m.start())
             before = "\n".join(body[max(0, index - 12) : index + 1])
             strong = handler_captures(text, m.end(), before)
@@ -787,7 +793,8 @@ PROCESS_OBJECT = (
 def dropped_result(text: str, line_start: int, call_end: int) -> bool:
     """Whether a statement starts at `line_start` and ends after the call that
     ends at `call_end`: what the call returns goes nowhere."""
-    before = text[:line_start].rstrip()
+    # the statement's own outer attributes (`#[cfg(unix)]`) come before its start
+    before = re.sub(r"(?:#\[[^\[\]]*\]\s*)+\Z", "", text[:line_start]).rstrip()
     starts_here = not before or before[-1] in ";{}"
     return starts_here and text[call_end:].lstrip().startswith(";")
 
@@ -827,7 +834,23 @@ def none_arm_continues(closure: str) -> bool:
     source after its target is gone. Only a `None` arm is read: a let-else, an
     `if let` with an `else`, a `_` arm, `map_or` or `is_none()` that continues on
     a failed upgrade is not seen."""
-    for m in re.finditer(r"\bNone\s*=>\s*", closure):
+    matches = []  # (arms brace, its close, whether the scrutinee upgrades)
+    for m in re.finditer(r"\bmatch\b", closure):
+        brace = match_arms_brace(closure, m.end())
+        if brace >= 0:
+            close = brace + len(call_argument(closure, brace)) + 1
+            upgrades = re.search(r"\.upgrade\(\)", closure[m.end() : brace]) is not None
+            matches.append((brace, close, upgrades))
+    # A match inside the arms of one on an upgrade (`Some(t) => match next() {…}`)
+    # is not about the upgrade: the outer `None` arm is.
+    nested = [
+        (lo, hi)
+        for lo, hi, _ in matches
+        if any(upgrades and outer < lo < end for outer, end, upgrades in matches)
+    ]
+    for m in re.finditer(r"\bNone\s*(?:if\b[^;{}]*?)?=>\s*", closure):
+        if any(lo < m.start() < hi for lo, hi in nested):
+            continue
         if closure.startswith("{", m.end()):
             arm = call_argument(closure, m.end())
         else:
@@ -845,15 +868,24 @@ def rule_repeating_source_without_weak_exit(src: Source):
             continue  # the id is kept, returned or passed on
         closure = top_level_arguments(arg)[-1].strip()
         if re.fullmatch(r"\w+", closure):
-            local = list(
-                re.finditer(
-                    rf"\blet\s+(?:mut\s+)?{re.escape(closure)}\s*(?::[^=;]*)?=(?!=)",
-                    src.text[: m.start()],
-                )
+            # the binding visible here: in this fn, outside the blocks closed before the call
+            line = src.line_of(m.start())
+            fn_first = next(
+                (first for first, last in src.functions() if first < line <= last), 0
             )
+            head = src.text[src.starts[fn_first] : m.start()]
+            open_at_end = in_scope_at_end(head)
+            local = [
+                binding
+                for binding in re.finditer(
+                    rf"\blet\s+(?:mut\s+)?{re.escape(closure)}\s*(?::[^=;]*)?=(?!=)",
+                    head,
+                )
+                if open_at_end[binding.start()]
+            ]
             if not local:
                 continue  # a fn item captures nothing
-            closure = statement_after(src.text, local[-1].end())
+            closure = statement_after(head, local[-1].end())
         # words in strings and block comments are not code
         closure = re.sub(
             r'"(?:\\.|[^"\\])*"|/\*.*?\*/',
@@ -959,7 +991,8 @@ def rust_files(paths: list[str]) -> list[Path]:
             out.extend(
                 f
                 for f in sorted(p.rglob("*.rs"))
-                if not ({"target", ".git"} & set(f.relative_to(p).parts))
+                if f.is_file()
+                and not ({"target", ".git"} & set(f.relative_to(p).parts))
             )
         else:
             raise ValueError(f"{raw} is neither a .rs file nor a directory")

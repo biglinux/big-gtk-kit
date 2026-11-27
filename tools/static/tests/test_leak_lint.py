@@ -315,6 +315,35 @@ class WarningRules(unittest.TestCase):
             [],
         )
 
+    def test_receiver_path_across_lines(self):
+        # `self\n.button` is the field `button`; `other\n.button` names no local.
+        self.assertIn(
+            ("handler-holds-owner", "warning"),
+            lint("""
+            impl Window {
+                fn wire(&self) {
+                    let button = self.button.clone();
+                    self
+                        .button
+                        .connect_clicked(move |_| button.set_label("x"));
+                }
+            }
+        """),
+        )
+        for receiver in ("other\n.button", "other()\n.button"):
+            with self.subTest(receiver=receiver):
+                self.assertEqual(
+                    lint(f"""
+                    fn wire(other: &Other) {{
+                        let button = gtk::Button::new();
+                        let held = button.clone();
+                        {receiver}
+                            .connect_clicked(move |_| held.set_label("x"));
+                    }}
+                    """),
+                    [],
+                )
+
     def test_flag_set_pipes_bind_nothing(self):
         # The `|` of a pattern and of a flag set paired with the inner
         # closure's `|popover|`.
@@ -410,7 +439,10 @@ class WarningRules(unittest.TestCase):
                 self.assertEqual(lint(case.replace("SCRUTINEE", scrutinee)), [])
 
     def test_match_without_arms_read(self):
-        for scrutinee in ("never {}", "unsafe { read() } { _ => () }"):
+        for scrutinee in (
+            "never {}",
+            "unsafe { read() } { Some(button) => button.show(), _ => () }",
+        ):
             with self.subTest(scrutinee=scrutinee):
                 self.assertEqual(
                     lint(f"""
@@ -444,6 +476,30 @@ class WarningRules(unittest.TestCase):
             }
         """),
         )
+
+    def test_turbofish_comma_ends_no_arm(self):
+        # The arm `cast::<A, B>(&widget)` reads the function's `widget` whole.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match controller.event() {
+                    FIRST,
+                    SECOND,
+                });
+                widget.add_controller(keys);
+            }
+        """
+        warns = [("handler-holds-owner", "warning")]
+        for first, second, expected in (
+            ("Some(other) => cast::<A, B>(&widget)", "None => Proceed", warns),
+            ("None => cast::<A, B>(other)", "Some(widget) => widget.show()", []),
+        ):
+            with self.subTest(first=first):
+                self.assertEqual(
+                    lint(case.replace("FIRST", first).replace("SECOND", second)),
+                    expected,
+                )
 
     def test_field_label_binds_nothing(self):
         # In `Event { widget: w }` the arm binds `w`; its `widget` is the function's.
@@ -597,6 +653,26 @@ class HeldThroughShapes(unittest.TestCase):
         """),
         )
 
+    def test_shadowed_closure_call_holds_nothing(self):
+        # Only a call of the outer `refresh` holds what it captured.
+        case = """
+            fn present() {
+                let entry = gtk::SearchEntry::new();
+                let refresh = {
+                    let entry = entry.clone();
+                    move || entry.set_text("")
+                };
+                entry.connect_search_changed(move |_| BODY);
+            }
+        """
+        for body, expected in (
+            ("{ let refresh = make_refresh(); refresh() }", []),
+            ("match pick() { Some(refresh) => refresh(), None => () }", []),
+            ("{ refresh(); let refresh = make_refresh(); refresh() }", [self.HOLDS]),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(lint(case.replace("BODY", body)), expected)
+
     def test_builder_child_and_controller_inside(self):
         self.assertIn(
             self.HOLDS,
@@ -700,6 +776,16 @@ class ProcessObjectHandlers(unittest.TestCase):
             }
         """),
         )
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn install(parent: &gtk::Widget) {
+                #[cfg(unix)]
+                #[allow(unused)]
+                parent.clipboard().connect_changed(|_| {});
+            }
+        """),
+        )
 
     def test_kept_id_and_main_are_fine(self):
         self.assertEqual(
@@ -715,6 +801,10 @@ class ProcessObjectHandlers(unittest.TestCase):
                 let handler =
                     gio::NetworkMonitor::default().connect_network_changed(move |_, _| {});
                 self.once_online.replace(Some(handler));
+            }
+            fn indexed(parent: &gtk::Widget, handlers: &mut [SignalHandlerId]) {
+                handlers[0] = parent.widgets()[0]
+                    .clipboard().connect_changed(|_| {});
             }
             fn init(sender: Sender) -> Model {
                 Model {
@@ -759,6 +849,21 @@ class RepeatingSources(unittest.TestCase):
             }
         """),
         )
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: &gtk::Label) {
+                let label = label.clone();
+                glib::timeout_add_seconds_local(
+                    600,
+                    move || {
+                        label.set_text("checked");
+                        glib::ControlFlow::Continue
+                    },
+                );
+            }
+        """),
+        )
 
     def test_typed_local_callback_warns(self):
         self.assertIn(
@@ -772,6 +877,39 @@ class RepeatingSources(unittest.TestCase):
                 glib::idle_add_local(tick);
             }
         """),
+        )
+
+    def test_callback_visible_at_call_is_read(self):
+        # The inner block's `tick` and the other fn's are gone at the call.
+        self.assertIn(
+            self.RULE,
+            lint("""
+            fn watch(label: gtk::Label) {
+                let tick = move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                };
+                {
+                    let tick = move || glib::ControlFlow::Break;
+                    glib::idle_add_local_once(tick);
+                }
+                glib::idle_add_local(tick);
+            }
+        """),
+        )
+        self.assertEqual(
+            lint("""
+            fn other(label: gtk::Label) {
+                let tick = move || {
+                    label.set_text("checked");
+                    glib::ControlFlow::Continue
+                };
+            }
+            fn watch() {
+                glib::idle_add_local(tick);
+            }
+        """),
+            [],
         )
 
     def test_break_on_upgrade_success_warns(self):
@@ -790,9 +928,31 @@ class RepeatingSources(unittest.TestCase):
             "{ glib::ControlFlow::Continue }",
             '{ log("gone"); glib::ControlFlow::Continue }',
             "{ if retry() { return glib::ControlFlow::Continue; } glib::ControlFlow::Break }",
+            "match retry() { None => glib::ControlFlow::Continue, _ => glib::ControlFlow::Break }",
         ):
             with self.subTest(arm=arm):
                 self.assertIn(self.RULE, lint(case.replace("ARM", arm)))
+
+    def test_guarded_none_arm_is_read(self):
+        case = """
+            fn watch(label: &gtk::Label) {
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => {
+                        label.set_text("x");
+                        glib::ControlFlow::Continue
+                    }
+                    None if retry() => ARM,
+                    None => glib::ControlFlow::Break,
+                });
+            }
+        """
+        for arm, expected in (
+            ("glib::ControlFlow::Continue", [self.RULE]),
+            ("glib::ControlFlow::Break", []),
+        ):
+            with self.subTest(arm=arm):
+                self.assertEqual(lint(case.replace("ARM", arm)), expected)
 
     def test_bounded_sources_are_fine(self):
         self.assertEqual(
@@ -850,6 +1010,17 @@ class RepeatingSources(unittest.TestCase):
                         glib::ControlFlow::Continue
                     }
                     None => { /* not Continue */ glib::ControlFlow::Break }
+                });
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => match next() {
+                        Some(text) => {
+                            label.set_text(text);
+                            glib::ControlFlow::Continue
+                        }
+                        None => glib::ControlFlow::Continue,
+                    },
+                    None => glib::ControlFlow::Break,
                 });
                 let weak = label.downgrade();
                 glib::timeout_add_local(SECOND, move || {
@@ -932,6 +1103,15 @@ class Strict(unittest.TestCase):
                         ),
                         2,
                     )
+
+    def test_directory_named_rs_is_no_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "crate.rs").mkdir()
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(leak_lint.main(["--no-icons", tmp]), 2)
 
 
 class Suppression(unittest.TestCase):
