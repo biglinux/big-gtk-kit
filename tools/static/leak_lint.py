@@ -453,10 +453,11 @@ def top_level_index(text: str, start: int, stop: int, token: str) -> int:
     return -1
 
 
-def expression_end(text: str, start: int) -> int:
-    """Where the expression that starts at `start` ends: at a `,` or `;` outside
+def expression_end(text: str, start: int, stops: str = ",;") -> int:
+    """Where the expression that starts at `start` ends: at one of `stops` outside
     brackets and turbofish generics (`::<A, B>`), or at the bracket that closes
-    the one around it."""
+    the one around it. A statement passes `;` alone: a closure's `|a, b|` has a
+    comma outside any bracket."""
     depth = generics = 0
     for i in range(start, len(text)):
         c = text[i]
@@ -470,7 +471,7 @@ def expression_end(text: str, start: int) -> int:
             depth -= 1
             if depth < 0:
                 return i
-        elif depth == 0 and not generics and c in ",;":
+        elif depth == 0 and not generics and c in stops:
             return i
     return len(text)
 
@@ -609,7 +610,7 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
                     ]
                     end = min(ends) if ends else -1
                 else:  # after the whole initializer, blocks and calls included
-                    end = expression_end(body, m.end())
+                    end = expression_end(body, m.end(), ";")
                 where = end if end >= 0 else len(body)
             patterns.append((m.start(1), hi, where, until))
     shadowed: dict[str, list[tuple[int, int]]] = {}
