@@ -21,14 +21,18 @@ rule:
             has:
               kind: closure_expression
               all:
-                - has:
-                    field: body
-                    kind: block
-                    has:
-                      nthChild:
-                        position: 1
-                        reverse: true
-                      regex: '(^|::)Break$'
+                - any:
+                    - has:
+                        field: body
+                        kind: block
+                        has:
+                          nthChild:
+                            position: 1
+                            reverse: true
+                          regex: '(^|::)Break$'
+                    - has:
+                        field: body
+                        regex: '^(\w+::)*Break$'
                 - not:
                     has:
                       stopBy: end
