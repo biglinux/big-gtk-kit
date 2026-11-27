@@ -398,7 +398,9 @@ impl AppShell {
     ///
     /// Call it from `main` before starting any thread: it sets the process
     /// environment and locale, which no other thread may read meanwhile. It
-    /// returns failure, starting nothing, when another thread already runs.
+    /// returns failure, starting nothing, when another thread already runs, so
+    /// a program that starts one in `main` first never opens. Start such work
+    /// from the main loop instead, for example on its first idle.
     ///
     /// This registers the preconfigured application through
     /// `RelmApp::from_app`, but drives GTK through a native-argument
