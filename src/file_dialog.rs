@@ -242,7 +242,7 @@ pub fn present_multiple(
                     }
                 };
                 match answer {
-                    Some(picked) => answer_once(Ok(picked)),
+                    Some(picked) => answer_once(picked),
                     None => toolkit_dialog(parent.as_ref(), fallback.clone(), answer_once),
                 }
             },
@@ -589,14 +589,15 @@ mod portal {
         }
     }
 
-    /// Ask the portal, calling `answered` once with the URIs, or `None` when no
-    /// portal answered and the caller should fall back.
+    /// Ask the portal, calling `answered` once with the chosen files or its
+    /// failure, or `None` when no portal is there to finish the request: GTK's
+    /// dialog, which asks instead, goes to the same portal whenever there is one.
     pub(super) fn ask(
         method: &'static str,
         parent: &str,
         title: &str,
         options: glib::Variant,
-        answered: impl Fn(Option<Vec<gio::File>>) + 'static,
+        answered: impl Fn(Option<Result<Vec<gio::File>, glib::Error>>) + 'static,
     ) {
         let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
             answered(None);
@@ -618,7 +619,7 @@ mod portal {
         let watcher = Rc::new(Cell::new(None));
         let finish = {
             let (subscription, watcher) = (Rc::clone(&subscription), Rc::clone(&watcher));
-            Rc::new(move |answer: Option<Vec<gio::File>>| {
+            Rc::new(move |answer: Option<Result<Vec<gio::File>, glib::Error>>| {
                 if subscription.borrow_mut().take().is_none() {
                     return;
                 }
@@ -637,7 +638,7 @@ mod portal {
             gio::DBusSignalFlags::NONE,
             {
                 let finish = Rc::clone(&finish);
-                move |signal: gio::DBusSignalRef<'_>| finish(response(signal.parameters))
+                move |signal: gio::DBusSignalRef<'_>| finish(Some(response(signal.parameters)))
             },
         );
         subscription.borrow_mut().replace(guard);
@@ -672,15 +673,26 @@ mod portal {
                     )));
                 }
                 Ok(_) => {}
-                Err(error) => {
-                    // No portal on this desktop, or it refused the call. Either
-                    // way the caller still needs a dialog, so say "not answered"
-                    // rather than "no file".
+                Err(error) if absent(&error) => {
                     log::debug!("the file portal did not take the request: {error}");
                     finish(None);
                 }
+                Err(error) => finish(Some(Err(error))),
             },
         );
+    }
+
+    /// A refusal meaning this bus has no `FileChooser` portal, which GTK's own
+    /// check finds too before it shows its dialog instead.
+    fn absent(error: &glib::Error) -> bool {
+        [
+            gio::DBusError::ServiceUnknown,
+            gio::DBusError::UnknownObject,
+            gio::DBusError::UnknownInterface,
+            gio::DBusError::UnknownMethod,
+        ]
+        .into_iter()
+        .any(|code| error.matches(code))
     }
 
     /// The object path the portal will answer on, and the token that picks it.
@@ -700,22 +712,28 @@ mod portal {
         dict.end()
     }
 
-    /// The chosen files, none when the person cancelled, or `None` when the
-    /// portal's dialog failed and the toolkit's should ask instead.
-    pub(super) fn response(body: &glib::Variant) -> Option<Vec<gio::File>> {
-        let (response, results) = body.get::<(u32, glib::VariantDict)>()?;
+    /// The chosen files, none when the person cancelled, or the failure of the
+    /// portal's dialog.
+    pub(super) fn response(body: &glib::Variant) -> Result<Vec<gio::File>, glib::Error> {
+        let Some((response, results)) = body.get::<(u32, glib::VariantDict)>() else {
+            return Err(glib::Error::new(
+                gtk::DialogError::Failed,
+                "the file portal sent a malformed response",
+            ));
+        };
         match response {
-            SUCCESS => Some(
-                results
-                    .lookup_value("uris", None)
-                    .and_then(|uris| uris.get::<Vec<String>>())
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|uri| gio::File::for_uri(uri))
-                    .collect(),
-            ),
-            CANCELLED => Some(Vec::new()),
-            _ => None,
+            SUCCESS => Ok(results
+                .lookup_value("uris", None)
+                .and_then(|uris| uris.get::<Vec<String>>())
+                .unwrap_or_default()
+                .iter()
+                .map(|uri| gio::File::for_uri(uri))
+                .collect()),
+            CANCELLED => Ok(Vec::new()),
+            code => Err(glib::Error::new(
+                gtk::DialogError::Failed,
+                &format!("the file portal's dialog ended with response {code}"),
+            )),
         }
     }
 }
@@ -795,8 +813,8 @@ mod tests {
             results.insert("uris", vec!["file:///a"]);
             (code, results).to_variant()
         };
-        let uris = |answer: Option<Vec<gio::File>>| {
-            answer.map(|files| {
+        let uris = |answer: Result<Vec<gio::File>, glib::Error>| {
+            answer.ok().map(|files| {
                 files
                     .iter()
                     .map(|file| file.uri().to_string())
@@ -812,13 +830,46 @@ mod tests {
             Some(Vec::new()),
             "cancelled"
         );
-        assert_eq!(uris(portal::response(&body(2))), None, "failed");
-        assert_eq!(uris(portal::response(&().to_variant())), None, "malformed");
+        assert!(portal::response(&body(2)).is_err(), "failed");
+        assert!(portal::response(&().to_variant()).is_err(), "malformed");
     }
 
-    /// A connection of its own on the session bus serving a `FileChooser`
-    /// that takes `OpenFile`, sets `asked`, and never sends its response.
-    fn portal_that_never_answers(asked: &Rc<Cell<bool>>) -> gio::DBusConnection {
+    /// Turn this thread's context until `done`, for at most five seconds.
+    fn turn_until(done: &dyn Fn() -> bool) -> bool {
+        let context = glib::MainContext::ref_thread_default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done() && std::time::Instant::now() < deadline {
+            if !context.iteration(false) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        done()
+    }
+
+    /// What [`portal::ask`] answered, once it has.
+    type Answer = Rc<RefCell<Option<Option<Result<Vec<gio::File>, glib::Error>>>>>;
+
+    /// Ask this bus's portal for a file to open.
+    fn ask_open() -> Answer {
+        let answer = Answer::default();
+        let answered = Rc::clone(&answer);
+        portal::ask(
+            "OpenFile",
+            "",
+            "Open",
+            glib::VariantDict::new(None).end(),
+            move |files| {
+                answered.borrow_mut().replace(files);
+            },
+        );
+        answer
+    }
+
+    /// A connection of its own on the session bus, owning the portal's name
+    /// and serving a `FileChooser` whose `OpenFile` answers through `reply`.
+    fn fake_portal(
+        reply: impl Fn(gio::DBusMethodInvocation) + 'static,
+    ) -> (gio::DBusConnection, gio::OwnerId) {
         let address =
             gio::dbus_address_get_for_bus_sync(gio::BusType::Session, gio::Cancellable::NONE)
                 .expect("a session bus");
@@ -842,20 +893,27 @@ mod tests {
         let interface = node
             .lookup_interface("org.freedesktop.portal.FileChooser")
             .expect("declared");
-        let taken = Rc::clone(asked);
         portal
             .register_object("/org/freedesktop/portal/desktop", &interface)
-            .method_call(move |_, _, _, _, _, _, invocation| {
-                taken.set(true);
-                let handle = glib::variant::ObjectPath::try_from(
-                    "/org/freedesktop/portal/desktop/request/unanswered",
-                )
-                .expect("an object path");
-                invocation.return_value(Some(&(handle,).to_variant()));
-            })
+            .method_call(move |_, _, _, _, _, _, invocation| reply(invocation))
             .build()
             .expect("registered");
-        portal
+        let owned = Rc::new(Cell::new(None));
+        let (acquired, lost) = (Rc::clone(&owned), Rc::clone(&owned));
+        let owner = gio::bus_own_name_on_connection(
+            &portal,
+            "org.freedesktop.portal.Desktop",
+            gio::BusNameOwnerFlags::DO_NOT_QUEUE,
+            move |_, _| acquired.set(Some(true)),
+            move |_, _| lost.set(Some(false)),
+        );
+        assert!(turn_until(&|| owned.get().is_some()));
+        assert_eq!(
+            owned.get(),
+            Some(true),
+            "the portal's name is free on this bus"
+        );
+        (portal, owner)
     }
 
     /// A portal that takes the request and leaves the bus without answering
@@ -863,49 +921,19 @@ mod tests {
     #[test]
     #[ignore = "owns the portal's name: needs the private bus of tools/headless-gate.sh"]
     fn portal_leaving_unanswered_falls_back() {
-        let context = glib::MainContext::new();
-        let turn_until = |done: &dyn Fn() -> bool| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while !done() && std::time::Instant::now() < deadline {
-                if !context.iteration(false) {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-            }
-            done()
-        };
-        context
+        glib::MainContext::new()
             .with_thread_default(|| {
                 let asked = Rc::new(Cell::new(false));
-                let portal = portal_that_never_answers(&asked);
-                let owned = Rc::new(Cell::new(None));
-                let (acquired, lost) = (Rc::clone(&owned), Rc::clone(&owned));
-                let owner = gio::bus_own_name_on_connection(
-                    &portal,
-                    "org.freedesktop.portal.Desktop",
-                    gio::BusNameOwnerFlags::DO_NOT_QUEUE,
-                    move |_, _| acquired.set(Some(true)),
-                    move |_, _| lost.set(Some(false)),
-                );
-                assert!(turn_until(&|| owned.get().is_some()));
-                assert_eq!(
-                    owned.get(),
-                    Some(true),
-                    "the portal's name is free on this bus"
-                );
-
-                let answer = Rc::new(RefCell::new(None));
-                let answered = Rc::clone(&answer);
-                portal::ask(
-                    "OpenFile",
-                    "",
-                    "Open",
-                    glib::VariantDict::new(None).end(),
-                    move |files| {
-                        answered
-                            .borrow_mut()
-                            .replace(files.map(|files| files.len()));
-                    },
-                );
+                let taken = Rc::clone(&asked);
+                let (portal, owner) = fake_portal(move |invocation| {
+                    taken.set(true);
+                    let handle = glib::variant::ObjectPath::try_from(
+                        "/org/freedesktop/portal/desktop/request/unanswered",
+                    )
+                    .expect("an object path");
+                    invocation.return_value(Some(&(handle,).to_variant()));
+                });
+                let answer = ask_open();
                 assert!(
                     turn_until(&|| asked.get()),
                     "the request reached the portal"
@@ -916,7 +944,46 @@ mod tests {
                 portal.close_sync(gio::Cancellable::NONE).expect("closed");
 
                 assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
-                assert_eq!(*answer.borrow(), Some(None), "not answered: fall back");
+                assert!(
+                    matches!(*answer.borrow(), Some(None)),
+                    "not answered: fall back"
+                );
+            })
+            .expect("the context of this thread");
+    }
+
+    /// No portal on the bus leaves the asking to the toolkit's dialog.
+    #[test]
+    #[ignore = "asks for the portal's name: needs the private bus of tools/headless-gate.sh"]
+    fn missing_portal_falls_back() {
+        glib::MainContext::new()
+            .with_thread_default(|| {
+                let answer = ask_open();
+                assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
+                assert!(matches!(*answer.borrow(), Some(None)), "fall back");
+            })
+            .expect("the context of this thread");
+    }
+
+    /// A portal that refuses the request is a failed dialog: the toolkit's
+    /// dialog would ask that same portal again.
+    #[test]
+    #[ignore = "owns the portal's name: needs the private bus of tools/headless-gate.sh"]
+    fn portal_refusal_is_error() {
+        glib::MainContext::new()
+            .with_thread_default(|| {
+                let _portal = fake_portal(|invocation| {
+                    invocation.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied", "no");
+                });
+                let answer = ask_open();
+                assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
+                assert!(
+                    matches!(
+                        &*answer.borrow(),
+                        Some(Some(Err(error))) if error.matches(gio::DBusError::AccessDenied)
+                    ),
+                    "the portal's own error"
+                );
             })
             .expect("the context of this thread");
     }
