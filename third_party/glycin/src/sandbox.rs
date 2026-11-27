@@ -1355,7 +1355,7 @@ mod tests {
     /// The installed loaders work within that confinement.
     #[test]
     fn fallback_loader_decodes() {
-        glib::MainContext::new().block_on(async {
+        util::block_on(async {
             let mut loader = crate::Loader::new_bytes(glib::Bytes::from_static(SVG));
             loader.sandbox_selector(crate::SandboxSelector::NotSandboxed);
             let image = loader.load().await.unwrap();
