@@ -13,9 +13,17 @@ rule:
     inside:
       stopBy: end
       kind: mod_item
+      # Any of the attributes the module carries; the first item before
+      # them ends the search, so another item's cfg(test) exempts nothing.
       follows:
         kind: attribute_item
         regex: 'cfg\(test\)'
+        stopBy:
+          not:
+            any:
+              - kind: attribute_item
+              - kind: line_comment
+              - kind: block_comment
 ignores:
   - "**/tests/**"
   - "**/*tests.rs"
