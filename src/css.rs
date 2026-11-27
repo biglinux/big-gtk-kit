@@ -17,16 +17,26 @@ use gtk::prelude::*;
 /// rules never apply. GTK's settings hold what the program renders with:
 /// libadwaita writes its style manager's dark and high contrast there, above
 /// what the portal says, and the portal's reduced motion arrives there too.
-/// GTK binds its own theme provider to them the same way.
+/// GTK binds its own theme provider to them the same way. This one follows
+/// the default display; [`install_for_display`] and [`DisplaySheet`] follow
+/// the display they are given.
 #[must_use]
 pub fn provider() -> gtk::CssProvider {
+    // Before GTK opens its display there is nothing to follow, or to draw.
+    provider_following(gtk::Settings::default())
+}
+
+fn provider_for_display(display: &gdk::Display) -> gtk::CssProvider {
+    provider_following(Some(gtk::Settings::for_display(display)))
+}
+
+fn provider_following(settings: Option<gtk::Settings>) -> gtk::CssProvider {
     #[expect(
         clippy::disallowed_methods,
         reason = "the one place a provider is made"
     )]
     let provider = gtk::CssProvider::new();
-    // Before GTK opens its display there is nothing to follow, or to draw.
-    if let Some(settings) = gtk::Settings::default() {
+    if let Some(settings) = settings {
         for (setting, preference) in [
             ("gtk-interface-color-scheme", "prefers-color-scheme"),
             ("gtk-interface-contrast", "prefers-contrast"),
@@ -42,30 +52,37 @@ pub fn provider() -> gtk::CssProvider {
 }
 
 thread_local! {
-    /// What [`install`] added: each display with the hash of a sheet's text.
+    /// What [`install_for_display`] added: each display with the hash of a
+    /// sheet's text.
     static INSTALLED: RefCell<Vec<(gdk::Display, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Add `sheet` to the default display at `priority`, once per display.
+/// [`install_for_display`] on the default display.
+///
+/// Before GTK opens a display there is nothing to add it to, and the next call
+/// adds it.
+pub fn install(sheet: &str, priority: u32) {
+    if let Some(display) = gdk::Display::default() {
+        install_for_display(&display, sheet, priority);
+    }
+}
+
+/// Add `sheet` to `display` at `priority`, once per display.
 ///
 /// A later call with the same text and priority adds nothing: the display
 /// keeps every provider it is given, and a second copy restyles every window
-/// for nothing.
-/// Before GTK opens a display there is nothing to add it to, and the next call
-/// adds it. A sheet that changes while the program runs is a [`DisplaySheet`].
-pub fn install(sheet: &str, priority: u32) {
-    let Some(display) = gdk::Display::default() else {
-        return;
-    };
+/// for nothing. A sheet that changes while the program runs is a
+/// [`DisplaySheet`].
+pub fn install_for_display(display: &gdk::Display, sheet: &str, priority: u32) {
     let mut hasher = DefaultHasher::new();
     (sheet, priority).hash(&mut hasher);
-    let key = (display, hasher.finish());
+    let key = (display.clone(), hasher.finish());
     if INSTALLED.with_borrow(|installed| installed.contains(&key)) {
         return;
     }
-    let provider = provider();
+    let provider = provider_for_display(display);
     provider.load_from_string(sheet);
-    add_provider(&key.0, &provider, priority);
+    add_provider(display, &provider, priority);
     INSTALLED.with_borrow_mut(|installed| installed.push(key));
 }
 
@@ -118,7 +135,7 @@ impl DisplaySheet {
                 if text.is_empty() {
                     return;
                 }
-                let provider = provider();
+                let provider = provider_for_display(display);
                 provider.load_from_string(text);
                 add_provider(display, &provider, self.priority);
                 *self.loaded.borrow_mut() = Some(LoadedSheet {
@@ -271,5 +288,33 @@ mod tests {
         sheet.load(&display, "");
         assert!(provider().is_none());
         sheet.release();
+    }
+
+    /// A sheet on a second display answers its media as that display's
+    /// settings say, whatever the default display's say.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn display_sheet_follows_its_display() {
+        gtk::init().expect("a display");
+        let name = gdk::Display::default().expect("a display").name();
+        let other = gdk::Display::open(Some(&name)).expect("a second display");
+        let sheet = DisplaySheet::new(gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        sheet.load(&other, "label { color: red; }");
+        let provider = sheet
+            .loaded
+            .borrow()
+            .as_ref()
+            .map(|loaded| loaded.provider.clone())
+            .expect("a provider");
+        let settings = gtk::Settings::for_display(&other);
+        for contrast in [
+            gtk::InterfaceContrast::More,
+            gtk::InterfaceContrast::NoPreference,
+        ] {
+            settings.set_gtk_interface_contrast(contrast);
+            assert_eq!(provider.prefers_contrast(), contrast);
+        }
+        sheet.release();
+        other.close();
     }
 }
