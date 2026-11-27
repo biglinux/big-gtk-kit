@@ -94,11 +94,15 @@ static PRIVATE_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// for bounded temporary output beside a final destination; callers must move
 /// durable results out before this guard is dropped.
 ///
-/// The name carries the owner's process id. A process killed before its drop
-/// leaves its directory behind, and the next creation with the same prefix in
-/// the same parent removes it once it has gone an hour unchanged.
+/// The name carries the owner's process id, and the guard holds a lock on the
+/// directory. A process killed before its drop leaves its directory behind,
+/// and the next creation with the same prefix in the same parent removes it
+/// once it has gone an hour unchanged with no lock held.
 pub struct OwnedPrivateDirectory {
     path: PathBuf,
+    /// The directory, locked until the guard drops: a lock any PID namespace
+    /// sees, where the process id in the name names no process.
+    _lease: File,
 }
 
 impl OwnedPrivateDirectory {
@@ -109,6 +113,7 @@ impl OwnedPrivateDirectory {
     /// Returns the underlying filesystem error or `AlreadyExists` after the
     /// bounded collision budget is exhausted.
     pub fn create(parent: &Path, prefix: &str) -> std::io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt as _;
         // A NUL is refused by the path syscall itself, with InvalidInput.
         if prefix.is_empty() || prefix.contains('/') || prefix.contains('\\') {
             return Err(std::io::Error::new(
@@ -123,7 +128,23 @@ impl OwnedPrivateDirectory {
             let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
             match builder.create(&path) {
-                Ok(()) => return Ok(Self { path }),
+                Ok(()) => {
+                    let lease = fs::OpenOptions::new()
+                        .read(true)
+                        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                        .open(&path)
+                        .and_then(|lease| lease.lock().map(|()| lease));
+                    return match lease {
+                        Ok(lease) => Ok(Self {
+                            path,
+                            _lease: lease,
+                        }),
+                        Err(error) => {
+                            let _ = fs::remove_dir(&path);
+                            Err(error)
+                        }
+                    };
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
@@ -264,17 +285,13 @@ fn clear_files(folder: &std::os::fd::OwnedFd) -> std::io::Result<Vec<CString>> {
     Ok(folders)
 }
 
-/// Remove the directories `{prefix}-{pid}-{sequence}` in `parent` whose process
-/// has exited: mode `0700` and this user's, as [`OwnedPrivateDirectory`] makes
-/// them, and unchanged for an hour. A process id is this machine's, so
-/// nothing is removed on a network filesystem, where the owner may be running
-/// on another one, or where `mount_table` holds no mount for `parent`; the hour covers an owner in another PID namespace, whose
-/// id names no process here. A live process that took a dead owner's id
-/// keeps the directory, which costs only space. `mount_table` is the text of
-/// `/proc/self/mountinfo`.
+/// Remove the [`OwnedPrivateDirectory`] folders `{prefix}-{pid}-{sequence}` of
+/// `parent` whose process id names no process, unlocked and an hour unchanged
+/// (the hour covers creation before the lock). Never on a share, whose owner
+/// may run elsewhere, nor where `mount_table` (mountinfo) lacks `parent`.
 fn remove_abandoned(parent: &Path, prefix: &str, mount_table: &str) {
     const ABANDONED_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
     if !crate::mount_table::is_local(mount_table, parent) {
         return;
     }
@@ -313,6 +330,17 @@ fn remove_abandoned(parent: &Path, prefix: &str, mount_table: &str) {
             && metadata.uid() == crate::microdaemon::current_effective_user_id()
             && metadata.permissions().mode() & 0o7777 == 0o700
         {
+            // Held while the tree goes, so a second cleaner leaves it alone.
+            let Ok(lease) = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(entry.path())
+            else {
+                continue;
+            };
+            if lease.try_lock().is_err() {
+                continue;
+            }
             // A confined program may have left folders it took the modes off.
             let _ = remove_tree(&entry.path());
         }
