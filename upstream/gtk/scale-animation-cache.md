@@ -53,8 +53,13 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
   as 4.24.1 does, they are aligned to the frame's pixels, not to the scale the
   mask is rendered at, so between multiples the mask would be rendered at a
   slightly different scale than it is placed at, and its far side would drift.
-  At a multiple of 1/120 it lands on the same pixels as before and can be one
-  pixel larger.
+  At a multiple of 1/120 the mask is placed on the 1/32 pixel phase a cached
+  mask takes, less than 1/32 pixel from its exact place, instead of being
+  resampled at that place, and it can be one pixel wider and taller; what is
+  drawn stays within the clipped bounds. Where the node sits a multiple of
+  1/32 pixel off the pixel grid, as at whole pixel offsets, it draws the same
+  pixels as before; elsewhere, a fill 312 units wide at scales 1, 121/120
+  and 1.25 differs in 1 145 to 1 308 pixels, by up to 17/255.
 - `testsuite/gsk/misc.c` gains `/renderer/gl/scaled-text`: "Abc" in the test
   suite's Cantarell, hinted as in the compare tests, renders the same pixels
   under a 1.003 scale as without it. It fails without the change. It opens a
