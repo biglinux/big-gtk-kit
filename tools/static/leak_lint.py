@@ -448,6 +448,23 @@ def top_level_index(text: str, start: int, stop: int, token: str) -> int:
     return -1
 
 
+def closure_end(text: str, start: int) -> int:
+    """Where the closure whose body starts at `start` ends: at a `,` or `;` outside
+    brackets, or at the bracket that closes the one around it."""
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth < 0:
+                return i
+        elif depth == 0 and c in ",;":
+            return i
+    return len(text)
+
+
 def match_arms_brace(body: str, start: int) -> int:
     """Where the `{` that opens the arms of the `match` whose scrutinee starts at
     `start` is, or -1: past a block scrutinee and past braces inside brackets."""
@@ -536,7 +553,9 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     for binder in binders:
         for m in re.finditer(binder, body):
             # a `let` binds after its statement: its right-hand side still sees the outer name
-            where = m.start(1)
+            where, until = m.start(1), len(body)
+            if binder is binders[2]:
+                until = closure_end(body, m.end())
             if binder is binders[0]:
                 conditional = re.search(r"\b(if|while)\s*$|&&\s*$", body[: m.start()])
                 if conditional:  # `if let`, `while let`, and a let chain's `&& let`
@@ -549,11 +568,15 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
                 else:
                     end = body.find(";", m.end())
                 where = end if end >= 0 else len(body)
-            patterns.append((m.start(1), m.end(1), where, len(body)))
+            patterns.append((m.start(1), m.end(1), where, until))
     shadowed: dict[str, list[tuple[int, int]]] = {}
     for lo, hi, where, until in patterns:
-        for name in re.findall(r"\b([a-z_]\w*)\b", body[lo:hi]):
-            shadowed.setdefault(name, []).append((where, until))
+        pattern = body[lo:hi]
+        for m in re.finditer(r"\b([a-z_]\w*)\b(\s*:(?!:))?", pattern):
+            braces = pattern.count("{", 0, m.start()) - pattern.count("}", 0, m.start())
+            if m.group(2) and braces > 0:
+                continue  # a field label (`widget:` in `Event { widget: w }`) binds nothing
+            shadowed.setdefault(m.group(1), []).append((where, until))
     pattern_spans = [(lo, hi) for lo, hi, _, _ in patterns]
     used = set()
     # variables only: not a field or method (`.x`), a path (`x::`, `::x`), a call, a macro,
@@ -769,8 +792,17 @@ REPEATING_SOURCE = re.compile(
 )
 
 
-# A failed upgrade that keeps the source: `None => Continue` beside an upgrade.
-WEAK_FAILS_ON = re.compile(r"\bNone\s*=>\s*(?:return\s+)?(?:[\w:]+::)?Continue\b")
+def none_arm_continues(closure: str) -> bool:
+    """Whether a `None` arm, a failed upgrade, can return `Continue` and so keep the
+    source after its target is gone."""
+    for m in re.finditer(r"\bNone\s*=>\s*", closure):
+        if closure.startswith("{", m.end()):
+            arm = call_argument(closure, m.end())
+        else:
+            arm = closure[m.end() : closure_end(closure, m.end())]
+        if re.search(r"\bContinue\b", arm):
+            return True
+    return False
 
 
 def rule_repeating_source_without_weak_exit(src: Source):
@@ -796,7 +828,7 @@ def rule_repeating_source_without_weak_exit(src: Source):
         if (
             "Break" in closure
             and re.search(r"\.upgrade\(\)|#\[upgrade_or", closure)
-            and not WEAK_FAILS_ON.search(closure)
+            and not none_arm_continues(closure)
         ):
             continue
         yield (

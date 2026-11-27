@@ -445,6 +445,55 @@ class WarningRules(unittest.TestCase):
         """),
         )
 
+    def test_field_label_binds_nothing(self):
+        # In `Event { widget: w }` the arm binds `w`; its `widget` is the function's.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| match controller.event() {
+                    Some(PATTERN) => {
+                        widget.grab_focus();
+                        Stop
+                    }
+                    _ => Proceed,
+                });
+                widget.add_controller(keys);
+            }
+        """
+        for pattern, expected in (
+            ("Event { widget: w }", [("handler-holds-owner", "warning")]),
+            ("Event { widget }", []),
+            ("Event { source: widget }", []),
+            ("Event { source: Some(widget), .. }", []),
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(lint(case.replace("PATTERN", pattern)), expected)
+
+    def test_inner_closure_binding_ends_with_it(self):
+        # After the inner closure, `widget` is the function's again: it is captured.
+        case = """
+            fn attach(widget: &gtk::Widget) {
+                let widget = widget.clone();
+                let keys = gtk::EventControllerKey::new();
+                keys.connect_key_pressed(move |controller, _, _, _| {
+                    controller.widget().map(INNER);
+                    widget.grab_focus();
+                    Stop
+                });
+                widget.add_controller(keys);
+            }
+        """
+        for inner in (
+            "|widget| widget.grab_focus()",
+            "|widget| { widget.grab_focus() }",
+        ):
+            with self.subTest(inner=inner):
+                self.assertIn(
+                    ("handler-holds-owner", "warning"),
+                    lint(case.replace("INNER", inner)),
+                )
+
     def test_weak_anchor_strong_closure_warns(self):
         self.assertIn(
             ("lazy-followers", "warning"),
@@ -657,18 +706,23 @@ class RepeatingSources(unittest.TestCase):
 
     def test_break_on_upgrade_success_warns(self):
         # A failed upgrade continues: the source outlives its target.
-        self.assertIn(
-            self.RULE,
-            lint("""
+        case = """
             fn watch(label: &gtk::Label) {
                 let weak = label.downgrade();
                 glib::timeout_add_local(SECOND, move || match weak.upgrade() {
                     Some(_) => glib::ControlFlow::Break,
-                    None => glib::ControlFlow::Continue,
+                    None => ARM
                 });
             }
-        """),
-        )
+        """
+        for arm in (
+            "glib::ControlFlow::Continue,",
+            "{ glib::ControlFlow::Continue }",
+            '{ log("gone"); glib::ControlFlow::Continue }',
+            "{ if retry() { return glib::ControlFlow::Continue; } glib::ControlFlow::Break }",
+        ):
+            with self.subTest(arm=arm):
+                self.assertIn(self.RULE, lint(case.replace("ARM", arm)))
 
     def test_bounded_sources_are_fine(self):
         self.assertEqual(
@@ -710,6 +764,14 @@ class RepeatingSources(unittest.TestCase):
                         glib::ControlFlow::Continue
                     }
                     None => glib::ControlFlow::Break,
+                });
+                let weak = label.downgrade();
+                glib::timeout_add_local(SECOND, move || match weak.upgrade() {
+                    Some(label) => {
+                        label.set_text("x");
+                        glib::ControlFlow::Continue
+                    }
+                    None => { glib::ControlFlow::Break }
                 });
                 let weak = label.downgrade();
                 glib::timeout_add_local(SECOND, move || {
