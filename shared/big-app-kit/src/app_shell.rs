@@ -444,6 +444,9 @@ impl AppShell {
                 return glib::ExitCode::FAILURE;
             }
         }
+        // GTK would set it again when it starts, after `start_threads` may have
+        // started a thread that reads it.
+        gtk::disable_setlocale();
         run_root_with_args::<C, OsString>(spec, process_args())
     }
 }
