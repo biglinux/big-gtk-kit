@@ -18,7 +18,7 @@ looks glyphs up at `MAX (scale.width, scale.height)`, and
 Only under rotations and other transforms that are not a scale do they round
 the scale, up to the next power of two.
 
-`scale-animation-cache.patch` (5 files, +371 −24) applies on 4.24.1, alone or
+`scale-animation-cache.patch` (5 files, +461 −24) applies on 4.24.1, alone or
 after the other held patches. After glyph-scaled-font-leak it needs a three-way
 apply (`git apply -3` or `git am -3`, as the package uses), because both add the
 same include to `testsuite/gsk/misc.c`. It does not apply on main (b9cd9290d5
@@ -35,7 +35,9 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
 - Between two multiples, glyphs are rasterized at the nearest one and drawn
   pixel for pixel: no resampling, so text stays as sharp as at rest. A glyph
   differs in size from the exact one by at most 1/240 of its size at scale 1,
-  0.05 pixels for a 12 pixel glyph, at any scale.
+  0.05 pixels for a 12 pixel glyph, at any scale. Below half a step (1/240),
+  where the nearest multiple is 1/120 and more than twice the scale, glyphs
+  keep the exact scale.
 - Between two multiples, fills and strokes are rendered at the next multiple up
   on a quarter pixel grid instead of a 1/32 one and resampled down, as the
   renderer already does under rotations. The frames of one animation, and the
@@ -70,6 +72,10 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
   render the same pixels, filled and stroked. It fails without the snap of
   uncached masks, in the fill and in the stroke. It opens a second display for
   the same reason.
+- `/renderer/gl/scaled-tiny-text`: a 2000 pixel "W" under a 0.002 scale, a
+  quarter of a step, inks only the pixels of its ink rectangle at that scale
+  and the pixel around them. Rounded up to 1/120, it is drawn four times too
+  large and the test fails. It opens a second display for the same reason.
 
 Which scales count as at rest is decided by the scale alone, not by watching it
 change: the renderer draws only on damage, so the last frame of an animation
@@ -158,6 +164,8 @@ with the change.
 on the GTX 1660 Ti and on Mesa llvmpipe, and fails without the snap in
 `gskgpucachedfill.c` or in `gskgpucachedstroke.c` ("assertion failed": 20/255
 and 17/255 at the first differing byte); the rest of `misc` passes with it.
+`/renderer/gl/scaled-tiny-text` passes on both and fails with glyphs rounded up
+to 1/120 below half a step (alpha 225/255 outside the ink).
 
 ## Costs and risks
 

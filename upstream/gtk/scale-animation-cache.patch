@@ -18,12 +18,12 @@ multiple of 1/120 is drawn as before.
 Fills and strokes too large for the atlas snap their clipped bounds to
 the same grid, so they are rendered at the scale they are placed at.
 ---
- gsk/gpu/gskgpucachedfill.c    |  34 ++++-
- gsk/gpu/gskgpucachedstroke.c  |  34 ++++-
- gsk/gpu/gskgpunodeprocessor.c |  32 ++--
- gsk/gpu/gskgpuutilsprivate.h  |  23 +++
- testsuite/gsk/misc.c          | 272 ++++++++++++++++++++++++++++++++++
- 5 files changed, 371 insertions(+), 24 deletions(-)
+ gsk/gpu/gskgpucachedfill.c    |  34 +++-
+ gsk/gpu/gskgpucachedstroke.c  |  34 +++-
+ gsk/gpu/gskgpunodeprocessor.c |  32 ++-
+ gsk/gpu/gskgpuutilsprivate.h  |  29 +++
+ testsuite/gsk/misc.c          | 356 ++++++++++++++++++++++++++++++++++
+ 5 files changed, 461 insertions(+), 24 deletions(-)
 
 diff --git a/gsk/gpu/gskgpucachedfill.c b/gsk/gpu/gskgpucachedfill.c
 index a3f9d89ad1..0c816a043d 100644
@@ -292,7 +292,7 @@ index c5bb9e3a32..f549b34b70 100644
                                             &glyph_offset);
  
 diff --git a/gsk/gpu/gskgpuutilsprivate.h b/gsk/gpu/gskgpuutilsprivate.h
-index 42c3410a46..d3695283cc 100644
+index 42c3410a46..b9c2040504 100644
 --- a/gsk/gpu/gskgpuutilsprivate.h
 +++ b/gsk/gpu/gskgpuutilsprivate.h
 @@ -3,6 +3,11 @@
@@ -307,7 +307,7 @@ index 42c3410a46..d3695283cc 100644
  GskGpuConversion        gsk_gpu_color_state_get_conversion              (GdkColorState                  *color_state);
  GdkColorState *         gsk_gpu_color_state_apply_conversion            (GdkColorState                  *color_state,
                                                                           GskGpuConversion                conversion);
-@@ -21,3 +26,21 @@ gsk_gpu_mipmap_levels (gsize width,
+@@ -21,3 +26,27 @@ gsk_gpu_mipmap_levels (gsize width,
  {
    return g_bit_nth_msf (MAX (width, height), -1) + 1;
  }
@@ -321,7 +321,13 @@ index 42c3410a46..d3695283cc 100644
 +static inline float
 +gsk_gpu_scale_round_to_step (float scale)
 +{
-+  return MAX (roundf (scale * GSK_GPU_SCALE_STEPS), 1) / GSK_GPU_SCALE_STEPS;
++  float steps = roundf (scale * GSK_GPU_SCALE_STEPS);
++
++  /* Below half a step, the nearest step is more than twice the scale */
++  if (steps < 1)
++    return scale;
++
++  return steps / GSK_GPU_SCALE_STEPS;
 +}
 +
 +static inline float
@@ -330,7 +336,7 @@ index 42c3410a46..d3695283cc 100644
 +  return MAX (ceilf (scale * GSK_GPU_SCALE_STEPS - 0.001f), 1) / GSK_GPU_SCALE_STEPS;
 +}
 diff --git a/testsuite/gsk/misc.c b/testsuite/gsk/misc.c
-index a1dc9c8274..9f52176075 100644
+index a1dc9c8274..ea01ce9c9a 100644
 --- a/testsuite/gsk/misc.c
 +++ b/testsuite/gsk/misc.c
 @@ -1,11 +1,18 @@
@@ -352,7 +358,7 @@ index a1dc9c8274..9f52176075 100644
  static void
  test_rendernode_gvalue (void)
  {
-@@ -224,6 +231,268 @@ test_gl_renderer (void)
+@@ -224,6 +231,351 @@ test_gl_renderer (void)
  #endif
  }
  
@@ -618,16 +624,100 @@ index a1dc9c8274..9f52176075 100644
 +#endif
 +}
 +
++static void
++test_gl_renderer_scaled_tiny_text (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  PangoContext *context;
++  PangoLayout *layout;
++  PangoFontDescription *desc;
++  PangoGlyphItem *run;
++  PangoRectangle ink;
++  GskRenderNode *text, *node;
++  GskTransform *transform;
++  GdkTexture *texture;
++  guchar data[40 * 40 * 4];
++  gboolean inked = FALSE;
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  if (display == NULL)
++    {
++      g_test_skip ("Could not open a second display");
++      return;
++    }
++
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  context = pango_font_map_create_context (pango_cairo_font_map_get_default ());
++  layout = pango_layout_new (context);
++  desc = pango_font_description_from_string ("Sans 2000px");
++  pango_layout_set_font_description (layout, desc);
++  pango_font_description_free (desc);
++  pango_layout_set_text (layout, "W", -1);
++  pango_layout_get_pixel_extents (layout, &ink, NULL);
++  run = pango_layout_get_line_readonly (layout, 0)->runs->data;
++  text = gsk_text_node_new (run->item->analysis.font, run->glyphs, &(GdkRGBA) { 0, 0, 0, 1 },
++                            &GRAPHENE_POINT_INIT (0, pango_layout_get_baseline (layout) / (float) PANGO_SCALE));
++
++  /* 0.002 is a quarter of the smallest scale step: the glyph must keep
++   * that size instead of the step's */
++  transform = gsk_transform_scale (NULL, 0.002, 0.002);
++  node = gsk_transform_node_new (text, transform);
++  gsk_transform_unref (transform);
++  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 40, 40));
++  gdk_texture_download (texture, data, 40 * 4);
++
++  for (int y = 0; y < 40; y++)
++    for (int x = 0; x < 40; x++)
++      {
++        guchar alpha = data[(y * 40 + x) * 4 + 3];
++
++        /* The ink at that scale, and a pixel around it for antialiasing */
++        if (x >= floorf (ink.x * 0.002f) - 1 && x <= ceilf ((ink.x + ink.width) * 0.002f) &&
++            y >= floorf (ink.y * 0.002f) - 1 && y <= ceilf ((ink.y + ink.height) * 0.002f))
++          inked |= alpha > 0;
++        else
++          g_assert_cmpint (alpha, ==, 0);
++      }
++  g_assert_true (inked);
++
++  g_object_unref (texture);
++  gsk_render_node_unref (node);
++  gsk_render_node_unref (text);
++  g_object_unref (layout);
++  g_object_unref (context);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
  static void
  test_vulkan_renderer (void)
  {
-@@ -336,6 +605,9 @@ main (int argc, char *argv[])
+@@ -336,6 +688,10 @@ main (int argc, char *argv[])
    g_test_add_func ("/rendernode/container/disjoint", test_container_disjoint);
    g_test_add_func ("/renderer/cairo", test_cairo_renderer);
    g_test_add_func ("/renderer/gl", test_gl_renderer);
 +  g_test_add_func ("/renderer/gl/scaled-text", test_gl_renderer_scaled_text);
 +  g_test_add_func ("/renderer/gl/scaled-fill", test_gl_renderer_scaled_fill);
 +  g_test_add_func ("/renderer/gl/scaled-large-mask", test_gl_renderer_scaled_large_mask);
++  g_test_add_func ("/renderer/gl/scaled-tiny-text", test_gl_renderer_scaled_tiny_text);
    g_test_add_func ("/renderer/vulkan", test_vulkan_renderer);
    g_test_add_func ("/gradient/opaque", test_gradient_opaque);
    g_test_add_func ("/rendernode/radial-gradient/opaque", test_radial_gradient_opaque);
