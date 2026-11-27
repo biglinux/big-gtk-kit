@@ -26,6 +26,7 @@ pub mod slider;
 pub mod source;
 mod surface;
 pub mod switch;
+pub mod task;
 pub mod timer;
 pub mod tooltip;
 pub mod view_switcher;
