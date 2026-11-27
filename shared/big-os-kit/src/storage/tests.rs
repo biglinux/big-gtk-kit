@@ -950,10 +950,14 @@ fn replaced_document_keeps_group() {
     // SAFETY: getegid has no preconditions.
     let new_file_group = unsafe { libc::getegid() };
     let dir_group = fs::metadata(&dir).unwrap().gid();
-    let other = groups
+    let Some(other) = groups
         .into_iter()
         .find(|group| *group != new_file_group && *group != dir_group)
-        .expect("the test user must belong to a second group");
+    else {
+        eprintln!("skipped: the test user belongs to no second group");
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    };
     std::os::unix::fs::chown(&target, None, Some(other)).unwrap();
 
     assert!(atomic_replace_document(&target, b"new", || true).unwrap());

@@ -262,14 +262,7 @@ impl<T: Serialize + DeserializeOwned> BigAtomicJsonStore<T> {
                 max_bytes: MAX_STORAGE_DOCUMENT_BYTES,
             });
         }
-        if let Some(parent) = self.path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        let mut temporary_store = PendingAtomicWrite::create_sibling(&self.path, Some(0o600))?;
-        temporary_store.file_mut()?.write_all(&bytes)?;
-        temporary_store.install(&self.path)?;
+        atomic_write_private(&self.path, &bytes)?;
         Ok(())
     }
 }
@@ -309,7 +302,7 @@ fn remove_dead_writers_temps(target: &Path) {
         let Ok(pid) = pid.parse::<libc::pid_t>() else {
             continue;
         };
-        if pid <= 0 || !seq.bytes().all(|byte| byte.is_ascii_digit()) {
+        if pid <= 0 || seq.is_empty() || !seq.bytes().all(|byte| byte.is_ascii_digit()) {
             continue;
         }
         // Signal 0 only asks whether the process exists.
@@ -458,7 +451,8 @@ fn atomic_create(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
 ///
 /// # Errors
 /// Returns the refusal above or the I/O failure; the original is untouched
-/// unless the result is `Ok(true)`.
+/// unless the result is `Ok(true)`, or the error is the final directory
+/// `fsync`'s, which comes after the new copy took its place.
 #[cfg(target_os = "linux")]
 pub fn atomic_replace_document(
     path: &Path,
