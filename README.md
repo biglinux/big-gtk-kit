@@ -200,7 +200,7 @@ and the tools' own checks.
 
 `tools/headless-gate.sh` runs the tests in a private KWin session with a home
 of its own. The ignored tests take the activation, so they run one at a time;
-five read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
+seven read the AT-SPI bridge, and `mount_change_is_seen` needs a private mount
 namespace. rustdoc runs the doc tests from `TMPDIR`, which must allow
 execution.
 

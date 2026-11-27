@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Tests that read the AT-SPI bridge, which only --accessible starts.
-bridge='closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|work_start_is_announced|capture_refusal_is_announced'
+bridge='closed_about_keeps_cache|removed_link_label_keeps_cache|first_refusal_is_announced|refusal_before_window_is_announced|work_start_is_announced|capture_refusal_is_announced|named_drop_down_heard_with_choice'
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked --config 'build.warnings="deny"'

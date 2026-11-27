@@ -654,7 +654,7 @@ mod tests {
     /// The combo box and the button that takes its focus are both read as the
     /// field and its choice, empty and after a choice made in its list.
     #[test]
-    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-relm4-components -- --ignored"]
+    #[ignore = "other-display: needs the AT-SPI bridge: tools/headless-gate.sh --accessible cargo test -p big-gtk-kit -- --ignored"]
     fn named_drop_down_heard_with_choice() {
         big_testkit::harness::require_gtk_test(|| {
             use big_testkit::atspi::{accessibility_bus, settle};
