@@ -48,6 +48,7 @@
 
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::mem::DropGuard;
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1169,16 +1170,6 @@ fn lower_file_size_limit(max_bytes: u64) -> std::io::Result<()> {
     Ok(setrlimit(Resource::Fsize, lowered)?)
 }
 
-/// Why the wait loop stopped: normal exit, deadline, external cancel, or a
-/// failed `try_wait` or observer. Cancel and timeout share the same kill path
-/// but map to distinct errors.
-enum WaitOutcome {
-    Exited(std::process::ExitStatus),
-    TimedOut,
-    Cancelled,
-    Failed(std::io::Error),
-}
-
 fn run_validated(
     spec: &BigSubprocessSpec,
     cancel: &AtomicBool,
@@ -1192,7 +1183,13 @@ fn run_validated(
         return Err(BigSubprocessError::Cancelled);
     }
     let mut cmd = build_command(spec);
-    let mut child = cmd.spawn().map_err(BigSubprocessError::Spawn)?;
+    let child = cmd.spawn().map_err(BigSubprocessError::Spawn)?;
+    // Stops and reaps the child on every way out but its own exit, a panic
+    // included: a dropped `Child` is neither killed nor reaped.
+    let mut child = DropGuard::new(child, |mut child: std::process::Child| {
+        terminate_or_kill_child_group(spec, &mut child);
+        let _ = child.wait();
+    });
 
     // Drain stdout/stderr on dedicated threads. A child that writes more than
     // the OS pipe buffer (~64 KiB) blocks on write until a reader consumes it;
@@ -1247,35 +1244,23 @@ fn run_validated(
     // Woken the moment the child ends; otherwise only as often as a cancel or
     // an observer needs looking at.
     let exited = child::pidfd(child.id());
-    let outcome = loop {
+    let status = loop {
         match finished(spec, &mut child) {
-            Some(Ok(status)) => break WaitOutcome::Exited(status),
-            // A failed wait must not return early: that abandons the child.
-            // Reap it and report the error instead.
-            Some(Err(error)) => {
-                terminate_or_kill_child_group(spec, &mut child);
-                let _ = child.wait();
-                break WaitOutcome::Failed(error);
-            }
+            Some(Ok(status)) => break status,
+            Some(Err(error)) => return Err(BigSubprocessError::Io(error)),
             None => {
                 // Cancel is the caller's explicit intent: check it before the
-                // deadline. Both take the same kill/wait path.
+                // deadline.
                 if cancel.load(Ordering::Relaxed) {
-                    terminate_or_kill_child_group(spec, &mut child);
-                    let _ = child.wait();
-                    break WaitOutcome::Cancelled;
+                    return Err(BigSubprocessError::Cancelled);
                 }
                 if deadline.remaining().is_zero() {
-                    terminate_or_kill_child_group(spec, &mut child);
-                    let _ = child.wait();
-                    break WaitOutcome::TimedOut;
+                    return Err(BigSubprocessError::Timeout);
                 }
                 if let Some(observe) = observer.as_mut()
                     && let Err(error) = observe()
                 {
-                    terminate_or_kill_child_group(spec, &mut child);
-                    let _ = child.wait();
-                    break WaitOutcome::Failed(error);
+                    return Err(BigSubprocessError::Io(error));
                 }
                 child::sleep_until_exit(
                     exited.as_ref(),
@@ -1285,16 +1270,12 @@ fn run_validated(
             }
         }
     };
+    // Reaped, so its pid may already name another process.
+    drop(DropGuard::dismiss(child));
 
     // The readers end when every write end of their pipes closes, which a
     // grandchild outside a process group may hold long after the child: the
     // output waits until the deadline, a refusal only a moment.
-    let status = match outcome {
-        WaitOutcome::Exited(status) => status,
-        WaitOutcome::TimedOut => return Err(BigSubprocessError::Timeout),
-        WaitOutcome::Cancelled => return Err(BigSubprocessError::Cancelled),
-        WaitOutcome::Failed(error) => return Err(BigSubprocessError::Io(error)),
-    };
     // The writer is waited for only until the deadline, as the readers are; past
     // it, or when the call fails, the thread ends when the pipe's last reader does.
     let _ = collect(stdin_writer, deadline);
