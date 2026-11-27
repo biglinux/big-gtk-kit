@@ -24,7 +24,7 @@ use std::time::Duration;
 use gtk::glib;
 use gtk::prelude::*;
 
-use crate::side_card::place_beside;
+use crate::side_card::{place_beside, scrolling_card};
 use crate::timer::OnceTimer;
 
 /// How long the pointer rests on another row before its card replaces the
@@ -69,7 +69,7 @@ enum Opener {
 pub struct HoverCards {
     layer: gtk::Overlay,
     rows: Vec<gtk::Widget>,
-    cards: Vec<gtk::Widget>,
+    cards: Vec<gtk::ScrolledWindow>,
     bridge: gtk::Box,
     open: Option<(usize, Opener)>,
     /// The row under the pointer, if any.
@@ -87,8 +87,9 @@ pub struct HoverCards {
 
 impl HoverCards {
     /// Puts `cards` on `layer`, card `n` belonging to `rows[n]`; a row or an
-    /// index without a card opens nothing. The cards and controllers stay on
-    /// `layer` and the rows for their lifetime: make one for each layer.
+    /// index without a card opens nothing. Each card scrolls when it is taller
+    /// than the overlay. The cards and controllers stay on `layer` and the
+    /// rows for their lifetime: make one for each layer.
     pub fn new(
         layer: &gtk::Overlay,
         rows: Vec<gtk::Widget>,
@@ -106,11 +107,11 @@ impl HoverCards {
             row.add_controller(motion);
             row.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
         }
+        let cards: Vec<gtk::ScrolledWindow> = cards.iter().map(scrolling_card).collect();
         for card in &cards {
             card.set_visible(false);
             card.set_halign(gtk::Align::Start);
             card.set_valign(gtk::Align::Start);
-            card.add_css_class("side-card");
             let motion = gtk::EventControllerMotion::new();
             let enter = emit.clone();
             motion.connect_enter(move |_, _, _| enter(CardEvent::CardEntered));
@@ -231,7 +232,7 @@ impl HoverCards {
             }
             CardEvent::Pressed(x, y) => {
                 if let Some(index) = self.open()
-                    && !self.contains(&self.cards[index], x, y)
+                    && !self.contains(self.cards[index].upcast_ref(), x, y)
                     && !self.contains(&self.rows[index], x, y)
                 {
                     self.close();
@@ -335,7 +336,7 @@ mod tests {
 
             hover.handle(CardEvent::Entered(0));
             assert_eq!(hover.open(), Some(0));
-            assert!(cards[0].is_visible());
+            assert!(cards[0].is_mapped());
             let settled = || {
                 heard
                     .borrow()
@@ -359,7 +360,7 @@ mod tests {
             assert!(big_testkit::harness::pump_until(|| settled() == 3));
             hover.handle(CardEvent::Settled);
             assert_eq!(hover.open(), None);
-            assert!(!cards[0].is_visible());
+            assert!(!cards[0].is_mapped());
 
             assert!(
                 hover.handle(CardEvent::Activated(1)),
@@ -380,6 +381,50 @@ mod tests {
             assert!(hover.handle(CardEvent::Activated(1)));
             hover.handle(CardEvent::Escape);
             assert_eq!(hover.open(), None);
+            window.destroy();
+        });
+    }
+
+    /// A card taller than the overlay is held inside it.
+    #[test]
+    fn tall_card_stays_inside_layer() {
+        big_testkit::harness::require_gtk_test(|| {
+            let layer = gtk::Overlay::new();
+            let row = gtk::Label::builder()
+                .label("Row")
+                .halign(gtk::Align::Start)
+                .valign(gtk::Align::Start)
+                .build();
+            layer.set_child(Some(&row));
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            card.set_size_request(200, 2000);
+            let mut hover = HoverCards::new(
+                &layer,
+                vec![row.upcast()],
+                vec![card.clone().upcast()],
+                |_| {},
+            );
+            let window = gtk::Window::builder()
+                .default_width(800)
+                .default_height(400)
+                .child(&layer)
+                .build();
+            window.present();
+            assert!(big_testkit::harness::pump_until(|| layer.height() > 0));
+            hover.handle(CardEvent::Entered(0));
+            assert!(big_testkit::harness::pump_frame(&window));
+            let mut shown: gtk::Widget = card.upcast();
+            while let Some(parent) = shown.parent()
+                && parent != layer
+            {
+                shown = parent;
+            }
+            let bounds = shown.compute_bounds(&layer).expect("the card's bounds");
+            assert!(
+                bounds.y() >= 0.0 && bounds.y() + bounds.height() <= layer.height() as f32,
+                "{bounds:?} past {} px",
+                layer.height()
+            );
             window.destroy();
         });
     }

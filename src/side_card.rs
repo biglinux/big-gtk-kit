@@ -314,9 +314,7 @@ impl SideCards {
         let (Some(row), Some(card)) = (self.rows.get(index), self.cards.get(index)) else {
             return;
         };
-        // A card taller than the overlay scrolls.
-        card.set_max_content_height((self.layer.height() - 2 * GAP).max(0));
-        if !place_beside(&self.layer, row, card.upcast_ref(), &self.bridge) {
+        if !place_beside(&self.layer, row, card, &self.bridge) {
             return;
         }
         row.add_css_class("card-open");
@@ -405,8 +403,13 @@ pub fn card(description: &str, choices: &impl IsA<gtk::Widget>) -> gtk::Scrolled
         .maximum_size(CARD_WIDTH)
         .tightening_threshold(CARD_WIDTH)
         .build();
+    scrolling_card(&clamp)
+}
+
+/// `content` in a card that [`place_beside`] can hold to the overlay's height.
+pub(crate) fn scrolling_card(content: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
-        .child(&clamp)
+        .child(content)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_width(true)
         .propagate_natural_height(true)
@@ -488,10 +491,11 @@ pub(crate) fn install_css() {
 /// Show `card` beside `row` on `layer`, joined by `bridge`, on whichever side
 /// has room, else below the row without the bridge, always inside the
 /// overlay; `false`, and nothing shown, when the row is not on the overlay.
+/// A card taller than the overlay scrolls.
 pub(crate) fn place_beside(
     layer: &gtk::Overlay,
     row: &gtk::Widget,
-    card: &gtk::Widget,
+    card: &gtk::ScrolledWindow,
     bridge: &gtk::Box,
 ) -> bool {
     let Some(bounds) = row.compute_bounds(layer) else {
@@ -505,6 +509,7 @@ pub(crate) fn place_beside(
     card.set_margin_start(0);
     card.set_margin_end(0);
     card.set_margin_top(0);
+    card.set_max_content_height((layer.height() - 2 * GAP).max(0));
     // Margins count from the start edge, which is the right one in a
     // right-to-left layout.
     let rtl = layer.direction() == gtk::TextDirection::Rtl;
