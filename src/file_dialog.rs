@@ -648,25 +648,36 @@ mod portal {
             title.to_variant(),
             with_token(&options, &token),
         ]);
-        let connection = bus.clone();
-        bus.call(
+        let call = gio::DBusMessage::new_method_call(
             Some(PORTAL),
             PORTAL_PATH,
-            FILE_CHOOSER,
+            Some(FILE_CHOOSER),
             method,
-            Some(&arguments),
-            None,
-            gio::DBusCallFlags::NONE,
+        );
+        call.set_body(&arguments);
+        let connection = bus.clone();
+        bus.send_message_with_reply(
+            &call,
+            gio::DBusSendMessageFlags::NONE,
             -1,
             gio::Cancellable::NONE,
-            move |result| match result {
-                // Watched from the reply on, when the name has its owner: a
-                // portal that crashes with the dialog open never answers.
-                Ok(_) if subscription.borrow().is_some() => {
+            move |reply| match reply.and_then(carried_error) {
+                // Watched from the reply on, by the unique name that sent it: a
+                // portal that crashes with the dialog open never answers, and
+                // one restarted under the same name knows nothing of this
+                // request. A name already gone is reported as vanished.
+                Ok(reply) if subscription.borrow().is_some() => {
+                    let Some(portal) = reply.sender() else {
+                        finish(Some(Err(glib::Error::new(
+                            gtk::DialogError::Failed,
+                            "the file portal's reply named no sender",
+                        ))));
+                        return;
+                    };
                     let vanished = Rc::clone(&finish);
                     watcher.set(Some(gio::bus_watch_name_on_connection(
                         &connection,
-                        PORTAL,
+                        &portal,
                         gio::BusNameWatcherFlags::NONE,
                         |_, _, _| {},
                         move |_, _| vanished(None),
@@ -680,6 +691,24 @@ mod portal {
                 Err(error) => finish(Some(Err(error))),
             },
         );
+    }
+
+    /// The reply, or the error it carries, as GLib's `g_dbus_message_to_gerror`
+    /// reads it. gio-rs 0.22's `DBusMessage::to_gerror` asserts the inverse of
+    /// that function's return value, so it panics in every debug build.
+    fn carried_error(reply: gio::DBusMessage) -> Result<gio::DBusMessage, glib::Error> {
+        if reply.message_type() != gio::DBusMessageType::Error {
+            return Ok(reply);
+        }
+        let message = reply
+            .body()
+            .and_then(|body| body.get::<(String,)>())
+            .map(|(message,)| message)
+            .unwrap_or_default();
+        Err(gio::DBusError::new_for_dbus_error(
+            reply.error_name().as_deref().unwrap_or_default(),
+            &message,
+        ))
     }
 
     /// A refusal meaning this bus has no `FileChooser` portal, which GTK's own
@@ -872,22 +901,28 @@ mod tests {
         answer
     }
 
-    /// A connection of its own on the session bus, owning the portal's name
-    /// and serving a `FileChooser` whose `OpenFile` answers through `reply`.
-    fn fake_portal(
-        reply: impl Fn(gio::DBusMethodInvocation) + 'static,
-    ) -> (gio::DBusConnection, gio::OwnerId) {
+    /// A connection of its own on the session bus, apart from the shared one
+    /// [`portal::ask`] calls on.
+    fn own_connection() -> gio::DBusConnection {
         let address =
             gio::dbus_address_get_for_bus_sync(gio::BusType::Session, gio::Cancellable::NONE)
                 .expect("a session bus");
-        let portal = gio::DBusConnection::for_address_sync(
+        gio::DBusConnection::for_address_sync(
             &address,
             gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
                 | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
             None,
             gio::Cancellable::NONE,
         )
-        .expect("a connection of the portal's own");
+        .expect("a connection of its own")
+    }
+
+    /// A connection of its own, owning the portal's name and serving a
+    /// `FileChooser` whose `OpenFile` answers through `reply`.
+    fn fake_portal(
+        reply: impl Fn(gio::DBusMethodInvocation) + 'static,
+    ) -> (gio::DBusConnection, gio::OwnerId) {
+        let portal = own_connection();
         let node = gio::DBusNodeInfo::for_xml(
             r#"<node><interface name="org.freedesktop.portal.FileChooser">
               <method name="OpenFile">
@@ -923,6 +958,20 @@ mod tests {
         (portal, owner)
     }
 
+    /// An `OpenFile` that takes the request, sets `asked`, and names a
+    /// request handle of its own, never answering on it.
+    fn take_request(asked: &Rc<Cell<bool>>) -> impl Fn(gio::DBusMethodInvocation) + 'static {
+        let asked = Rc::clone(asked);
+        move |invocation| {
+            asked.set(true);
+            let handle = glib::variant::ObjectPath::try_from(
+                "/org/freedesktop/portal/desktop/request/unanswered",
+            )
+            .expect("an object path");
+            invocation.return_value(Some(&(handle,).to_variant()));
+        }
+    }
+
     /// A portal that takes the request and leaves the bus without answering
     /// hands it to the toolkit's dialog rather than leaving it waiting.
     #[test]
@@ -931,15 +980,7 @@ mod tests {
         glib::MainContext::new()
             .with_thread_default(|| {
                 let asked = Rc::new(Cell::new(false));
-                let taken = Rc::clone(&asked);
-                let (portal, owner) = fake_portal(move |invocation| {
-                    taken.set(true);
-                    let handle = glib::variant::ObjectPath::try_from(
-                        "/org/freedesktop/portal/desktop/request/unanswered",
-                    )
-                    .expect("an object path");
-                    invocation.return_value(Some(&(handle,).to_variant()));
-                });
+                let (portal, owner) = fake_portal(take_request(&asked));
                 let answer = ask_open();
                 assert!(
                     turn_until(&|| asked.get()),
@@ -953,6 +994,79 @@ mod tests {
                 // closed one's `name_lost` as NULL.
                 gio::bus_unown_name(owner);
                 portal.close_sync(gio::Cancellable::NONE).expect("closed");
+
+                assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
+                assert!(
+                    matches!(*answer.borrow(), Some(None)),
+                    "not answered: fall back"
+                );
+            })
+            .expect("the context of this thread");
+    }
+
+    /// A connection of its own that owns the portal's name, taken with
+    /// synchronous calls, which leave this thread's context, and any reply
+    /// waiting there, unread.
+    fn successor_portal() -> gio::DBusConnection {
+        let successor = own_connection();
+        let bus_call = |method: &str, arguments: glib::Variant| {
+            successor
+                .call_sync(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    method,
+                    Some(&arguments),
+                    None,
+                    gio::DBusCallFlags::NONE,
+                    -1,
+                    gio::Cancellable::NONE,
+                )
+                .ok()
+        };
+        bus_call(
+            "RequestName",
+            ("org.freedesktop.portal.Desktop", 0u32).to_variant(),
+        )
+        .expect("in line for the portal's name");
+        let owner = || {
+            bus_call(
+                "GetNameOwner",
+                ("org.freedesktop.portal.Desktop",).to_variant(),
+            )
+            .and_then(|owner| owner.get::<(String,)>())
+            .map(|(owner,)| owner)
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while owner() != successor.unique_name().map(String::from) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the successor owns the name"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        successor
+    }
+
+    /// A portal restarted under the same name before the reply is read knows
+    /// nothing of the request, so the one that took it is what is watched.
+    #[test]
+    #[ignore = "owns the portal's name: needs the private bus of tools/headless-gate.sh"]
+    fn portal_replaced_unanswered_falls_back() {
+        glib::MainContext::new()
+            .with_thread_default(|| {
+                let asked = Rc::new(Cell::new(false));
+                let (portal, owner) = fake_portal(take_request(&asked));
+                let answer = ask_open();
+                assert!(
+                    turn_until(&|| asked.get()),
+                    "the request reached the portal"
+                );
+                portal.flush_sync(gio::Cancellable::NONE).expect("flushed");
+                gio::bus_unown_name(owner);
+                portal.close_sync(gio::Cancellable::NONE).expect("closed");
+
+                let _successor = successor_portal();
 
                 assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
                 assert!(
