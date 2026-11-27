@@ -111,10 +111,8 @@ fn has_animation_header(path: &Path) -> bool {
         // A GIF is cheap to decode and announces nothing useful in its header.
         return true;
     }
-    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
-        // APNG puts its animation control chunk before the first image data.
-        let first_data = find(&head, b"IDAT").unwrap_or(head.len());
-        return find(&head[..first_data], b"acTL").is_some();
+    if let Some(chunks) = head.strip_prefix(b"\x89PNG\r\n\x1a\n") {
+        return png_announces_animation(chunks, head.len() < PROBE_BYTES);
     }
     if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
         return find(&head, b"ANIM").is_some();
@@ -125,6 +123,31 @@ fn has_animation_header(path: &Path) -> bool {
         return find(&head[..ftyp_end], b"avis").is_some();
     }
     false
+}
+
+/// Whether the PNG `chunks` that follow the signature hold `acTL`, which APNG
+/// puts before the first `IDAT`. Walked by their lengths, since a chunk's data
+/// may spell either name; where the probe ends before an `IDAT` of a file it
+/// did not read `whole`, the sandbox decides.
+fn png_announces_animation(mut chunks: &[u8], whole: bool) -> bool {
+    while let Some((header, rest)) = chunks.split_first_chunk::<8>() {
+        match &header[4..] {
+            b"acTL" => return true,
+            b"IDAT" => return false,
+            _ => {}
+        }
+        let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        // The data, then its CRC.
+        let Some(next) = usize::try_from(length)
+            .ok()
+            .and_then(|length| length.checked_add(4))
+            .and_then(|skip| rest.get(skip..))
+        else {
+            return !whole;
+        };
+        chunks = next;
+    }
+    !whole
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -217,7 +240,7 @@ mod tests {
 
         let still_png = write(
             "still.png",
-            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRxxxxxxxxxxxxx\0\0\0\x08IDATdata",
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRxxxxxxxxxxxxxcrc!\0\0\0\x04IDATdatacrc!",
         );
         assert!(
             !has_animation_header(&still_png),
@@ -225,7 +248,7 @@ mod tests {
         );
         let apng = write(
             "moving.png",
-            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRxxxxxxxxxxxxx\0\0\0\x08acTLxxxx\0\0\0\x08IDATdata",
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRxxxxxxxxxxxxxcrc!\0\0\0\x08acTLxxxxxxxxcrc!\0\0\0\x04IDATdatacrc!",
         );
         assert!(has_animation_header(&apng));
         assert!(has_animation_header(&write("a.gif", b"GIF89a rest")));
@@ -240,6 +263,54 @@ mod tests {
         assert!(!has_animation_header(&directory.join("missing.gif")));
 
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    fn probe(name: &str, bytes: &[u8]) -> bool {
+        let path =
+            std::env::temp_dir().join(format!("big-image-probe-{}-{name}", std::process::id()));
+        std::fs::write(&path, bytes).expect("probe file");
+        let animated = has_animation_header(&path);
+        let _ = std::fs::remove_file(&path);
+        animated
+    }
+
+    fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+        chunk.extend_from_slice(kind);
+        chunk.extend_from_slice(data);
+        chunk.extend_from_slice(&[0; 4]);
+        chunk
+    }
+
+    /// `acTL` is found by walking the chunks: after text that spells `IDAT`,
+    /// and after a chunk larger than the probe reads.
+    #[test]
+    fn apng_found_by_its_chunks() {
+        let png = |before: &[Vec<u8>]| {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            bytes.extend(png_chunk(b"IHDR", &[0; 13]));
+            for chunk in before {
+                bytes.extend_from_slice(chunk);
+            }
+            bytes.extend(png_chunk(b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]));
+            bytes.extend(png_chunk(b"IDAT", &[0; 8]));
+            bytes.extend(png_chunk(b"IEND", &[]));
+            bytes
+        };
+        assert!(probe(
+            "text.png",
+            &png(&[png_chunk(b"tEXt", b"Comment\0IDAT")])
+        ));
+        assert!(probe(
+            "large.png",
+            &png(&[png_chunk(b"iTXt", &[b' '; 70_000])])
+        ));
+
+        let mut still = b"\x89PNG\r\n\x1a\n".to_vec();
+        still.extend(png_chunk(b"IHDR", &[0; 13]));
+        still.extend(png_chunk(b"IDAT", b"acTL"));
+        still.extend(png_chunk(b"IEND", &[]));
+        assert!(!probe("still.png", &still));
     }
 
     #[test]
