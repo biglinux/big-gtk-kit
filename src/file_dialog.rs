@@ -715,25 +715,19 @@ mod portal {
     /// The chosen files, none when the person cancelled, or the failure of the
     /// portal's dialog.
     pub(super) fn response(body: &glib::Variant) -> Result<Vec<gio::File>, glib::Error> {
+        let failed = |message: &str| glib::Error::new(gtk::DialogError::Failed, message);
         let Some((response, results)) = body.get::<(u32, glib::VariantDict)>() else {
-            return Err(glib::Error::new(
-                gtk::DialogError::Failed,
-                "the file portal sent a malformed response",
-            ));
+            return Err(failed("the file portal sent a malformed response"));
         };
         match response {
-            SUCCESS => Ok(results
-                .lookup_value("uris", None)
-                .and_then(|uris| uris.get::<Vec<String>>())
-                .unwrap_or_default()
-                .iter()
-                .map(|uri| gio::File::for_uri(uri))
-                .collect()),
+            SUCCESS => match results.lookup::<Vec<String>>("uris") {
+                Ok(Some(uris)) => Ok(uris.iter().map(|uri| gio::File::for_uri(uri)).collect()),
+                _ => Err(failed("the file portal chose without naming the files")),
+            },
             CANCELLED => Ok(Vec::new()),
-            code => Err(glib::Error::new(
-                gtk::DialogError::Failed,
-                &format!("the file portal's dialog ended with response {code}"),
-            )),
+            code => Err(failed(&format!(
+                "the file portal's dialog ended with response {code}"
+            ))),
         }
     }
 }
@@ -832,6 +826,19 @@ mod tests {
         );
         assert!(portal::response(&body(2)).is_err(), "failed");
         assert!(portal::response(&().to_variant()).is_err(), "malformed");
+
+        let chose = |uris: Option<glib::Variant>| {
+            let results = glib::VariantDict::new(None);
+            if let Some(uris) = uris {
+                results.insert_value("uris", &uris);
+            }
+            portal::response(&(0u32, results).to_variant())
+        };
+        assert!(chose(None).is_err(), "chose without uris");
+        assert!(
+            chose(Some("file:///a".to_variant())).is_err(),
+            "uris not a list"
+        );
     }
 
     /// Turn this thread's context until `done`, for at most five seconds.
