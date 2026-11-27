@@ -124,10 +124,11 @@ mod tests {
         let other = gtk::gdk::Display::open(Some(&name)).expect("a second display");
         assert!(adwaita_sheet_in_use(&other) && adwaita_has_restated_rules());
         restate_shadows(&other);
-        assert!(
-            crate::css::INSTALLED
-                .with_borrow(|installed| installed.iter().any(|(display, _)| *display == other))
-        );
+        assert!(crate::css::INSTALLED.with_borrow(|installed| {
+            installed
+                .iter()
+                .any(|(display, _)| display.upgrade().as_ref() == Some(&other))
+        }));
         other.close();
     }
 

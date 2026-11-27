@@ -53,8 +53,9 @@ fn provider_following(settings: Option<gtk::Settings>) -> gtk::CssProvider {
 
 thread_local! {
     /// What [`install_for_display`] added: each display with the hash of a
-    /// sheet's text.
-    pub(crate) static INSTALLED: RefCell<Vec<(gdk::Display, u64)>> = const { RefCell::new(Vec::new()) };
+    /// sheet's text. Weak, so a display closed later can go.
+    pub(crate) static INSTALLED: RefCell<Vec<(gtk::glib::WeakRef<gdk::Display>, u64)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// [`install_for_display`] on the default display.
@@ -76,14 +77,20 @@ pub fn install(sheet: &str, priority: u32) {
 pub fn install_for_display(display: &gdk::Display, sheet: &str, priority: u32) {
     let mut hasher = DefaultHasher::new();
     (sheet, priority).hash(&mut hasher);
-    let key = (display.clone(), hasher.finish());
-    if INSTALLED.with_borrow(|installed| installed.contains(&key)) {
+    let hash = hasher.finish();
+    let added = INSTALLED.with_borrow_mut(|installed| {
+        installed.retain(|(display, _)| display.upgrade().is_some());
+        installed.iter().any(|(other, other_hash)| {
+            *other_hash == hash && other.upgrade().as_ref() == Some(display)
+        })
+    });
+    if added {
         return;
     }
     let provider = provider_for_display(display);
     provider.load_from_string(sheet);
     add_provider(display, &provider, priority);
-    INSTALLED.with_borrow_mut(|installed| installed.push(key));
+    INSTALLED.with_borrow_mut(|installed| installed.push((display.downgrade(), hash)));
 }
 
 /// A sheet on a display that its owner replaces as settings change.
