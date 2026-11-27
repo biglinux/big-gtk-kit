@@ -448,19 +448,24 @@ def top_level_index(text: str, start: int, stop: int, token: str) -> int:
     return -1
 
 
-def closure_end(text: str, start: int) -> int:
-    """Where the closure whose body starts at `start` ends: at a `,` or `;` outside
-    brackets, or at the bracket that closes the one around it."""
-    depth = 0
+def expression_end(text: str, start: int) -> int:
+    """Where the expression that starts at `start` ends: at a `,` or `;` outside
+    brackets and turbofish generics (`::<A, B>`), or at the bracket that closes
+    the one around it."""
+    depth = generics = 0
     for i in range(start, len(text)):
         c = text[i]
-        if c in "([{":
+        if c == "<" and (generics or text[i - 2 : i] == "::"):
+            generics += 1
+        elif c == ">" and generics and text[i - 1] != "-":  # not `->` in `fn() -> T`
+            generics -= 1
+        elif c in "([{":
             depth += 1
         elif c in ")]}":
             depth -= 1
             if depth < 0:
                 return i
-        elif depth == 0 and c in ",;":
+        elif depth == 0 and not generics and c in ",;":
             return i
     return len(text)
 
@@ -555,7 +560,7 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
             # a `let` binds after its statement: its right-hand side still sees the outer name
             where, until = m.start(1), len(body)
             if binder is binders[2]:
-                until = closure_end(body, m.end())
+                until = expression_end(body, m.end())
             if binder is binders[0]:
                 conditional = re.search(r"\b(if|while)\s*$|&&\s*$", body[: m.start()])
                 if conditional:  # `if let`, `while let`, and a let chain's `&& let`
@@ -799,7 +804,7 @@ def none_arm_continues(closure: str) -> bool:
         if closure.startswith("{", m.end()):
             arm = call_argument(closure, m.end())
         else:
-            arm = closure[m.end() : closure_end(closure, m.end())]
+            arm = closure[m.end() : expression_end(closure, m.end())]
         if re.search(r"\bContinue\b", arm):
             return True
     return False
@@ -822,7 +827,13 @@ def rule_repeating_source_without_weak_exit(src: Source):
             if not local:
                 continue  # a fn item captures nothing
             closure = statement_after(src.text, local[-1].end())
-        closure = re.sub(r'"(?:\\.|[^"\\])*"', '""', closure)  # words in strings
+        # words in strings and block comments are not code
+        closure = re.sub(
+            r'"(?:\\.|[^"\\])*"|/\*.*?\*/',
+            lambda m: '""' if m.group().startswith('"') else " ",
+            closure,
+            flags=re.DOTALL,
+        )
         if "Continue" not in closure:
             continue  # returns Break every time: it runs once
         if (
