@@ -1280,6 +1280,21 @@ fn switch_and_scale_rows_follow_actions() {
         assert_eq!(zoom.state().and_then(|state| state.get::<i32>()), Some(5));
         zoom.set_state(&1_i32.to_variant());
         assert!((scale.value() - 1.0).abs() < f64::EPSILON);
+        // The slider is off while its action is, from the start too.
+        zoom.set_enabled(false);
+        assert!(!scale.is_sensitive());
+        let later = build_menu_model_action_popover_menu(
+            &menu,
+            &popover_labels(),
+            &[],
+            &[BigMenuActionGroupBinding::new("view", &actions)],
+        );
+        let later_scale = find_widget(later.upcast_ref(), &|widget| widget.is::<gtk::Scale>())
+            .expect("scale item is a slider");
+        assert!(!later_scale.is_sensitive());
+        zoom.set_enabled(true);
+        assert!(scale.is_sensitive());
+        assert!(later_scale.is_sensitive());
         window.close();
     });
 }
