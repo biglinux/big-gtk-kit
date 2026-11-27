@@ -18,7 +18,7 @@ looks glyphs up at `MAX (scale.width, scale.height)`, and
 Only under rotations and other transforms that are not a scale do they round
 the scale, up to the next power of two.
 
-`scale-animation-cache.patch` (5 files, +461 −24) applies on 4.24.1, alone or
+`scale-animation-cache.patch` (5 files, +562 −24) applies on 4.24.1, alone or
 after the other held patches. After glyph-scaled-font-leak it needs a three-way
 apply (`git apply -3` or `git am -3`, as the package uses), because both add the
 same include to `testsuite/gsk/misc.c`. It does not apply on main (b9cd9290d5
@@ -41,7 +41,8 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
 - Between two multiples, fills and strokes are rendered at the next multiple up
   on a quarter pixel grid instead of a 1/32 one and resampled down, as the
   renderer already does under rotations. The frames of one animation, and the
-  openings after it, then share entries.
+  openings after it, then share entries. Below one step (1/120), which can be
+  any number of times the scale, they keep the exact scale.
 - A cached fill or stroke is snapped to the pixel grid of the scale it is
   rendered at, not of the frame that made it, and its key holds its subpixel
   grid, so a mask made on the quarter pixel grid is never taken for a phase on
@@ -81,6 +82,12 @@ usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
   quarter of a step, inks only the pixels of its ink rectangle at that scale
   and the pixel around them. Rounded up to 1/120, it is drawn four times too
   large and the test fails. It opens a second display for the same reason.
+- `/renderer/gl/scaled-tiny-mask`: a circle 90 pixels across under a 1/65536
+  scale, a 546th of a step, filled and stroked 4 pixels wide, covers the
+  pixels more than 1.5 pixels inside its edges and none more than 1.5 pixels
+  outside. Rounded up to 1/120, its masks are 546 times as wide and tall, over
+  49 000 pixels, too large for a texture on either GPU tested, and nothing is
+  drawn: the test fails. It opens a second display for the same reason.
 
 Which scales count as at rest is decided by the scale alone, not by watching it
 change: the renderer draws only on damage, so the last frame of an animation
@@ -171,6 +178,8 @@ on the GTX 1660 Ti and on Mesa llvmpipe, and fails without the snap in
 and 17/255 at the first differing byte); the rest of `misc` passes with it.
 `/renderer/gl/scaled-tiny-text` passes on both and fails with glyphs rounded up
 to 1/120 below half a step (alpha 225/255 outside the ink).
+`/renderer/gl/scaled-tiny-mask` passes on both and fails with masks rounded up
+to 1/120 below one step (nothing drawn: alpha 0/255 inside the stroke).
 
 ## Costs and risks
 
