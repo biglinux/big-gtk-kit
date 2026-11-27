@@ -43,8 +43,9 @@ pub struct ProductOptions<'a> {
     /// The msgid of what the product does, under the usage, in place of the
     /// line `accepts_files` picks.
     pub summary: Option<&'a str>,
-    /// Each option as its help shows it (`--diff LEFT RIGHT`), and the msgid of
-    /// what it does. A `--` among them ends the options: what follows is a file.
+    /// Each option as its help shows it, with a word per value it takes
+    /// (`--diff LEFT RIGHT`), and the msgid of what it does. A `--` among them
+    /// ends the options: what follows is a file.
     pub options: &'a [(&'a str, &'a str)],
 }
 
@@ -112,18 +113,34 @@ impl ProductOptions<'_> {
     }
 
     /// The first argument before a taken `--` that the product does not take:
-    /// an option, or anything at all when it opens no files.
+    /// an option, or anything at all when it opens no files. The values a
+    /// taken option shows in its help follow it, whatever their spelling.
     fn refused<'a>(&self, arguments: &'a [OsString]) -> Option<&'a OsStr> {
-        let takes = |argument: &OsStr| {
-            self.options
-                .iter()
-                .any(|(shown, _)| shown.split(' ').next() == argument.to_str())
-        };
-        arguments
-            .iter()
-            .map(OsString::as_os_str)
-            .take_while(|argument| *argument != "--" || !takes(argument))
-            .find(|argument| (is_option(argument) || !self.accepts_files) && !takes(argument))
+        let mut arguments = arguments.iter().map(OsString::as_os_str);
+        while let Some(argument) = arguments.next() {
+            let Some(values) = self.values_of(argument) else {
+                if is_option(argument) || !self.accepts_files {
+                    return Some(argument);
+                }
+                continue;
+            };
+            if argument == "--" {
+                return None;
+            }
+            for _ in 0..values {
+                arguments.next();
+            }
+        }
+        None
+    }
+
+    /// How many values `argument` takes, from its help (`--diff LEFT RIGHT`
+    /// takes two); `None` when the product does not take it.
+    fn values_of(&self, argument: &OsStr) -> Option<usize> {
+        self.options.iter().find_map(|(shown, _)| {
+            let mut words = shown.split(' ');
+            (words.next() == argument.to_str()).then(|| words.count())
+        })
     }
 
     /// Looks a msgid up in the product's catalog and puts its name in place.
@@ -180,6 +197,19 @@ mod tests {
         assert_eq!(
             refused(&no_files, &["--resize", "a.png"]),
             Some("a.png".into())
+        );
+    }
+
+    #[test]
+    fn option_values_may_start_with_dash() {
+        let diff = ProductOptions {
+            options: &[("--diff LEFT RIGHT", "Compare")],
+            ..IMAGES
+        };
+        assert_eq!(refused(&diff, &["--diff", "-old.txt", "-new.txt"]), None);
+        assert_eq!(
+            refused(&diff, &["--diff", "a.txt", "b.txt", "-x"]),
+            Some("-x".into())
         );
     }
 
