@@ -224,9 +224,10 @@ impl BigTaskSignal {
     /// Run a subprocess through [`BigSubprocessSpec::run_cancellable`].
     ///
     /// Cooperative cancellation flips this signal first; after the configured
-    /// deadline a private hard-cancel flag is set, and the existing subprocess
-    /// cancellation loop performs the kill path. A signal already cancelled
-    /// starts nothing.
+    /// deadline a hard-cancel flag shared by every subprocess of the task is
+    /// set, and the subprocess cancellation loop performs the kill path. The
+    /// hook of [`Self::set_hard_cancel_hook`] stays the caller's. A signal
+    /// already cancelled starts nothing.
     ///
     /// # Errors
     ///
@@ -250,15 +251,24 @@ impl BigTaskSignal {
         &self,
         spec: &BigSubprocessSpec,
     ) -> Result<BigSubprocessOutput, BigSubprocessError> {
-        if self.is_cancelled() {
-            return Err(BigSubprocessError::Cancelled);
+        {
+            let mut slot = self
+                .state
+                .hard_cancel_hook
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if self.is_cancelled() {
+                return Err(BigSubprocessError::Cancelled);
+            }
+            slot.running_subprocesses += 1;
         }
-        let hard_cancel = Arc::new(AtomicBool::new(false));
-        self.set_hard_cancel_hook({
-            let hard_cancel = Arc::clone(&hard_cancel);
-            move || hard_cancel.store(true, Ordering::Release)
-        });
-        spec.run_cancellable(&hard_cancel)
+        let output = spec.run_cancellable(&self.state.hard_cancelled);
+        self.state
+            .hard_cancel_hook
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .running_subprocesses -= 1;
+        output
     }
 }
 
@@ -330,9 +340,18 @@ struct BigTaskState {
     cancelled: AtomicBool,
     completed: AtomicBool,
     hard_cancel_armed: AtomicBool,
+    /// Set when the deadline passes; every subprocess of the task polls it.
+    hard_cancelled: AtomicBool,
     cancellation_deadline: Duration,
-    hard_cancel_hook: Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
+    hard_cancel_hook: Mutex<HardCancelSlot>,
     hard_cancel_wake: Condvar,
+}
+
+/// What a passing deadline acts on; with neither, cancelling arms no deadline.
+#[derive(Default)]
+struct HardCancelSlot {
+    hook: Option<Box<dyn FnOnce() + Send + 'static>>,
+    running_subprocesses: usize,
 }
 
 impl BigTaskState {
@@ -341,8 +360,9 @@ impl BigTaskState {
             cancelled: AtomicBool::new(false),
             completed: AtomicBool::new(false),
             hard_cancel_armed: AtomicBool::new(false),
+            hard_cancelled: AtomicBool::new(false),
             cancellation_deadline,
-            hard_cancel_hook: Mutex::new(None),
+            hard_cancel_hook: Mutex::new(HardCancelSlot::default()),
             hard_cancel_wake: Condvar::new(),
         }
     }
@@ -361,7 +381,7 @@ impl BigTaskState {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             self.completed.store(true, Ordering::Release);
-            slot.take()
+            slot.hook.take()
         };
         self.hard_cancel_wake.notify_all();
         drop(old);
@@ -378,7 +398,7 @@ impl BigTaskState {
                 drop(slot);
                 return;
             }
-            slot.replace(hook)
+            slot.hook.replace(hook)
         };
         drop(old);
         if self.cancelled.load(Ordering::Acquire) {
@@ -393,7 +413,7 @@ impl BigTaskState {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if self.completed.load(Ordering::Acquire)
-                || slot.is_none()
+                || (slot.hook.is_none() && slot.running_subprocesses == 0)
                 || self.hard_cancel_armed.swap(true, Ordering::AcqRel)
             {
                 return;
@@ -413,8 +433,11 @@ impl BigTaskState {
                         !state.completed.load(Ordering::Acquire)
                     })
                     .unwrap_or_else(|e| e.into_inner());
-                let hook = slot.take();
+                let hook = slot.hook.take();
                 let completed = state.completed.load(Ordering::Acquire);
+                if !completed {
+                    state.hard_cancelled.store(true, Ordering::Release);
+                }
                 state.hard_cancel_armed.store(false, Ordering::Release);
                 drop(slot);
                 // The hook was claimed before completion. A subsequent complete
@@ -433,7 +456,8 @@ impl BigTaskState {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 self.hard_cancel_armed.store(false, Ordering::Release);
-                slot.take()
+                self.hard_cancelled.store(true, Ordering::Release);
+                slot.hook.take()
             };
             if let Some(hook) = hook {
                 hook();
@@ -510,7 +534,7 @@ mod tests {
                 token.complete();
             });
             assert!(weak.upgrade().is_none());
-            assert!(token.state.hard_cancel_hook.lock().unwrap().is_none());
+            assert!(token.state.hard_cancel_hook.lock().unwrap().hook.is_none());
         }
     }
 
@@ -641,27 +665,61 @@ mod tests {
         panic!("hard cancel hook did not fire");
     }
 
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn deadline_cancel_kills_subprocess() {
+    /// Runs five-second sleeps on clones of one signal, one per marker name,
+    /// and cancels the task once every child has created its marker.
+    fn cancel_started_sleeps(markers: &[&str]) {
+        let dir = std::env::temp_dir().join(format!(
+            "big-os-kit-task-{}-{}",
+            std::process::id(),
+            markers.join("-")
+        ));
+        std::fs::create_dir_all(&dir).expect("marker directory");
         let token = BigTaskToken::new(Duration::from_millis(20));
-        let signal = token.signal();
-        let worker = std::thread::spawn(move || {
-            signal.run_subprocess(
-                &BigSubprocessSpec::builder()
-                    .program("sleep")
-                    .arg("5")
-                    .timeout(Duration::from_secs(30))
-                    .build(),
-            )
-        });
+        let workers: Vec<_> = markers
+            .iter()
+            .map(|name| {
+                let signal = token.signal();
+                let marker = dir.join(name);
+                std::thread::spawn(move || {
+                    signal.run_subprocess(
+                        &BigSubprocessSpec::builder()
+                            .program("sh")
+                            .args(["-c", r#"touch "$0" && exec sleep 5"#])
+                            .arg(marker.into_os_string())
+                            .allow_list(["sh"])
+                            .timeout(Duration::from_secs(30))
+                            .build(),
+                    )
+                })
+            })
+            .collect();
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while markers.iter().any(|name| !dir.join(name).exists()) {
+            assert!(std::time::Instant::now() < until, "a child never started");
+            std::thread::sleep(Duration::from_millis(5));
+        }
 
         token.cancel();
         let start = std::time::Instant::now();
-        let err = worker.join().expect("subprocess thread joins").unwrap_err();
+        for worker in workers {
+            let err = worker.join().expect("subprocess thread joins").unwrap_err();
+            assert!(matches!(err, BigSubprocessError::Cancelled), "{err:?}");
+        }
+        let elapsed = start.elapsed();
+        std::fs::remove_dir_all(&dir).expect("remove marker directory");
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+    }
 
-        assert!(matches!(err, BigSubprocessError::Cancelled));
-        assert!(start.elapsed() < Duration::from_secs(2));
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn deadline_cancel_kills_subprocess() {
+        cancel_started_sleeps(&["only"]);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn deadline_cancel_kills_every_subprocess() {
+        cancel_started_sleeps(&["first", "second"]);
     }
 
     /// A task cancelled before its program starts does not wait out the
