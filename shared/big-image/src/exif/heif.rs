@@ -99,7 +99,7 @@ fn thumbnail_item(iref: &[u8]) -> Option<u64> {
     Cursor { bytes: reference }.uint(id_width(version))
 }
 
-/// `(id, offset, length)` of every item `iloc` places in the file itself, in
+/// `(id, offset, length)` of every item `iloc` places in this file itself, in
 /// one extent.
 fn locations(iloc: &[u8]) -> Option<Vec<(u64, u64, u64)>> {
     let mut cursor = Cursor { bytes: iloc };
@@ -120,7 +120,8 @@ fn locations(iloc: &[u8]) -> Option<Vec<(u64, u64, u64)>> {
         let id = cursor.uint(if version < 2 { 2 } else { 4 })?;
         // Construction method 0 is an offset into the file.
         let in_file = version == 0 || cursor.uint(2)? & 15 == 0;
-        cursor.take(2)?;
+        // Data reference 0 is this file; any other names a file elsewhere.
+        let local = cursor.uint(2)? == 0;
         let base = cursor.uint(base_width)?;
         let extents = cursor.uint(2)?;
         if extents != 1 {
@@ -133,7 +134,7 @@ fn locations(iloc: &[u8]) -> Option<Vec<(u64, u64, u64)>> {
         }
         let offset = cursor.uint(offset_width)?;
         let length = cursor.uint(length_width)?;
-        if in_file {
+        if in_file && local {
             found.push((id, base.checked_add(offset)?, length));
         }
     }
@@ -251,11 +252,17 @@ mod tests {
     /// A HEIC head: a primary item, a `jpeg` thumbnail item when `thumbnail`
     /// is set and an `Exif` item holding `tiff`, with `mdat` after `meta`.
     fn camera_heic(thumbnail: Option<&[u8]>, tiff: &[u8]) -> Vec<u8> {
-        tiled_heic(0, thumbnail, tiff)
+        tiled_heic(0, thumbnail, tiff, 0)
     }
 
-    /// `camera_heic` with `tiles` image items listed ahead of the others.
-    fn tiled_heic(tiles: u16, thumbnail: Option<&[u8]>, tiff: &[u8]) -> Vec<u8> {
+    /// `camera_heic` with `tiles` image items listed ahead of the others, and
+    /// the thumbnail's bytes in the file `thumbnail_file` names, 0 for this one.
+    fn tiled_heic(
+        tiles: u16,
+        thumbnail: Option<&[u8]>,
+        tiff: &[u8],
+        thumbnail_file: u16,
+    ) -> Vec<u8> {
         let mut exif = 0u32.to_be_bytes().to_vec();
         exif.extend_from_slice(tiff);
         let build = |data_at: u32| {
@@ -273,14 +280,20 @@ mod tests {
             let mut iloc = vec![0, 0, 0, 0, 0x44, 0];
             iloc.extend_from_slice(&(2 + tiles).to_be_bytes());
             let thumb_at = data_at + exif.len() as u32;
-            let tile_items = (0..tiles).map(|id| (100 + id, data_at, 0));
+            let tile_items = (0..tiles).map(|id| (100 + id, 0, data_at, 0));
             let items = tile_items.chain([
-                (2u16, thumb_at, thumbnail.map_or(0, <[u8]>::len) as u32),
-                (3, data_at, exif.len() as u32),
+                (
+                    2u16,
+                    thumbnail_file,
+                    thumb_at,
+                    thumbnail.map_or(0, <[u8]>::len) as u32,
+                ),
+                (3, 0, data_at, exif.len() as u32),
             ]);
-            for (id, at, length) in items {
+            for (id, file, at, length) in items {
                 iloc.extend_from_slice(&id.to_be_bytes());
-                iloc.extend_from_slice(&[0, 0, 0, 1]);
+                iloc.extend_from_slice(&file.to_be_bytes());
+                iloc.extend_from_slice(&[0, 1]);
                 iloc.extend_from_slice(&at.to_be_bytes());
                 iloc.extend_from_slice(&length.to_be_bytes());
             }
@@ -324,7 +337,7 @@ mod tests {
 
     #[test]
     fn thumbnail_behind_many_tiles_is_found() {
-        let head = tiled_heic(300, Some(THUMBNAIL), &camera_tiff(6, None));
+        let head = tiled_heic(300, Some(THUMBNAIL), &camera_tiff(6, None), 0);
         assert_eq!(
             thumbnail(&head),
             Some(EmbeddedThumbnail {
@@ -344,6 +357,13 @@ mod tests {
                 orientation: 3
             })
         );
+    }
+
+    /// A thumbnail item kept in another file is not read from this one's bytes.
+    #[test]
+    fn thumbnail_in_another_file_has_none() {
+        let head = tiled_heic(0, Some(THUMBNAIL), &camera_tiff(1, None), 1);
+        assert_eq!(thumbnail(&head), None);
     }
 
     #[test]
