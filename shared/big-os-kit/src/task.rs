@@ -109,6 +109,8 @@ impl BigTaskToken {
     }
 
     /// Mark the operation finished and disarm any registered hard-kill hook.
+    /// Call it after the operation's last subprocess ended: one still running
+    /// is no longer stopped by a later cancel.
     ///
     /// # Examples
     ///
@@ -675,6 +677,8 @@ mod tests {
             std::process::id(),
             markers.join("-")
         ));
+        // A run under the same PID may have left its markers behind.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("marker directory");
         let token = BigTaskToken::new(Duration::from_millis(20));
         let workers: Vec<_> = markers
