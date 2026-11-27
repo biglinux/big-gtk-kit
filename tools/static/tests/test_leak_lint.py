@@ -315,6 +315,35 @@ class WarningRules(unittest.TestCase):
             [],
         )
 
+    def test_receiver_path_across_lines(self):
+        # `self\n.button` is the field `button`; `other\n.button` names no local.
+        self.assertIn(
+            ("handler-holds-owner", "warning"),
+            lint("""
+            impl Window {
+                fn wire(&self) {
+                    let button = self.button.clone();
+                    self
+                        .button
+                        .connect_clicked(move |_| button.set_label("x"));
+                }
+            }
+        """),
+        )
+        for receiver in ("other\n.button", "other()\n.button"):
+            with self.subTest(receiver=receiver):
+                self.assertEqual(
+                    lint(f"""
+                    fn wire(other: &Other) {{
+                        let button = gtk::Button::new();
+                        let held = button.clone();
+                        {receiver}
+                            .connect_clicked(move |_| held.set_label("x"));
+                    }}
+                    """),
+                    [],
+                )
+
     def test_flag_set_pipes_bind_nothing(self):
         # The `|` of a pattern and of a flag set paired with the inner
         # closure's `|popover|`.

@@ -659,9 +659,16 @@ def closure_captures(arg: str, before: str, values: dict[str, set[str]]) -> set[
     return held
 
 
-# A handler connected on a local or on a field of `self`: `picker.open` is the
-# field of another value, never the local `open`.
-CONNECT = re.compile(r"(?<![\w.])((?:\w+\.)*\w+)\s*\.\s*connect_\w+\s*\(")
+CONNECT = re.compile(r"(?<![\w.])((?:\w+\s*\.\s*)*\w+)\s*\.\s*connect_\w+\s*\(")
+
+
+def connected_locals(text: str):
+    """(match, name) of each handler connected on a local or on a field of `self`:
+    `picker.open` is the field of another value, never the local `open`."""
+    for m in CONNECT.finditer(text):
+        target = source_name(re.sub(r"\s+", "", m.group(1)))
+        if "." not in target:
+            yield m, target
 
 
 def rule_handler_holds_owner(src: Source):
@@ -701,10 +708,7 @@ def rule_handler_holds_owner(src: Source):
                 if more:
                     parents |= more
                     changed = True
-        for m in CONNECT.finditer(text):
-            target = source_name(m.group(1))
-            if "." in target:
-                continue  # a field of another value, not a local
+        for m, target in connected_locals(text):
             index = max(i for i, st in enumerate(starts) if st <= m.start())
             strong = handler_captures(text, m.end(), text[: m.start()], values)
             if target in strong:
@@ -736,10 +740,7 @@ def rule_mutual_siblings(src: Source):
             starts.append(pos)
             pos += len(line) + 1
         holds: dict[str, tuple[set[str], int]] = {}
-        for m in CONNECT.finditer(text):
-            target = source_name(m.group(1))
-            if "." in target:
-                continue  # a field of another value, not a local
+        for m, target in connected_locals(text):
             index = max(i for i, st in enumerate(starts) if st <= m.start())
             before = "\n".join(body[max(0, index - 12) : index + 1])
             strong = handler_captures(text, m.end(), before)
