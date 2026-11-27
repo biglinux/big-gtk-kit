@@ -185,16 +185,19 @@ fn extract_frame(
     seek: bool,
     cancellation: &AtomicBool,
 ) -> Result<BigRgbaImage, FrameFailure> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(FrameFailure::Transient);
+    }
+    if bound <= 0 || i64::from(bound) * i64::from(bound) > MAX_VIDEO_FRAME_PIXELS {
+        return Err(FrameFailure::NoPicture);
+    }
     // `ffmpeg` parses whatever the file holds, and a folder opened in the file
     // manager has every video in it thumbnailed without a click, so it runs
     // only in the thumbnailers' confinement: the system, the one file
     // read-only, an empty /tmp and no network. Where bubblewrap cannot run,
     // the file shows its type's icon.
-    if cancellation.load(Ordering::Acquire) || !crate::thumbnailer::sandbox_works() {
+    if !crate::thumbnailer::sandbox_works() {
         return Err(FrameFailure::Transient);
-    }
-    if bound <= 0 || i64::from(bound) * i64::from(bound) > MAX_VIDEO_FRAME_PIXELS {
-        return Err(FrameFailure::NoPicture);
     }
     // Through any links, as a document's page is: anything but a plain file,
     // or a loop of links, has no picture; anything else that stops the open
