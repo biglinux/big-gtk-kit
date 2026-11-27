@@ -226,13 +226,15 @@ impl BigTaskSignal {
     /// Cooperative cancellation flips this signal first; after the configured
     /// deadline a hard-cancel flag shared by every subprocess of the task is
     /// set, and the subprocess cancellation loop performs the kill path. The
-    /// hook of [`Self::set_hard_cancel_hook`] stays the caller's. A signal
-    /// already cancelled starts nothing.
+    /// hook of [`Self::set_hard_cancel_hook`] stays the caller's. A task
+    /// already cancelled or completed starts nothing.
     ///
     /// # Errors
     ///
-    /// Returns the subprocess validation, spawn, I/O, timeout, or cancellation
-    /// error from [`BigSubprocessSpec::run_cancellable`].
+    /// Returns [`BigSubprocessError::Cancelled`] when the task was already
+    /// cancelled or completed, else the subprocess validation, spawn, I/O,
+    /// timeout, or cancellation error from
+    /// [`BigSubprocessSpec::run_cancellable`].
     ///
     /// # Examples
     ///
@@ -257,7 +259,7 @@ impl BigTaskSignal {
                 .hard_cancel_hook
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if self.is_cancelled() {
+            if self.is_cancelled() || self.state.completed.load(Ordering::Acquire) {
                 return Err(BigSubprocessError::Cancelled);
             }
             slot.running_subprocesses += 1;
@@ -720,6 +722,27 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn deadline_cancel_kills_every_subprocess() {
         cancel_started_sleeps(&["first", "second"]);
+    }
+
+    /// A completed task can never hard-cancel, so a late run would be
+    /// unkillable until its own timeout.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn completed_signal_starts_nothing() {
+        let token = BigTaskToken::new(Duration::from_millis(20));
+        token.complete();
+        let start = std::time::Instant::now();
+        let err = token
+            .signal()
+            .run_subprocess(
+                &BigSubprocessSpec::builder()
+                    .program("sleep")
+                    .arg("5")
+                    .build(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, BigSubprocessError::Cancelled));
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 
     /// A task cancelled before its program starts does not wait out the
