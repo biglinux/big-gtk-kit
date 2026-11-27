@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use big_gtk_kit::tooltip::name_control;
+use gtk::glib::translate::IntoGlib;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
 
@@ -684,8 +685,9 @@ impl BigShortcutEditor {
         let Some(index) = self.rows.iter().position(|row| row.action == action) else {
             return;
         };
-        if !accel.is_empty() && gtk::accelerator_parse(&accel).is_none() {
-            log::warn!("shortcut editor: {accel:?} is no GTK accelerator; capture kept open");
+        // An empty one turns the shortcut off; a key is required otherwise.
+        if !accel.is_empty() && parse_accel(&accel).is_none_or(|(key, _)| key.into_glib() == 0) {
+            log::warn!("shortcut editor: {accel:?} names no key; capture kept open");
             return;
         }
         self.contested_accel = None;
@@ -1392,12 +1394,12 @@ mod tests {
             use relm4::ComponentController;
             let (editor, window, outputs) = shown_editor();
             editor.emit(BigShortcutEditorInput::BeginCapture("next".to_owned()));
-            editor.emit(BigShortcutEditorInput::CommitCapture(
-                "not-a-key".to_owned(),
-            ));
-            big_testkit::harness::pump();
-            assert!(outputs.borrow().is_empty());
-            assert_eq!(editor.model().rows[1].current_accel, "n");
+            for written in ["not-a-key", "<Ctrl>"] {
+                editor.emit(BigShortcutEditorInput::CommitCapture(written.to_owned()));
+                big_testkit::harness::pump();
+                assert!(outputs.borrow().is_empty(), "{written}");
+                assert_eq!(editor.model().rows[1].current_accel, "n");
+            }
             editor.emit(BigShortcutEditorInput::CommitCapture("m".to_owned()));
             big_testkit::harness::pump();
             assert_eq!(*outputs.borrow(), [changed("next", "m")]);
