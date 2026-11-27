@@ -320,15 +320,16 @@ impl SideCards {
         row.add_css_class("card-open");
         row.update_state(&[gtk::accessible::State::Expanded(Some(true))]);
         self.open = Some(index);
-        match tiles(card.upcast_ref())
-            .into_iter()
-            .find(|tile| tile.is_active())
+        // The chosen tile, else the first that takes the focus: a group's Tab
+        // stop is its chosen tile alone, so moving by Tab skips a group whose
+        // chosen tile cannot take it.
+        let tiles = tiles(card.upcast_ref());
+        let chosen = tiles.iter().filter(|tile| tile.is_active());
+        if !chosen
+            .chain(&tiles)
+            .any(gtk::prelude::WidgetExt::grab_focus)
         {
-            Some(chosen) if chosen.grab_focus() => {}
-            // None chosen, or the chosen one cannot take the focus.
-            _ => {
-                card.child_focus(gtk::DirectionType::TabForward);
-            }
+            card.child_focus(gtk::DirectionType::TabForward);
         }
     }
 
@@ -872,24 +873,22 @@ mod tests {
         });
     }
 
-    /// When the chosen tile cannot take the focus, the focus still enters the
-    /// card instead of staying on the row.
+    /// When the chosen tile cannot take the focus, another choice of its group
+    /// does, though Tab would skip the whole group.
     #[test]
     fn unfocusable_choice_leaves_focus_in_card() {
         big_testkit::harness::require_gtk_test(|| {
             let mut fixture = Fixture::new();
             fixture.tiles[1].set_can_focus(false);
-            // Out of the group, whose Tab stop is its chosen tile alone, so the
-            // card has another control to take the focus.
-            fixture.tiles[0].set_group(None::<&gtk::CheckButton>);
             let card = fixture.tiles[0]
                 .ancestor(gtk::ScrolledWindow::static_type())
                 .expect("the card");
             fixture.row.row.grab_focus();
             fixture.cards.handle(CardEvent::Activated(0));
-            assert!(big_testkit::harness::pump_until(|| fixture
-                .focus()
-                .is_ancestor(&card)));
+            assert!(big_testkit::harness::pump_until(
+                || fixture.tiles[0].has_focus()
+            ));
+            assert!(fixture.focus().is_ancestor(&card));
             fixture.window.destroy();
         });
     }

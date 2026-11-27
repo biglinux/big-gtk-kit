@@ -38,7 +38,18 @@ pub fn build(builder: adw::builders::ComboRowBuilder) -> adw::ComboRow {
     )]
     let row = builder.build();
     show_whole_choices(&row);
-    name_list_items(row.factory(), row.list_factory());
+    for factory in [row.factory(), row.list_factory()] {
+        name_items(factory);
+    }
+    // libadwaita makes a new default factory when the expression changes.
+    row.connect_factory_notify(|row| {
+        show_whole_in(row.factory());
+        name_items(row.factory());
+    });
+    row.connect_list_factory_notify(|row| {
+        show_whole_in(row.list_factory());
+        name_items(row.list_factory());
+    });
     focus_chosen_item_on_open(&row, |row| row.selected());
     row
 }
@@ -53,16 +64,12 @@ pub fn build_drop_down(builder: gtk::builders::DropDownBuilder) -> gtk::DropDown
         reason = "the one place allowed to build it"
     )]
     let dropdown = builder.build();
-    name_list_items(dropdown.factory(), dropdown.list_factory());
-    // GTK makes new default factories when the expression changes; each new
-    // one is named too. Setting the same factory again notifies nothing.
-    dropdown.connect_factory_notify(|dropdown| name_list_items(dropdown.factory(), None));
-    dropdown.connect_list_factory_notify(|dropdown| {
-        let list = dropdown
-            .list_factory()
-            .filter(|list| Some(list) != dropdown.factory().as_ref());
-        name_list_items(None, list);
-    });
+    for factory in [dropdown.factory(), dropdown.list_factory()] {
+        name_items(factory);
+    }
+    // GTK makes new default factories when the expression changes.
+    dropdown.connect_factory_notify(|dropdown| name_items(dropdown.factory()));
+    dropdown.connect_list_factory_notify(|dropdown| name_items(dropdown.list_factory()));
     focus_chosen_item_on_open(&dropdown, gtk::DropDown::selected);
     dropdown
 }
@@ -158,20 +165,8 @@ const LIST_WRAP_CHARS: i32 = 40;
 ///
 /// Only that factory's labels change; a row with a factory of its own keeps it.
 fn show_whole_choices(row: &adw::ComboRow) {
-    for factory in [row.factory(), row.list_factory()].into_iter().flatten() {
-        if let Some(factory) = factory.downcast_ref::<gtk::SignalListItemFactory>() {
-            // After the row's own setup, which made the label.
-            factory.connect_setup(|_, item| {
-                if let Some(label) = item
-                    .downcast_ref::<gtk::ListItem>()
-                    .and_then(gtk::ListItem::child)
-                    .and_then(|child| child.first_child())
-                    .and_downcast::<gtk::Label>()
-                {
-                    show_whole(&label);
-                }
-            });
-        }
+    for factory in [row.factory(), row.list_factory()] {
+        show_whole_in(factory);
     }
     // The items made before this call.
     let mut pending = vec![row.clone().upcast::<gtk::Widget>()];
@@ -183,6 +178,61 @@ fn show_whole_choices(row: &adw::ComboRow) {
             pending.push(node);
         }
     }
+}
+
+/// Show whole the labels `factory` makes from now on, once per factory.
+fn show_whole_in(factory: Option<gtk::ListItemFactory>) {
+    let Some(factory) = factory.and_then(|factory| first_dressing(&factory, Dressing::Whole))
+    else {
+        return;
+    };
+    // After the row's own setup, which made the label.
+    factory.connect_setup(|_, item| {
+        if let Some(label) = item
+            .downcast_ref::<gtk::ListItem>()
+            .and_then(gtk::ListItem::child)
+            .and_then(|child| child.first_child())
+            .and_downcast::<gtk::Label>()
+        {
+            show_whole(&label);
+        }
+    });
+}
+
+/// What was connected to a factory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dressing {
+    Whole,
+    Named,
+}
+
+thread_local! {
+    /// Each factory connected to, and to what: a factory set again, or used
+    /// for both the button and the popup, is connected once.
+    static DRESSED: RefCell<Vec<(gtk::glib::WeakRef<gtk::ListItemFactory>, Dressing)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// `factory` as a signal factory, the first time it is given `dressing`;
+/// `None` after that, or for a factory of another kind.
+fn first_dressing(
+    factory: &gtk::ListItemFactory,
+    dressing: Dressing,
+) -> Option<gtk::SignalListItemFactory> {
+    let signals = factory
+        .downcast_ref::<gtk::SignalListItemFactory>()?
+        .clone();
+    DRESSED.with_borrow_mut(|dressed| {
+        dressed.retain(|(factory, _)| factory.upgrade().is_some());
+        let done = dressed
+            .iter()
+            .any(|(other, kind)| *kind == dressing && other.upgrade().as_ref() == Some(factory));
+        if done {
+            return None;
+        }
+        dressed.push((factory.downgrade(), dressing));
+        Some(signals)
+    })
 }
 
 /// Take a label of `AdwComboRow`'s factory, which ellipsizes at 20 characters,
@@ -273,40 +323,35 @@ fn shown_text(item: &gtk::ListItem) -> Option<String> {
     })
 }
 
-/// Name each item the button's and the popup's factories make after the string
-/// it shows. GTK's and libadwaita's default factories draw a label and a check
+/// Name each item `factory` makes after the text it shows, once per factory.
+/// GTK's and libadwaita's default factories draw a label and a check
 /// mark but leave the list item unnamed, so a screen reader reads an empty
 /// item; naming it keeps the factory's look. An item the factory named
 /// itself, which binds first, keeps that name.
-fn name_list_items(
-    factory: Option<gtk::ListItemFactory>,
-    list_factory: Option<gtk::ListItemFactory>,
-) {
-    let list_factory = list_factory.filter(|list| Some(list) != factory.as_ref());
-    for factory in [factory, list_factory].into_iter().flatten() {
-        let Ok(factory) = factory.downcast::<gtk::SignalListItemFactory>() else {
-            continue;
+fn name_items(factory: Option<gtk::ListItemFactory>) {
+    let Some(factory) = factory.and_then(|factory| first_dressing(&factory, Dressing::Named))
+    else {
+        return;
+    };
+    factory.connect_bind(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
         };
-        factory.connect_bind(|_, item| {
-            let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
-                return;
-            };
-            // The property, not `accessible_label()`, whose binding cannot
-            // return the NULL an unnamed item has.
-            let named = item
-                .property::<Option<gtk::glib::GString>>("accessible-label")
-                .is_some_and(|name| !name.is_empty());
-            if !named && let Some(shown) = shown_text(item) {
-                item.set_accessible_label(&shown);
-            }
-        });
-        // A reused item starts unnamed, so the name above never outlives its choice.
-        factory.connect_unbind(|_, item| {
-            if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
-                item.set_accessible_label("");
-            }
-        });
-    }
+        // The property, not `accessible_label()`, whose binding cannot
+        // return the NULL an unnamed item has.
+        let named = item
+            .property::<Option<gtk::glib::GString>>("accessible-label")
+            .is_some_and(|name| !name.is_empty());
+        if !named && let Some(shown) = shown_text(item) {
+            item.set_accessible_label(&shown);
+        }
+    });
+    // A reused item starts unnamed, so the name above never outlives its choice.
+    factory.connect_unbind(|_, item| {
+        if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
+            item.set_accessible_label("");
+        }
+    });
 }
 
 #[cfg(test)]
@@ -453,6 +498,28 @@ mod tests {
             gtk::prelude::WidgetExt::activate(&dropdown);
             let popover = first_descendant::<gtk::Popover>(dropdown.upcast_ref()).expect("popup");
             let list = first_descendant::<gtk::ListView>(popover.upcast_ref()).expect("list");
+            assert_named(&list, &[c"Front", c"Rear"]);
+            window.destroy();
+        });
+    }
+
+    /// The default factory libadwaita makes again for a new expression shows
+    /// its choices whole and names them.
+    #[test]
+    fn row_new_expression_keeps_names() {
+        big_testkit::harness::require_gtk_test(|| {
+            let row = choice_row("Camera", &["Front", "Rear"]);
+            row.set_expression(Some(gtk::PropertyExpression::new(
+                gtk::StringObject::static_type(),
+                None::<gtk::Expression>,
+                "string",
+            )));
+            let list = gtk::ListView::new(
+                row.model().map(|model| gtk::NoSelection::new(Some(model))),
+                row.factory(),
+            );
+            let window = gtk::Window::builder().child(&list).build();
+            window.present();
             assert_named(&list, &[c"Front", c"Rear"]);
             window.destroy();
         });
