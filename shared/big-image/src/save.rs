@@ -731,8 +731,10 @@ mod tests {
             .expect("queried")
             .attribute_string(TAGS);
         let is_link = std::fs::symlink_metadata(&link).is_ok_and(|meta| meta.is_symlink());
+        let saved = std::fs::read(&target).expect("target read");
         let _ = std::fs::remove_dir_all(&folder);
         assert!(is_link);
         assert_eq!(tags.as_deref(), Some("trip"));
+        assert!(saved.starts_with(b"\x89PNG"), "the target kept {saved:?}");
     }
 }
