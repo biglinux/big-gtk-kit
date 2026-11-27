@@ -617,6 +617,11 @@ fn xattr_buffer(
             Err(rustix::io::Errno::NOTSUP) => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
         };
+        // An empty buffer would be answered with the size again, never with
+        // ERANGE, so an attribute added meanwhile would read as nothing.
+        if size == 0 {
+            return Ok(Vec::new());
+        }
         let mut buffer = vec![0_u8; size];
         match fill(&mut buffer) {
             Ok(filled) => {
