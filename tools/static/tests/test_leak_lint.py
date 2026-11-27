@@ -691,6 +691,7 @@ class HeldThroughShapes(unittest.TestCase):
                 [self.HOLDS],
             ),
             ("{ let refresh = move |_, _| refresh(); refresh(1, 2) }", [self.HOLDS]),
+            ("{ let refresh = make_refresh::<{ N < 1 }>(); refresh() }", []),
         ):
             with self.subTest(body=body):
                 self.assertEqual(lint(case.replace("BODY", body)), expected)

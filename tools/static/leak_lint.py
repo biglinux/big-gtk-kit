@@ -459,12 +459,18 @@ def expression_end(text: str, start: int, stops: str = ",;") -> int:
     the one around it. A statement passes `;` alone: a closure's `|a, b|` has a
     comma outside any bracket."""
     depth = generics = 0
+    opened = -1  # the depth a turbofish opened at: `<` and `>` count only there,
+    # not inside a const argument's braces (`::<{ N < 1 }>`)
     for i in range(start, len(text)):
         c = text[i]
-        if c == "<" and (generics or text[i - 2 : i] == "::"):
+        if c == "<" and (
+            (generics and depth == opened) or (not generics and text[i - 2 : i] == "::")
+        ):
+            if not generics:
+                opened = depth
             generics += 1
-        elif c == ">" and generics and text[i - 1] != "-":  # not `->` in `fn() -> T`
-            generics -= 1
+        elif c == ">" and generics and depth == opened and text[i - 1] != "-":
+            generics -= 1  # not `->` in `fn() -> T`
         elif c in "([{":
             depth += 1
         elif c in ")]}":
