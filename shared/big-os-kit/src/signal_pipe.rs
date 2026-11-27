@@ -26,8 +26,9 @@ static WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 /// Have each of `signals` write its number, one byte, to a pipe, and return the
 /// pipe's read end (blocking, close-on-exec).
 ///
-/// One pipe serves the whole process. A full pipe drops the byte, which a
-/// reader that drains what it finds does not miss.
+/// One pipe serves the whole process. A full pipe, thousands of signals the
+/// reader has not drained, drops the byte: the reader still wakes, but that
+/// signal's number is lost.
 ///
 /// # Errors
 ///
