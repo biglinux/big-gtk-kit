@@ -1,0 +1,17 @@
+id: desktop-action
+language: Rust
+severity: error
+message: Run a desktop action with big_app_kit::activate_desktop_action
+note: The desktop answers on the shell's own name or on the host's, depending on how it runs; one owner asks both.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: call_expression
+  all:
+    - has: {stopBy: end, pattern: '"org.gtk.Actions"'}
+    - has: {stopBy: end, pattern: '"Activate"'}
+  not:
+    inside: {stopBy: end, kind: call_expression, all: [{has: {stopBy: end, pattern: '"org.gtk.Actions"'}}, {has: {stopBy: end, pattern: '"Activate"'}}]}
+ignores:
+  - shared/big-app-kit/src/desktop_action.rs

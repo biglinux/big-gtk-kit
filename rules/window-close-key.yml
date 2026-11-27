@@ -1,0 +1,19 @@
+id: window-close-key
+language: Rust
+severity: error
+message: Close a window from the keyboard with big_relm4_components::input::window_keys (close_on_escape, back_or_close_on_escape or close_on_shortcut)
+note: Escape closes from the capture phase past a search entry and spares a label being renamed; other keys close once the focused control lets them pass.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: string_literal
+  regex: '^"window\.close"$'
+  inside:
+    stopBy: end
+    kind: call_expression
+    has:
+      field: function
+      regex: 'NamedAction::new$'
+ignores:
+  - shared/big-relm4-components/src/input/window_keys.rs

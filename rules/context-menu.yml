@@ -1,0 +1,37 @@
+id: context-menu
+language: Rust
+severity: error
+message: Open a context menu through big_relm4_components::layout::hamburger_menu (attach_context_menu, connect_context_menu_request or context_menu_request_controllers)
+note: The owner opens on the secondary press, a touch long press, the Menu key and Shift+F10 alike, and leaves the event to the widget when it shows nothing.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+# A path, or the name a grouped `use` brings in and its uses.
+rule:
+  any:
+    - kind: scoped_identifier
+      regex: '(^|::)BUTTON_SECONDARY$'
+    - kind: identifier
+      regex: '^BUTTON_SECONDARY$'
+      not:
+        inside:
+          kind: scoped_identifier
+  not:
+    inside:
+      stopBy: end
+      kind: mod_item
+      # Any of the attributes the module carries; the first item before
+      # them ends the search, so another item's cfg(test) exempts nothing.
+      follows:
+        kind: attribute_item
+        regex: 'cfg\(test\)'
+        stopBy:
+          not:
+            any:
+              - kind: attribute_item
+              - kind: line_comment
+              - kind: block_comment
+ignores:
+  - "**/tests/**"
+  - "**/*tests.rs"
+  - shared/big-relm4-components/src/layout/hamburger_menu/context_menu.rs

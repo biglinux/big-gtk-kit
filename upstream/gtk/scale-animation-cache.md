@@ -1,0 +1,193 @@
+# GPU renderer: cache entries for every frame of a scale animation
+
+A GTK 4.24.1 program that draws with the GPU renderer caches glyphs, fills and
+strokes at the exact scale they are drawn at. libadwaita's dialogs scale in, so
+each frame of the opening draws at a new scale and adds a full set of entries.
+With the scaled font leak fixed ([glyph-scaled-font-leak](glyph-scaled-font-leak.md)),
+in the runs below (big-host 0.1.0-112), 200 openings of BigImages' About dialog
+still cost 25 to 27 MiB of Pss_Anon and 43 to 46 MiB of VRAM over the program at
+rest, against 6 and 9 MiB without animations in the runs of
+glyph-scaled-font-leak (big-host 0.1.0-111); the cache held 16 061 to 17 590
+glyphs, 2 045 to 2 053 fills and 864 to 866 strokes in 9 or 10 atlases of
+1024×1024 pixels.
+
+`gsk_gpu_node_processor_add_glyph_node()` (`gsk/gpu/gskgpunodeprocessor.c`)
+looks glyphs up at `MAX (scale.width, scale.height)`, and
+`determine_scale_and_subpixel_grid()` (`gsk/gpu/gskgpucachedfill.c`,
+`gskgpucachedstroke.c`) renders masks at the exact scale on a 1/32 pixel grid.
+Only under rotations and other transforms that are not a scale do they round
+the scale, up to the next power of two.
+
+`scale-animation-cache.patch` (5 files, +562 −24) applies on 4.24.1, alone or
+after the other held patches. After glyph-scaled-font-leak it needs a three-way
+apply (`git apply -3` or `git am -3`, as the package uses), because both add the
+same include to `testsuite/gsk/misc.c`. It does not apply on main (b9cd9290d5
+and later): there the fill and stroke caches match paths up to a translation
+and keep a color, and the cache key and snap lines conflict in both files.
+
+## Change
+
+Output scales are multiples of 1/120 (`wp_fractional_scale_v1`), as are the
+usual static scales: 0.75, 0.9, 1.1, 1.25 and every other multiple of 0.05 or
+1/8.
+
+- A scale on a multiple of 1/120 (within 1/1000 of a step) is drawn as before.
+- Between two multiples, glyphs are rasterized at the nearest one and drawn
+  pixel for pixel: no resampling, so text stays as sharp as at rest. A glyph
+  differs in size from the exact one by at most 1/240 of its size at scale 1,
+  0.05 pixels for a 12 pixel glyph, at any scale. Below half a step (1/240),
+  where the nearest multiple is 1/120 and more than twice the scale, glyphs
+  keep the exact scale.
+- Between two multiples, fills and strokes are rendered at the next multiple up
+  on a quarter pixel grid instead of a 1/32 one and resampled down, as the
+  renderer already does under rotations. The frames of one animation, and the
+  openings after it, then share entries. Below one step (1/120), which can be
+  any number of times the scale, they keep the exact scale, still on the
+  quarter pixel grid.
+- A cached fill or stroke is snapped to the pixel grid of the scale it is
+  rendered at, not of the frame that made it, and its key holds its subpixel
+  grid, so a mask made on the quarter pixel grid is never taken for a phase on
+  the 1/32 one. Under rotations, where masks are rendered at the next power of
+  two, they are snapped to that scale too instead of the frame's.
+- A fill or stroke too large for the atlas (over 254 pixels across at the scale
+  it is rendered at) is not cached and is rendered for its clipped bounds only.
+  Those bounds are snapped to the same grid as a cached mask. Taken as given,
+  as 4.24.1 does, they are aligned to the frame's pixels, not to the scale the
+  mask is rendered at, so between multiples the mask would be rendered at a
+  slightly different scale than it is placed at, and its far side would drift.
+  At a multiple of 1/120 the mask is placed on the 1/32 pixel phase a cached
+  mask takes, less than 1/32 pixel from its exact place, instead of being
+  resampled at that place, and it can be one pixel wider and taller; what is
+  drawn stays within the clipped bounds. Where the node sits a multiple of
+  1/32 pixel off the pixel grid, as at whole pixel offsets, it draws the same
+  pixels as before; elsewhere, a fill 312 units wide at scales 1, 121/120
+  and 1.25 differs in 1 145 to 1 308 pixels, by up to 17/255.
+- `testsuite/gsk/misc.c` gains `/renderer/gl/scaled-text`: "Abc" in the test
+  suite's Cantarell, hinted as in the compare tests, renders the same pixels
+  under a 1.003 scale as without it. It fails without the change. It opens a
+  second display, as `/renderer/gl` does, because with Mesa a GL renderer on
+  the default display aborts once another display that used GL was closed, and
+  it loads the font file through fontconfig and FreeType. So it runs on Linux
+  only (Wayland or X11) and is skipped on macOS and Windows, where GDK opens one
+  display.
+- `/renderer/gl/scaled-fill`: a circle filled at 1.006 after 1.003 renders as
+  when 1.006 fills it first, and filled at 121/120 after 1.003 as when 121/120
+  fills it first. Each half fails without the change it checks. It opens a
+  second display for the same reason.
+- `/renderer/gl/scaled-large-mask`: two circles 376 pixels apart at 1.003, and
+  378 apart in the mask rendered at 121/120, too large together for the atlas,
+  render the same pixels, filled and stroked. It fails without the snap of
+  uncached masks, in the fill and in the stroke. It opens a second display for
+  the same reason.
+- `/renderer/gl/scaled-tiny-text`: a 2000 pixel "W" under a 0.002 scale, a
+  quarter of a step, inks only the pixels of its ink rectangle at that scale
+  and the pixel around them. Rounded up to 1/120, it is drawn four times too
+  large and the test fails. It opens a second display for the same reason.
+- `/renderer/gl/scaled-tiny-mask`: a circle 90 pixels across under a 1/65536
+  scale, a 546th of a step, filled and stroked 4 pixels wide, covers the
+  pixels more than 1.5 pixels inside its edges and none more than 1.5 pixels
+  outside. Rounded up to 1/120, its masks are 546 times as wide and tall, over
+  49 000 pixels, too large for a texture on either GPU tested, and nothing is
+  drawn: the test fails. It opens a second display for the same reason.
+
+Which scales count as at rest is decided by the scale alone, not by watching it
+change: the renderer draws only on damage, so the last frame of an animation
+that ends at a scale between multiples would stay in a rounded rendering.
+
+## Measurements
+
+BigImages and BigFiles (big-host 0.1.0-112) in a headless big-compositor
+session (1280x720, scale 1, GL on an NVIDIA GTX 1660 Ti), isolated HOME, GTK
+4.24.1 with the three held patches without (before) and with this one (after),
+loaded through `LD_LIBRARY_PATH` and checked in `/proc/PID/maps`.
+`GSK_CACHE_TIMEOUT=60` as in the BigLinux session, `GSK_DEBUG=cache` and
+`GDK_DEBUG=frames`. Memory from `smaps_rollup` in KiB, VRAM from `nvidia-smi`
+in MiB, the cache at the last periodic collection.
+
+These runs, and those under Same results, used this patch without the mask snaps
+and cache key described under Change; with them, the fill, stroke and atlas
+counts and the pixel differences between steps can differ. They were not
+repeated.
+
+| journey | Pss_Anon | VRAM | glyphs | fills | strokes | atlases |
+|---|---|---|---|---|---|---|
+| About, at rest | 33 084 – 33 144 | 9 | | | | |
+| About, 200 openings, before (2 runs) | 61 168, 58 848 | 55, 52 | 17 590, 16 061 | 2 053, 2 045 | 866, 864 | 10, 9 |
+| About, 200 openings, after | 50 092 | 27 | 2 782 | 867 | 336 | 3 |
+| Connect to Server, at rest | 47 280 – 47 632 | 21 | | | | |
+| Connect to Server, 100 openings, before | 64 732 | 26 | 22 653 | 1 673 | | 3 |
+| Connect to Server, 100 openings, after | 59 044 | 19 | 4 183 | 745 | | 1 |
+
+- About after 200 openings costs 17 MiB of Pss_Anon and 18 MiB of VRAM over
+  rest instead of 25 to 27 and 43 to 46; VRAM stops growing after 12 openings
+  (27 MiB at 12, 50, 100 and 200). Connect to Server: 11 MiB of Pss_Anon
+  instead of 17, and VRAM back under its value at rest.
+- Frames are unchanged: 16.7 ms median and 33.3 ms 95th percentile between
+  animation frames in both, 4 971 and 4 901 / 4 948 frames over 200 openings;
+  7.3 to 8.5 ms of CPU per frame after, 6.7 to 12.4 before (load 3 to 7 from
+  other builds on the host).
+- Rounding the scale alone, with masks still on the 1/32 grid, left 1 568 fills,
+  631 strokes and 7 atlases at 200 openings (53 264 KiB, 43 MiB): the quarter
+  pixel grid is what lets masks be shared.
+
+## Same results
+
+The same widget (a label and four symbolic icons) rendered by the GL renderer
+under static scales:
+
+- 0.75, 0.9, 1.0, 1.1, 1.25, 1.5 and 2.0: byte-identical with and without the
+  change.
+- 0.8333, 0.93, 1.01, 1.037 and 1.2345: 276 to 1 526 pixels differ, by up to
+  68/255 over white, in the text (its glyphs come from the nearest step) and at
+  the icons' edges (the quarter pixel grid). The text is as sharp: at 0.93 it
+  has 794 fully inked and 1 082 partly covered pixels against 799 and 1 091
+  before, at 1.037 1 058 and 1 185 against 1 042 and 1 190.
+- Screenshots: BigImages at rest and with About open differs only in the large
+  symbolic icon of its empty window (by up to 51/255 at its edges), drawn at a
+  scale between multiples; the dialog's text and icons are identical. BigFiles
+  with Connect to Server open differs in 107 pixels by at most 4/255.
+- About caught 0.15 and 0.25 s into its opening, with and without the change:
+  text and icons look the same in the scaled dialog, sharp in both.
+
+## Tests
+
+`/renderer/gl/scaled-text` passes with the change and fails without it
+("assertion failed (plain_data == scaled_data)") on 4.24.1 and on main, with
+this patch alone and with the other held patches, on the GTX 1660 Ti and on
+Mesa llvmpipe (wayland setup, headless compositor). The rest of `misc` in
+`testsuite/gsk` passes in all of these.
+
+The GL compare tests on text, glyphs, fills, strokes, scales and transforms
+(170: plain and flipped): 162 pass and the same 8 fail with and without the
+change (`glyph-hinting-none`, `big-checkerboard-scaled-down2`,
+`fill-subpixel-offsets-*-nocairo`), as they do on the GTX 1660 Ti with the
+other held patches.
+
+`/renderer/gl/scaled-fill` passes on 4.24.1 with the four held patches, on the
+GTX 1660 Ti and on Mesa llvmpipe. It fails at its first assertion with masks
+snapped to the frame's scale, and at its second with the subpixel grid left out
+of the cache key. All GL compare tests (2 850) on 4.24.1 with the four held
+patches, one run with that snap and key and one without: the same 50 fail
+outside the `clip` variant in both, among them `fill-subpixel-offsets-*-nocairo`
+in every variant but `opaque`, `rotate` included. 4 fail in the `clip` variant
+in each, which GTK marks failing; rerun alone, those differ from run to run
+with the change.
+
+`/renderer/gl/scaled-large-mask` passes on 4.24.1 with the four held patches,
+on the GTX 1660 Ti and on Mesa llvmpipe, and fails without the snap in
+`gskgpucachedfill.c` or in `gskgpucachedstroke.c` ("assertion failed": 20/255
+and 17/255 at the first differing byte); the rest of `misc` passes with it.
+`/renderer/gl/scaled-tiny-text` passes on both and fails with glyphs rounded up
+to 1/120 below half a step (alpha 225/255 outside the ink).
+`/renderer/gl/scaled-tiny-mask` passes on both and fails with masks rounded up
+to 1/120 below one step (nothing drawn: alpha 0/255 inside the stroke).
+
+## Costs and risks
+
+- Fills and strokes drawn at rest at a scale between multiples of 1/120 are
+  rendered at a scale up to 1/120 higher, resampled down and placed on a
+  quarter pixel grid, so their edges move by up to 1/8 pixel.
+- Glyphs under such a scale are at most 0.05 pixels (for 12 pixels) off their
+  exact size.
+- A mask drawn at a step and the same mask drawn between steps are two cache
+  entries, since their subpixel grids differ.

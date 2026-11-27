@@ -17,14 +17,14 @@
 // G_ENABLE_DEBUG, and distributions do not build it that way. Why not a debugger:
 // reading another process needs ptrace, which yama restricts to its ancestors.
 // So this counts from inside: every GTypeInstance begins with a pointer to its
-// class, and the class of every initialised type is known, so the process's own
+// class, and the class of every initialized type is known, so the process's own
 // writable anonymous memory is scanned for those pointers.
 //
-// A freed block keeps the class pointer it had, so a GObject is only counted when
-// the reference count after the pointer is plausible (1..1e6; a finalised object
-// leaves 0 there) and, when the allocator is glibc's, when the pointer starts an
-// instance at the right place in a malloc block that is in use. The last test
-// exists because copies of a class pointer outlive their instances: a dialog
+// GLib clears a finalized instance's class pointer, but copies of a class
+// pointer outlive their instances, so a GObject is only counted when the
+// reference count after the pointer is plausible (1..1e6) and, when the allocator
+// is glibc's, when the pointer starts an instance at the right place in a malloc
+// block that is in use. The last test exists for those copies: a dialog
 // opened and freed six times left six records holding its class pointer and
 // stack addresses, and they were counted as six live dialogs. With another
 // allocator that test is off and the census says so in its first line. Counts are
@@ -35,7 +35,9 @@
 #include <glib-object.h>
 #include <glib-unix.h>
 #include <glib.h>
+#include <pthread.h>
 #include <dlfcn.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,7 +57,7 @@ typedef struct {
   gboolean is_object;
   gboolean is_texture;
   guint instance_size;
-  gint private_bytes;  // learnt from the first block found; -1 until then
+  gint private_bytes;  // learned from the first block found; -1 until then
   guint64 count;
 } Entry;
 
@@ -176,7 +178,7 @@ excluded (uintptr_t lo, uintptr_t hi, const void *block, gsize bytes)
 
 // glibc marks a free block in two ways. A block in a thread cache has, 8 bytes
 // into it, the process's tcache key; any other free block has the PREV_INUSE bit
-// clear in the header of the block after it. The key is learnt by freeing a block
+// clear in the header of the block after it. The key is learned by freeing a block
 // of our own; 0 when that block did not go to the thread cache, and then the
 // first test is skipped. Anything that does not look like a malloc header keeps
 // the object counted.
@@ -452,6 +454,22 @@ on_signal (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
+static gboolean
+install_signal (gpointer data)
+{
+  (void) data;
+  // Dispatched by the default main context, on the main thread, between events:
+  // never GLib inside a raw signal handler. A request that came earlier is
+  // still pending, held by the mask; unblocked here, after the source exists,
+  // it is delivered to this thread at once and served by GLib.
+  g_unix_signal_add (SIGUSR2, on_signal, NULL);
+  sigset_t census;
+  sigemptyset (&census);
+  sigaddset (&census, SIGUSR2);
+  pthread_sigmask (SIG_UNBLOCK, &census, NULL);
+  return G_SOURCE_REMOVE;
+}
+
 __attribute__ ((constructor)) static void
 install (void)
 {
@@ -459,7 +477,15 @@ install (void)
   if (!prefix || !*prefix)
     return;
   census_prefix = g_strdup (prefix);
-  // Dispatched by the default main context, on the main thread, between events:
-  // never GLib inside a raw signal handler.
-  g_unix_signal_add (SIGUSR2, on_signal, NULL);
+  // g_unix_signal_add starts GLib's worker thread, and a program may refuse to
+  // start with a thread already running (it sets the locale first). The source
+  // is added once the main loop runs. Until then the signal is blocked, in this
+  // thread and every thread it starts, so a request stays pending instead of
+  // ending the program or being lost.
+  sigset_t census;
+  sigemptyset (&census);
+  sigaddset (&census, SIGUSR2);
+  pthread_sigmask (SIG_BLOCK, &census, NULL);
+  // Ahead of the program's own idle work, which could otherwise hold it off.
+  g_idle_add_full (G_PRIORITY_HIGH, install_signal, NULL, NULL);
 }

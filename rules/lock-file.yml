@@ -1,0 +1,27 @@
+id: lock-file
+language: Rust
+severity: error
+message: Open a lock file with big_os_kit::file_io::open_lock_file
+note: The owner refuses a symlink, a FIFO, another user's file and a second link, and keeps the mode at 0600; a function that opens a file and locks it is another copy.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+# The whole function: the opened file reaches the lock through a let, a
+# let-else, an if let, a match, a builder variable or a field, which no single
+# binding pattern follows. A function that also locks a mutex fails too; split it.
+rule:
+  kind: function_item
+  all:
+    - has:
+        stopBy: end
+        kind: call_expression
+        has:
+          field: function
+          regex: '(^|::)OpenOptions::new$'
+    - has:
+        stopBy: end
+        any:
+          - pattern: $FILE.try_lock()
+          - pattern: $FILE.lock()
+ignores:
+  - shared/big-os-kit/src/file_io.rs

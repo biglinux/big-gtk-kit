@@ -1,0 +1,36 @@
+id: child-walk
+language: Rust
+severity: error
+message: Walk a widget's children with big_gtk_kit::widget_tree (children, descendants or subtree)
+note: One walk of the widget tree, so a loop that removes the widget it holds and a search that must stay under its root behave the same everywhere.
+rule:
+  any:
+    - pattern: std::iter::successors($W.first_child(), $$$)
+    - pattern: $PENDING.extend($W.first_child())
+    - all:
+        - pattern: let mut $C = $W.first_child();
+        # A `while let` over the binding, labeled or not, later in the block or
+        # nested in a later statement.
+        - precedes:
+            stopBy: end
+            any:
+              - kind: while_expression
+                has:
+                  field: condition
+                  kind: let_condition
+                  has:
+                    field: value
+                    pattern: $C
+              - has:
+                  stopBy: end
+                  kind: while_expression
+                  has:
+                    field: condition
+                    kind: let_condition
+                    has:
+                      field: value
+                      pattern: $C
+ignores:
+  - src/widget_tree.rs
+  # focus_first_control leaves out what is hidden, and the whole subtree under it.
+  - shared/big-relm4-components/src/layout/widget_container.rs

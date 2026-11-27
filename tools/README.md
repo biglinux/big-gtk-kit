@@ -14,7 +14,8 @@ process (Rust, C, Python, Vala).
 Requirements: Python ≥ 3.11 (standard library only; the driver uses `gi` with
 Atspi), GLib/GObject and a C compiler. `make` builds both libraries;
 `make check` runs the census control test and the Python tool tests;
-`make check-gtk` runs the signal-triggered census on a real GTK program inside
+`make check-gtk` runs the signal-triggered census on a real GTK program and
+`make check-sweep` the sweep against a stub program, each inside
 `headless-gate.sh` (needs `kwin_wayland`).
 
 `headless-gate.sh [--accessible] COMMAND...` runs the command in a private
@@ -23,18 +24,34 @@ accessibility bus and a throwaway HOME, which is what the sweep needs.
 
 ## 1. Static checker
 
-    static/leak_lint.py [--json] [--no-icons] [--errors-only] PATH...
+    static/leak_lint.py [--json] [--no-icons] [--errors-only | --strict] PATH...
 
-Errors (exit 1): `unparent()` inside the popover's own `closed` handler,
-closing a window by watching `destroy`, `set_parent` without `unparent`, a
-`teardown` that reads the list item's child, an icon with an embedded image (in
-the themes installed on the machine running the checker). Warnings: a handler
-that holds its own widget or an ancestor (also through a closure kept in an
-`Rc`, a child set by a builder, or a controller), siblings that hold each
-other, follower lists pruned too late, a handler on an object that lives as
-long as the process (the display clipboard, `VolumeMonitor`, the application
-seen from a component) with its id thrown away. Reads `.rs` files only; test
-code is ignored and an unreadable file is skipped with a warning.
+Errors (exit 1):
+
+- `unparent()` inside the popover's own `closed` handler;
+- closing a window by watching `destroy`;
+- `set_parent` without `unparent`;
+- a `teardown` that reads the list item's child;
+- an icon with an embedded image (in the themes installed on the machine
+  running the checker).
+
+Warnings:
+
+- a handler that holds its own widget or an ancestor (also through a closure
+  kept in an `Rc`, a child set by a builder, or a controller);
+- siblings that hold each other;
+- follower lists pruned too late;
+- a handler on an object that lives as long as the process (the display
+  clipboard, `VolumeMonitor`, the application seen from a component) with its
+  id thrown away;
+- a repeating GLib source (`timeout_add*`, `idle_add*`, not `_once`) whose id
+  is thrown away and whose closure can return `Continue` but never `Break` when
+  a weak reference fails to upgrade.
+
+`--strict` fails on warnings too, which is what a gate runs: a warning is fixed
+or waived. Reads `.rs` files only; test code is ignored and an unreadable file
+is skipped with a warning. A path that is neither a `.rs` file nor a directory
+is a usage error (exit 2), so a mistyped path fails the gate.
 
 A finding is waived with a reason; a waiver without one is an error:
 
@@ -47,12 +64,26 @@ A finding is waived with a reason; a waiver without one is an error:
 
 The driver starts the program with the census preloaded, waits for the app on
 the accessibility bus and, for each surface: warms up, takes census A, opens
-and closes it N times, takes census B and confirms with a second round. A type
-that gained at least one instance per cycle is a leak, unless an `[[allow]]`
-with a per-cycle ceiling and a reason covers it (in the file or in the
-surface). A surface that does not really close is reported as such. Exit 0
-clean, 1 leak, 2 did not run (incomplete file, missing program or `gdbus`);
-`LEAK_SWEEP_DIR` chooses where the censuses and the program log go.
+and closes it N times, takes census B and confirms with a second round.
+
+- A type that gained at least one instance per cycle is a leak, unless an
+  `[[allow]]` with a per-cycle ceiling and a reason covers it (in the file or in
+  the surface).
+- The process's threads (`Threads:` in `/proc/PID/status`) and open file
+  descriptors are read with each census; they are exact, so any growth the
+  second round repeats is a leak (`process threads`, `process file
+  descriptors`).
+- A surface whose open steps bring up no new window or dialog (within
+  `open_timeout`, 5 s) is reported as not opened, and one whose count of windows
+  and dialogs does not come back down (within `close_timeout`, 5 s) as not
+  closed; their growth is listed, not judged. A surface that changes in place,
+  opening no window or dialog, says `in_place = true`.
+- A step that fails (a command's exit status, a D-Bus error, nothing to click)
+  reports the surface as ERROR.
+
+Exit 0 clean; 1 leak, surface not opened or not closed, or ERROR; 2 did not run
+(incomplete file, missing program or `gdbus`). `LEAK_SWEEP_DIR` chooses where
+the censuses and the program log go.
 
 `command` must execute the GTK program itself: the driver asks the process it
 started for a census by signal, and an intermediate script would receive the
@@ -88,10 +119,12 @@ open = [{ do = "action", name = "preferences", settle = 1.0 }]
 close = [{ do = "dismiss" }]
 ```
 
-Steps: `action` (org.gtk.Actions.Activate), `dbus`, `command`, `toggle` and
-`click` (by accessible name), `dismiss` (Cancel/Close in dialogs and in windows
-beyond the first), `close-new` (the same, only in the windows the cycle opened:
-for a shell that hosts the apps), `wait`.
+Steps: `action` (org.gtk.Actions.Activate), `app-action` (the accessible
+action of that name, such as `win.open-disc` on a window's frame, for a program
+that exports no actions on D-Bus), `dbus`, `command`, `toggle` and `click` (by
+accessible name), `dismiss` (Cancel/Close in dialogs and in windows beyond the
+first), `close-new` (the same, only in the windows the cycle opened: for a shell
+that hosts the apps), `wait`.
 
 The census works on any GLib process, without the driver:
 
@@ -121,9 +154,13 @@ higher.
 Each event is `N|R|S|s|U address count frames…`, with the count before the
 operation: `N` is creation (`g_object_new` called from outside libgobject),
 `s` sinks the floating reference (takes it over, adds nothing), `U 1` is the
-last release. A survivor whose traced references balance is held by something
-that never called `g_object_ref` on it: GTK's window list (a window never
-destroyed) or a Rust value never dropped.
+last release. Only calls from outside libgobject are traced: a reference
+libgobject takes itself (`g_value_dup_object`, a property, a signal emission, a
+binding) is not logged and shows only as a count higher than the event before
+it. A survivor whose traced references balance is held by such an untraced
+reference (the `GdkWaylandToplevel` leak below is one), or by something that
+never called `g_object_ref` on it: GTK's window list (a window never destroyed)
+or a Rust value never dropped.
 
 ## Known library leaks
 
@@ -139,7 +176,7 @@ hides regressions.
 | `AdwBreakpoint` | 3 per adaptive `AdwDialog` opening | the same, in the breakpoints the dialog makes for itself | unreachable: `[[allow]]` with a ceiling of 3 per cycle |
 | the dialog's whole tree | per dialog closed over a window without focus | libadwaita 1.9 restores no focus; GTK 4.22 loses the reference of the deferred focus | `install()` (focus taken out on `closed`) |
 | `AdwShortcutsSection`, items, `GtkFilterListModel`, `GtkCustomFilter`, `AdwTimedAnimation` | 1 set per `AdwShortcutsDialog` opening | the dialog's teardown | `dialog::present_kept` |
-| `GdkWaylandToplevel` | 1 per window that showed a popover, menu or tooltip | GDK 4.22.4 and 4.22.5 (and `main`): the Wayland popup takes its parent with `g_value_dup_object` and never drops it | `install()` (released when the popup finalizes) |
+| `GdkWaylandToplevel` | 1 per window that showed a popover, menu or tooltip | GDK 4.22 through 4.25.0 (and `main`): the Wayland popup takes its parent with `g_value_dup_object` and never drops it | `install()` (released when the popup finalizes) |
 | `GMenu` | 1 per section shown, per menu built | GTK 4.22 `gtk_menu_tracker_add_items` (unmerged section) | `menu::append_shared_section`, `menu::append_refilled_section` |
 | `GSignalGroup` ×3, `GtkAdjustment` ×4 | per `GtkSourceView` with a map | GtkSourceView 5.20: `GtkSourceCompletion` creates three groups at init and never frees them | unreachable |
 | `GskVulkanImage`, `GtkCssStaticStyle`, `GtkIconPaintable`, `GskFillNode`/`GskColorNode` | a few per opening, then stable | GTK caches | nothing: a cache, with memory stable over 20 openings |

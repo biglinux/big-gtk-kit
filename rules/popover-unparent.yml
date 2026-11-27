@@ -1,0 +1,17 @@
+id: popover-unparent
+language: Rust
+severity: error
+message: Let a popover go once it closes with big_gtk_kit::popover::auto_unparent_on_close
+note: The owner unparents from an idle, after the activated item's action has looked itself up, and leaves a popover alone that opened again before the idle ran.
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '\.connect_closed$'
+    - has:
+        field: arguments
+        stopBy: end
+        regex: '\.unparent\(\)$'
+ignores:
+  - src/popover.rs

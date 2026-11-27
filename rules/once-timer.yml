@@ -1,0 +1,55 @@
+id: once-timer
+language: Rust
+severity: error
+message: Keep a once-timer you may cancel or re-arm in big_gtk_kit::timer::OnceTimer
+note: GLib destroys a once-timer when it runs and may give its id to another source; the owner forgets the id before the action runs, so cancelling never removes a spent or reused source.
+rule:
+  kind: call_expression
+  any:
+    - has:
+        field: function
+        regex: '(^|::)timeout_add(_seconds)?_local_once$'
+    # A repeating timer whose closure can only return `Break` is a once-timer:
+    # its tail is `Break`, every `return` is `Break`, and `Continue` appears
+    # nowhere in it. A closure that returns a computed flow is left alone.
+    - all:
+        - has:
+            field: function
+            regex: '(^|::)timeout_add(_seconds)?_local$'
+        - has:
+            field: arguments
+            has:
+              kind: closure_expression
+              all:
+                - any:
+                    - has:
+                        field: body
+                        kind: block
+                        has:
+                          nthChild:
+                            position: 1
+                            reverse: true
+                          regex: '(^|::)Break$'
+                    - has:
+                        field: body
+                        regex: '^(\w+::)*Break$'
+                - not:
+                    has:
+                      stopBy: end
+                      regex: '(^|::)Continue$'
+                - not:
+                    has:
+                      stopBy: end
+                      kind: return_expression
+                      not:
+                        regex: '(^|::)Break;?$'
+  # A timer whose id is dropped at once cannot be cancelled, so it needs no owner.
+  not:
+    inside:
+      kind: expression_statement
+ignores:
+  - "**/tests/**"
+  - "**/*tests.rs"
+  - src/timer.rs
+  # Its tests make the raw sources that source::remove is checked against.
+  - src/source.rs

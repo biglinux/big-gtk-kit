@@ -18,7 +18,7 @@ build/reftrace.so: reftrace/reftrace.c
 build/census-control: census/tests/control.c build/libgobject-census.so
 	$(CC) $(CFLAGS) $(WARN) -Icensus -o $@ census/tests/control.c -Lbuild -lgobject-census -Wl,-rpath,'$$ORIGIN' $(GLIB)
 
-check: build/census-control
+check: build/census-control build/reftrace.so
 	build/census-control build
 	python3 -m unittest discover -s static/tests
 	python3 -m unittest discover -s sweep/tests
@@ -30,7 +30,11 @@ check-gtk: build/libgobject-census.so
 	./headless-gate.sh env GOBJECT_CENSUS_OUT=$(CURDIR)/build/gtk-signal/c \
 		LD_PRELOAD=$(CURDIR)/build/libgobject-census.so python3 census/tests/gtk_signal.py build/gtk-signal
 
+# The sweep's verdicts on a stub GTK program: needs kwin_wayland and AT-SPI.
+check-sweep: build/libgobject-census.so
+	./headless-gate.sh --accessible python3 sweep/tests/stub_sweep.py
+
 clean:
 	rm -rf build
 
-.PHONY: all check check-gtk clean
+.PHONY: all check check-gtk check-sweep clean

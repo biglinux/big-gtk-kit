@@ -1,0 +1,13 @@
+id: stable-hash
+language: Rust
+severity: error
+message: Hash a name kept on disk or shown as a color with big_os_kit::stable_hash::hash
+note: One FNV-1a serves cache names and colors; a fold from its offset basis is another copy of it.
+# The owners live in the shared crates; the kit's own crates sit below them.
+files:
+  - shared/**
+rule:
+  kind: integer_literal
+  regex: '^0x(?i:cbf2_?9ce4_?8422_?2325)(?:_?u64)?$'
+ignores:
+  - shared/big-os-kit/src/stable_hash.rs

@@ -15,12 +15,13 @@ use gtk::prelude::*;
 /// unparented in that owner's `Drop` instead.
 pub fn auto_unparent_on_close(popover: &impl IsA<gtk::Popover>) {
     // Actions finish after `closed`; keep their ancestry until an idle, and the
-    // parent alive with it, in case the action closes the parent's owner.
+    // parent alive with it, in case the action closes the parent's owner. One
+    // opened again before the idle runs stays where it is.
     popover.as_ref().connect_closed(move |popover| {
         let parent = popover.parent();
         let popover = popover.clone();
         gtk::glib::idle_add_local_once(move || {
-            if popover.parent().is_some() {
+            if !popover.is_visible() && popover.parent().is_some() {
                 popover.unparent();
             }
             drop(parent);
@@ -56,5 +57,31 @@ mod tests {
             pump();
             assert_eq!(finalized.get(), cycle);
         }
+    }
+
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn reopened_popover_keeps_its_parent() {
+        gtk::init().expect("a display");
+        let button = gtk::Button::new();
+        let window = gtk::Window::builder().child(&button).build();
+        window.present();
+        pump();
+        let popover = gtk::Popover::new();
+        popover.set_parent(&button);
+        auto_unparent_on_close(&popover);
+        popover.popup();
+        pump();
+        popover.popdown();
+        popover.popup();
+        pump();
+        assert!(
+            popover.parent().is_some(),
+            "an open popover lost its parent"
+        );
+        popover.popdown();
+        pump();
+        assert!(popover.parent().is_none());
+        window.destroy();
     }
 }

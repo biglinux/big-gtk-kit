@@ -1,0 +1,45 @@
+id: lock-file
+valid:
+  - |
+    fn open_only(p: &Path) { let f = OpenOptions::new().write(true).open(p); }
+  - |
+    fn lock_only(m: &Mutex<()>) { let _g = m.lock(); }
+invalid:
+  - |
+    fn chain(p: &Path) -> io::Result<()> {
+        let file = OpenOptions::new().read(true).open(p)?;
+        file.lock()?;
+        Ok(())
+    }
+  - |
+    fn path(p: &Path) -> io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().open(p)?;
+        file.try_lock()?;
+        Ok(())
+    }
+  - |
+    fn let_else(p: &Path) -> Option<()> {
+        let Ok(file) = OpenOptions::new().write(true).open(p) else { return None };
+        file.try_lock().ok()
+    }
+  - |
+    fn if_let(p: &Path) { if let Ok(file) = OpenOptions::new().open(p) { let _ = file.lock(); } }
+  - |
+    fn builder(p: &Path) -> io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true);
+        let file = options.open(p)?;
+        file.try_lock()?;
+        Ok(())
+    }
+  - |
+    fn open_and_mutex(p: &Path, m: &Mutex<()>) {
+        let f = OpenOptions::new().append(true).open(p);
+        let _g = m.lock();
+    }
+  - |
+    fn field(&mut self, p: &Path) -> io::Result<()> {
+        self.file = OpenOptions::new().open(p)?;
+        self.file.try_lock()?;
+        Ok(())
+    }

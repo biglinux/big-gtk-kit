@@ -1,0 +1,827 @@
+From 4256f8173c5a46fbfd54ae2c14dd8672d3f5ab99 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Gon=C3=A7alves?= <bigbruno@gmail.com>
+Date: Sun, 8 Nov 2026 23:52:04 -0300
+Subject: [PATCH] gpu: Share cached glyphs and masks between nearby scales
+
+Glyphs, fills and strokes are cached at the exact scale they are drawn
+at. A scale animation draws at a new scale in every frame, so opening a
+libadwaita dialog caches a new set of glyphs and masks per frame: after
+200 openings of an About dialog the cache held 16 061 to 17 590 glyphs
+in 9 or 10 atlases.
+
+Output scales are multiples of 1/120. Between two of them, rasterize
+glyphs at the nearest one and draw them pixel for pixel, so text stays
+sharp, and render fills and strokes at the next one up on a quarter
+pixel grid, so the frames of an animation share them. A scale on a
+multiple of 1/120 is drawn as before.
+
+Fills and strokes too large for the atlas snap their clipped bounds to
+the same grid, so they are rendered at the scale they are placed at.
+---
+ gsk/gpu/gskgpucachedfill.c    |  34 ++-
+ gsk/gpu/gskgpucachedstroke.c  |  34 ++-
+ gsk/gpu/gskgpunodeprocessor.c |  32 ++-
+ gsk/gpu/gskgpuutilsprivate.h  |  35 +++
+ testsuite/gsk/misc.c          | 451 ++++++++++++++++++++++++++++++++++
+ 5 files changed, 562 insertions(+), 24 deletions(-)
+
+diff --git a/gsk/gpu/gskgpucachedfill.c b/gsk/gpu/gskgpucachedfill.c
+index a3f9d89ad1..0c816a043d 100644
+--- a/gsk/gpu/gskgpucachedfill.c
++++ b/gsk/gpu/gskgpucachedfill.c
+@@ -27,6 +27,7 @@ struct _GskGpuCachedFill
+   GskPath *path;
+   GskFillRule fill_rule;
+   float sx, sy;
++  gsize subpixel_scale;
+ 
+   /* Subpixel position of the path bounds wrt to device grid */
+   guint fx, fy;
+@@ -73,6 +74,7 @@ gsk_gpu_cached_fill_hash (gconstpointer data)
+          (self->fill_rule) << 28 ^
+          (((guint) (self->sx * 16)) << 16) ^
+          ((guint) (self->sy * 16) << 8) ^
++         (((guint) self->subpixel_scale) << 24) ^
+          (self->fx << 4) ^
+          self->fy;
+ }
+@@ -86,6 +88,7 @@ gsk_gpu_cached_fill_equal (gconstpointer v1,
+ 
+   return fill1->fx == fill2->fx &&
+          fill1->fy == fill2->fy &&
++         fill1->subpixel_scale == fill2->subpixel_scale &&
+          fill1->path == fill2->path &&
+          fill1->fill_rule == fill2->fill_rule &&
+          fill1->sx == fill2->sx &&
+@@ -173,12 +176,22 @@ determine_scale_and_subpixel_grid (const graphene_size_t *scale,
+       *sy = exp2f (ceilf (log2f (scale->height)));
+       *subpixel_scale = 1;
+     }
+-  else
++  else if (gsk_gpu_scale_is_step (scale->width) &&
++           gsk_gpu_scale_is_step (scale->height))
+     {
+       *sx = scale->width;
+       *sy = scale->height;
+       *subpixel_scale = 32;
+     }
++  else
++    {
++      /* Between two scale steps, as in the frames of a scale animation,
++       * round up to the next step on a quarter pixel grid, so those
++       * frames share masks. */
++      *sx = gsk_gpu_scale_ceil_to_step (scale->width);
++      *sy = gsk_gpu_scale_ceil_to_step (scale->height);
++      *subpixel_scale = 4;
++    }
+ }
+ 
+ GskGpuImage *
+@@ -213,6 +226,7 @@ gsk_gpu_cached_fill_lookup (GskGpuCache           *self,
+                                   .sy = sy,
+                                   .fx = fx,
+                                   .fy = fy,
++                                  .subpixel_scale = subpixel_scale,
+                                 });
+   if (cached)
+     {
+@@ -229,7 +243,7 @@ gsk_gpu_cached_fill_lookup (GskGpuCache           *self,
+ 
+   if (!gsk_path_get_bounds (path, &viewport) ||
+       !gsk_rect_snap_to_grid_grow (&viewport,
+-                                   scale,
++                                   &GRAPHENE_SIZE_INIT (sx, sy),
+                                    &GRAPHENE_POINT_INIT ((float) fx / (sx * subpixel_scale),
+                                                          (float) fy / (sy * subpixel_scale)),
+                                    &viewport))
+@@ -254,6 +268,7 @@ gsk_gpu_cached_fill_lookup (GskGpuCache           *self,
+       cached->sy = sy;
+       cached->fx = fx;
+       cached->fy = fy;
++      cached->subpixel_scale = subpixel_scale;
+       cached->image = g_object_ref (image);
+       graphene_rect_inset (&viewport, padding / -sx, padding / -sy);
+       cached->image_offset = GRAPHENE_POINT_INIT (viewport.origin.x - area.x / sx,
+@@ -267,14 +282,19 @@ gsk_gpu_cached_fill_lookup (GskGpuCache           *self,
+     {
+       /* If the unclipped path is too large to fit in the atlas,
+        * we give up on caching. We still need to return a mask,
+-       * but we'll use the clipped bounds that we were given.
+-       * We'll also assume those are grid aligned.
++       * but we'll use the clipped bounds that we were given,
++       * snapped to the same grid as a cached mask.
+        */
+-      viewport = *bounds;
++      if (!gsk_rect_snap_to_grid_grow (bounds,
++                                       &GRAPHENE_SIZE_INIT (sx, sy),
++                                       &GRAPHENE_POINT_INIT ((float) fx / (sx * subpixel_scale),
++                                                             (float) fy / (sy * subpixel_scale)),
++                                       &viewport))
++        return NULL;
+       area.x = 0; 
+       area.y = 0; 
+-      area.width = ceil (sx * viewport.size.width);
+-      area.height = ceil (sy * viewport.size.height);
++      area.width = round (sx * viewport.size.width);
++      area.height = round (sy * viewport.size.height);
+ 
+       image = gsk_gpu_device_create_upload_image (gsk_gpu_cache_get_device (self),
+                                                   FALSE,
+diff --git a/gsk/gpu/gskgpucachedstroke.c b/gsk/gpu/gskgpucachedstroke.c
+index 99f2a5f57c..6e81a9b471 100644
+--- a/gsk/gpu/gskgpucachedstroke.c
++++ b/gsk/gpu/gskgpucachedstroke.c
+@@ -30,6 +30,7 @@ struct _GskGpuCachedStroke
+   GskPath *path;
+   GskStroke stroke;
+   float sx, sy;
++  gsize subpixel_scale;
+ 
+   /* Subpixel position of the stroke bounds wrt to device grid */
+   guint fx, fy;
+@@ -81,6 +82,7 @@ gsk_gpu_cached_stroke_hash (gconstpointer data)
+          (self->stroke.line_join << 8) ^
+          (((guint) (self->sx * 16)) << 16) ^
+          ((guint) (self->sy * 16) << 8) ^
++         (((guint) self->subpixel_scale) << 24) ^
+          (self->fx << 4) ^
+          self->fy;
+ }
+@@ -94,6 +96,7 @@ gsk_gpu_cached_stroke_equal (gconstpointer v1,
+ 
+   return stroke1->fx == stroke2->fx &&
+          stroke1->fy == stroke2->fy &&
++         stroke1->subpixel_scale == stroke2->subpixel_scale &&
+          stroke1->path == stroke2->path &&
+          stroke1->sx == stroke2->sx &&
+          stroke1->sy == stroke2->sy &&
+@@ -184,12 +187,22 @@ determine_scale_and_subpixel_grid (const graphene_size_t *scale,
+       *sy = exp2f (ceilf (log2f (scale->height)));
+       *subpixel_scale = 1;
+     }
+-  else
++  else if (gsk_gpu_scale_is_step (scale->width) &&
++           gsk_gpu_scale_is_step (scale->height))
+     {
+       *sx = scale->width;
+       *sy = scale->height;
+       *subpixel_scale = 32;
+     }
++  else
++    {
++      /* Between two scale steps, as in the frames of a scale animation,
++       * round up to the next step on a quarter pixel grid, so those
++       * frames share masks. */
++      *sx = gsk_gpu_scale_ceil_to_step (scale->width);
++      *sy = gsk_gpu_scale_ceil_to_step (scale->height);
++      *subpixel_scale = 4;
++    }
+ }
+ 
+ GskGpuImage *
+@@ -224,6 +237,7 @@ gsk_gpu_cached_stroke_lookup (GskGpuCache           *self,
+                                   .sy = sy,
+                                   .fx = fx,
+                                   .fy = fy,
++                                  .subpixel_scale = subpixel_scale,
+                                 });
+   if (cached)
+     {
+@@ -240,7 +254,7 @@ gsk_gpu_cached_stroke_lookup (GskGpuCache           *self,
+ 
+   if (!gsk_path_get_stroke_bounds (path, stroke, &viewport) ||
+       !gsk_rect_snap_to_grid_grow (&viewport,
+-                                   scale,
++                                   &GRAPHENE_SIZE_INIT (sx, sy),
+                                    &GRAPHENE_POINT_INIT ((float) fx / (sx * subpixel_scale),
+                                                          (float) fy / (sy * subpixel_scale)),
+                                    &viewport))
+@@ -265,6 +279,7 @@ gsk_gpu_cached_stroke_lookup (GskGpuCache           *self,
+       cached->sy = sy;
+       cached->fx = fx;
+       cached->fy = fy;
++      cached->subpixel_scale = subpixel_scale;
+       cached->image = g_object_ref (image);
+       graphene_rect_inset (&viewport, padding / -sx, padding / -sy);
+       cached->image_offset = GRAPHENE_POINT_INIT (viewport.origin.x - area.x / sx,
+@@ -280,14 +295,19 @@ gsk_gpu_cached_stroke_lookup (GskGpuCache           *self,
+     {
+       /* If the unclipped path is too large to fit in the atlas,
+        * we give up on caching. We still need to return a mask,
+-       * but we'll use the clipped bounds that we were given.
+-       * We'll also assume those are grid aligned.
++       * but we'll use the clipped bounds that we were given,
++       * snapped to the same grid as a cached mask.
+        */
+-      viewport = *bounds;
++      if (!gsk_rect_snap_to_grid_grow (bounds,
++                                       &GRAPHENE_SIZE_INIT (sx, sy),
++                                       &GRAPHENE_POINT_INIT ((float) fx / (sx * subpixel_scale),
++                                                             (float) fy / (sy * subpixel_scale)),
++                                       &viewport))
++        return NULL;
+       area.x = 0;
+       area.y = 0;
+-      area.width = ceil (sx * viewport.size.width);
+-      area.height = ceil (sy * viewport.size.height);
++      area.width = round (sx * viewport.size.width);
++      area.height = round (sy * viewport.size.height);
+ 
+       image = gsk_gpu_device_create_upload_image (gsk_gpu_cache_get_device (self),
+                                                   FALSE,
+diff --git a/gsk/gpu/gskgpunodeprocessor.c b/gsk/gpu/gskgpunodeprocessor.c
+index c5bb9e3a32..f549b34b70 100644
+--- a/gsk/gpu/gskgpunodeprocessor.c
++++ b/gsk/gpu/gskgpunodeprocessor.c
+@@ -2613,7 +2613,7 @@ gsk_gpu_node_processor_add_glyph_node (GskGpuRenderPass *self,
+   PangoFont *font;
+   graphene_point_t offset;
+   guint num_glyphs;
+-  float scale;
++  float scale, glyph_scale;
+   float align_scale_x, align_scale_y;
+   unsigned int flags_mask;
+   const float pango_scale = PANGO_SCALE;
+@@ -2645,19 +2645,31 @@ gsk_gpu_node_processor_add_glyph_node (GskGpuRenderPass *self,
+   if (gsk_transform_get_fine_category (self->modelview) <= GSK_FINE_TRANSFORM_CATEGORY_2D)
+     {
+       scale = exp2f (ceilf (log2f (scale)));
++      glyph_scale = scale;
+       align_scale_x = align_scale_y = 1;
+       flags_mask = 0;
+     }
+-  else if (hint_style != CAIRO_HINT_STYLE_NONE)
+-    {
+-      align_scale_x = scale * 4;
+-      align_scale_y = scale;
+-      flags_mask = 3;
+-    }
+   else
+     {
+-      align_scale_x = align_scale_y = scale * 4;
+-      flags_mask = 15;
++      /* Between two scale steps, as in the frames of a scale animation,
++       * rasterize at the nearest step, so those frames share glyphs, and
++       * draw pixel for pixel, so text stays sharp. */
++      if (gsk_gpu_scale_is_step (scale))
++        glyph_scale = scale;
++      else
++        glyph_scale = gsk_gpu_scale_round_to_step (scale);
++
++      if (hint_style != CAIRO_HINT_STYLE_NONE)
++        {
++          align_scale_x = scale * 4;
++          align_scale_y = scale;
++          flags_mask = 3;
++        }
++      else
++        {
++          align_scale_x = align_scale_y = scale * 4;
++          flags_mask = 15;
++        }
+     }
+ 
+   for (guint i = 0; i < num_glyphs; i++)
+@@ -2681,7 +2693,7 @@ gsk_gpu_node_processor_add_glyph_node (GskGpuRenderPass *self,
+                                            font,
+                                            glyphs[i].glyph,
+                                            flags,
+-                                           scale,
++                                           glyph_scale,
+                                            &glyph_bounds,
+                                            &glyph_offset);
+ 
+diff --git a/gsk/gpu/gskgpuutilsprivate.h b/gsk/gpu/gskgpuutilsprivate.h
+index 42c3410a46..3e8abb9a9b 100644
+--- a/gsk/gpu/gskgpuutilsprivate.h
++++ b/gsk/gpu/gskgpuutilsprivate.h
+@@ -3,6 +3,11 @@
+ #include "gskgputypesprivate.h"
+ #include "gskrendernodeprivate.h"
+ 
++#include <math.h>
++
++/* Output scales come in steps of 1/120 (wp_fractional_scale_v1) */
++#define GSK_GPU_SCALE_STEPS 120
++
+ GskGpuConversion        gsk_gpu_color_state_get_conversion              (GdkColorState                  *color_state);
+ GdkColorState *         gsk_gpu_color_state_apply_conversion            (GdkColorState                  *color_state,
+                                                                          GskGpuConversion                conversion);
+@@ -21,3 +26,33 @@ gsk_gpu_mipmap_levels (gsize width,
+ {
+   return g_bit_nth_msf (MAX (width, height), -1) + 1;
+ }
++
++static inline gboolean
++gsk_gpu_scale_is_step (float scale)
++{
++  return fabsf (scale * GSK_GPU_SCALE_STEPS - roundf (scale * GSK_GPU_SCALE_STEPS)) < 0.001f;
++}
++
++static inline float
++gsk_gpu_scale_round_to_step (float scale)
++{
++  float steps = roundf (scale * GSK_GPU_SCALE_STEPS);
++
++  /* Below half a step, the nearest step is more than twice the scale */
++  if (steps < 1)
++    return scale;
++
++  return steps / GSK_GPU_SCALE_STEPS;
++}
++
++static inline float
++gsk_gpu_scale_ceil_to_step (float scale)
++{
++  float steps = scale * GSK_GPU_SCALE_STEPS;
++
++  /* Below one step, the next step is any number of times the scale */
++  if (steps < 1)
++    return scale;
++
++  return ceilf (steps - 0.001f) / GSK_GPU_SCALE_STEPS;
++}
+diff --git a/testsuite/gsk/misc.c b/testsuite/gsk/misc.c
+index a1dc9c8274..16758f905f 100644
+--- a/testsuite/gsk/misc.c
++++ b/testsuite/gsk/misc.c
+@@ -1,11 +1,18 @@
++#include "config.h"
++
+ #include <gtk/gtk.h>
+ #include "gsk/gskcontainernodeprivate.h"
+ #include "gsk/gskbordernodeprivate.h"
+ #include "gsk/gskgradientprivate.h"
+ #include "gsk/gskradialgradientnodeprivate.h"
++#include "gsk/gskprivate.h"
+ 
+ #include <gobject/gvaluecollector.h>
+ 
++#ifdef HAVE_PANGOFT
++#include <pango/pangofc-fontmap.h>
++#endif
++
+ static void
+ test_rendernode_gvalue (void)
+ {
+@@ -224,6 +231,445 @@ test_gl_renderer (void)
+ #endif
+ }
+ 
++static void
++test_gl_renderer_scaled_text (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  PangoFontMap *fontmap;
++  PangoContext *context;
++  PangoLayout *layout;
++  PangoFontDescription *desc;
++  PangoGlyphItem *run;
++  PangoFont *font;
++  char *path;
++  GskRenderNode *text, *node;
++  GskTransform *transform;
++  GdkTexture *plain, *scaled;
++  guchar plain_data[40 * 30 * 4], scaled_data[40 * 30 * 4];
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  if (display == NULL)
++    {
++      g_test_skip ("Could not open a second display");
++      return;
++    }
++
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  /* Only the test font, hinted as in the compare tests */
++  fontmap = pango_cairo_font_map_new ();
++#ifdef HAVE_PANGOFT
++  {
++    FcConfig *config;
++
++    config = FcConfigCreate ();
++    pango_fc_font_map_set_config (PANGO_FC_FONT_MAP (fontmap), config);
++    FcConfigDestroy (config);
++  }
++#endif
++  path = g_test_build_filename (G_TEST_DIST, "fonts", "Cantarell-VF.otf", NULL);
++  pango_font_map_add_font_file (fontmap, path, &error);
++  g_assert_no_error (error);
++  g_free (path);
++
++  context = pango_font_map_create_context (fontmap);
++  layout = pango_layout_new (context);
++  desc = pango_font_description_from_string ("Cantarell 15px");
++  pango_layout_set_font_description (layout, desc);
++  pango_font_description_free (desc);
++  pango_layout_set_text (layout, "Abc", -1);
++  run = pango_layout_get_line_readonly (layout, 0)->runs->data;
++  font = gsk_reload_font (run->item->analysis.font, 1.0, CAIRO_HINT_METRICS_OFF, CAIRO_HINT_STYLE_SLIGHT, CAIRO_ANTIALIAS_GRAY);
++  text = gsk_text_node_new (font, run->glyphs, &(GdkRGBA) { 0, 0, 0, 1 }, &GRAPHENE_POINT_INIT (0, 20));
++
++  /* Glyphs are rasterized at the nearest scale step and drawn pixel
++   * for pixel; this short text lands on the same pixels */
++  transform = gsk_transform_scale (NULL, 1.003, 1.003);
++  node = gsk_transform_node_new (text, transform);
++  gsk_transform_unref (transform);
++  plain = gsk_renderer_render_texture (renderer, text, &GRAPHENE_RECT_INIT (0, 0, 40, 30));
++  scaled = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 40, 30));
++  gdk_texture_download (plain, plain_data, 40 * 4);
++  gdk_texture_download (scaled, scaled_data, 40 * 4);
++  g_assert_cmpmem (plain_data, sizeof (plain_data), scaled_data, sizeof (scaled_data));
++
++  g_object_unref (scaled);
++  g_object_unref (plain);
++  gsk_render_node_unref (node);
++  gsk_render_node_unref (text);
++  g_object_unref (font);
++  g_object_unref (layout);
++  g_object_unref (context);
++  g_object_unref (fontmap);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
++#ifdef GDK_RENDERING_GL
++static void
++render_scaled_fill (GskRenderer *renderer,
++                    GskPath     *path,
++                    GskFillRule  fill_rule,
++                    float        scale,
++                    float        offset,
++                    guchar      *data)
++{
++  graphene_rect_t bounds;
++  GskRenderNode *color, *fill, *node;
++  GskTransform *transform;
++  GdkTexture *texture;
++
++  g_assert_true (gsk_path_get_bounds (path, &bounds));
++  color = gsk_color_node_new (&(GdkRGBA) { 0, 0, 0, 1 }, &bounds);
++  fill = gsk_fill_node_new (color, path, fill_rule);
++  transform = gsk_transform_scale (NULL, scale, scale);
++  transform = gsk_transform_translate (transform, &GRAPHENE_POINT_INIT (offset, offset));
++  node = gsk_transform_node_new (fill, transform);
++
++  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 40, 40));
++  gdk_texture_download (texture, data, 40 * 4);
++
++  g_object_unref (texture);
++  gsk_render_node_unref (node);
++  gsk_transform_unref (transform);
++  gsk_render_node_unref (fill);
++  gsk_render_node_unref (color);
++}
++#endif
++
++static void
++test_gl_renderer_scaled_fill (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  GskPathBuilder *builder;
++  GskPath *path;
++  guchar data[40 * 40 * 4], reference[40 * 40 * 4];
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  if (display == NULL)
++    {
++      g_test_skip ("Could not open a second display");
++      return;
++    }
++
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  builder = gsk_path_builder_new ();
++  gsk_path_builder_add_circle (builder, &GRAPHENE_POINT_INIT (15.25, 15.25), 10);
++  path = gsk_path_builder_free_to_path (builder);
++
++  /* Both scales cache their mask at the step above, 121/120, at the same
++   * quarter pixel phase: the mask must not depend on the frame that made
++   * it. The even-odd rule gives this circle the same coverage under a
++   * cache key of its own. */
++  render_scaled_fill (renderer, path, GSK_FILL_RULE_WINDING, 1.003, 0.375, data);
++  render_scaled_fill (renderer, path, GSK_FILL_RULE_WINDING, 1.006, 0.375, data);
++  render_scaled_fill (renderer, path, GSK_FILL_RULE_EVEN_ODD, 1.006, 0.375, reference);
++  g_assert_cmpmem (data, sizeof (data), reference, sizeof (reference));
++
++  /* At the step itself the phase is on a 1/32 pixel grid: 2/32 must not
++   * take the mask made for 2/4 */
++  render_scaled_fill (renderer, path, GSK_FILL_RULE_WINDING, 1.003, 0.625, data);
++  render_scaled_fill (renderer, path, GSK_FILL_RULE_WINDING, 121.f / 120, 0.07, data);
++  render_scaled_fill (renderer, path, GSK_FILL_RULE_EVEN_ODD, 121.f / 120, 0.07, reference);
++  g_assert_cmpmem (data, sizeof (data), reference, sizeof (reference));
++
++  gsk_path_unref (path);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
++static void
++test_gl_renderer_scaled_large_mask (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  GskPathBuilder *builder;
++  GskPath *path;
++  GskStroke *stroke;
++  GskRenderNode *color, *nodes[2];
++  GskTransform *transform;
++  /* 376 device pixels at 1.003, 378 mask pixels at 121/120 */
++  const float distance = 376 / 1.003f;
++  guchar data[400 * 16 * 4];
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  if (display == NULL)
++    {
++      g_test_skip ("Could not open a second display");
++      return;
++    }
++
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  /* Two circles too far apart for the mask to fit in the atlas, at a
++   * whole number of pixels on the screen and in the mask: the uncached
++   * mask must draw both the same */
++  builder = gsk_path_builder_new ();
++  gsk_path_builder_add_circle (builder, &GRAPHENE_POINT_INIT (8.3, 8), 5);
++  gsk_path_builder_add_circle (builder, &GRAPHENE_POINT_INIT (8.3 + distance, 8), 5);
++  path = gsk_path_builder_free_to_path (builder);
++  stroke = gsk_stroke_new (1.5);
++
++  color = gsk_color_node_new (&(GdkRGBA) { 0, 0, 0, 1 }, &GRAPHENE_RECT_INIT (0, 0, 400, 16));
++  nodes[0] = gsk_fill_node_new (color, path, GSK_FILL_RULE_WINDING);
++  nodes[1] = gsk_stroke_node_new (color, path, stroke);
++  transform = gsk_transform_scale (NULL, 1.003, 1.003);
++
++  for (guint i = 0; i < G_N_ELEMENTS (nodes); i++)
++    {
++      GskRenderNode *node;
++      GdkTexture *texture;
++
++      node = gsk_transform_node_new (nodes[i], transform);
++      texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 400, 16));
++      gdk_texture_download (texture, data, 400 * 4);
++
++      for (guint y = 0; y < 16; y++)
++        for (guint x = 0; x < 16 * 4; x++)
++          g_assert_cmpint (ABS (data[y * 400 * 4 + x] - data[(y * 400 + 376) * 4 + x]), <=, 2);
++
++      g_object_unref (texture);
++      gsk_render_node_unref (node);
++    }
++
++  gsk_transform_unref (transform);
++  gsk_render_node_unref (nodes[1]);
++  gsk_render_node_unref (nodes[0]);
++  gsk_render_node_unref (color);
++  gsk_stroke_free (stroke);
++  gsk_path_unref (path);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
++static void
++test_gl_renderer_scaled_tiny_text (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  PangoContext *context;
++  PangoLayout *layout;
++  PangoFontDescription *desc;
++  PangoGlyphItem *run;
++  PangoRectangle ink;
++  GskRenderNode *text, *node;
++  GskTransform *transform;
++  GdkTexture *texture;
++  guint32 data[40 * 40];
++  gboolean inked = FALSE;
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  if (display == NULL)
++    {
++      g_test_skip ("Could not open a second display");
++      return;
++    }
++
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  context = pango_font_map_create_context (pango_cairo_font_map_get_default ());
++  layout = pango_layout_new (context);
++  desc = pango_font_description_from_string ("Sans 2000px");
++  pango_layout_set_font_description (layout, desc);
++  pango_font_description_free (desc);
++  pango_layout_set_text (layout, "W", -1);
++  pango_layout_get_pixel_extents (layout, &ink, NULL);
++  run = pango_layout_get_line_readonly (layout, 0)->runs->data;
++  text = gsk_text_node_new (run->item->analysis.font, run->glyphs, &(GdkRGBA) { 0, 0, 0, 1 },
++                            &GRAPHENE_POINT_INIT (0, pango_layout_get_baseline (layout) / (float) PANGO_SCALE));
++
++  /* 0.002 is a quarter of the smallest scale step: the glyph must keep
++   * that size instead of the step's */
++  transform = gsk_transform_scale (NULL, 0.002, 0.002);
++  node = gsk_transform_node_new (text, transform);
++  gsk_transform_unref (transform);
++  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 40, 40));
++  gdk_texture_download (texture, (guchar *) data, 40 * 4);
++
++  for (int y = 0; y < 40; y++)
++    for (int x = 0; x < 40; x++)
++      {
++        guchar alpha = data[y * 40 + x] >> 24;
++
++        /* The ink at that scale, and a pixel around it for antialiasing */
++        if (x >= floorf (ink.x * 0.002f) - 1 && x <= ceilf ((ink.x + ink.width) * 0.002f) &&
++            y >= floorf (ink.y * 0.002f) - 1 && y <= ceilf ((ink.y + ink.height) * 0.002f))
++          inked |= alpha > 0;
++        else
++          g_assert_cmpint (alpha, ==, 0);
++      }
++  g_assert_true (inked);
++
++  g_object_unref (texture);
++  gsk_render_node_unref (node);
++  gsk_render_node_unref (text);
++  g_object_unref (layout);
++  g_object_unref (context);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
++static void
++test_gl_renderer_scaled_tiny_mask (void)
++{
++#ifdef GDK_RENDERING_GL
++  GdkDisplay *display;
++  GskRenderer *renderer;
++  GError *error = NULL;
++  /* A 546th of the smallest scale step */
++  const float scale = 1.f / 65536;
++  GskPathBuilder *builder;
++  GskPath *path;
++  GskStroke *stroke;
++  GskRenderNode *color, *nodes[2];
++  GskTransform *transform;
++  guint32 data[2][100 * 100];
++
++  /* A display of its own, as test_renderer() uses: with Mesa, GL on the
++   * default display aborts once a display that used GL was closed */
++  display = gdk_display_open (NULL);
++  if (display == NULL)
++    {
++      g_test_skip ("Could not open a second display");
++      return;
++    }
++
++  renderer = gsk_gl_renderer_new ();
++  if (!gsk_renderer_realize_for_display (renderer, display, &error))
++    {
++      g_test_skip_printf ("GL renderer not available: %s", error->message);
++      g_clear_error (&error);
++      g_object_unref (renderer);
++      gdk_display_close (display);
++      return;
++    }
++
++  /* A circle 90 pixels across on the screen, filled and stroked 4 pixels
++   * wide: its masks must keep the tiny scale, since at the step's they
++   * would be 546 times as wide and tall, too large for a texture */
++  builder = gsk_path_builder_new ();
++  gsk_path_builder_add_circle (builder, &GRAPHENE_POINT_INIT (50 / scale, 50 / scale), 45 / scale);
++  path = gsk_path_builder_free_to_path (builder);
++  stroke = gsk_stroke_new (4 / scale);
++  color = gsk_color_node_new (&(GdkRGBA) { 0, 0, 0, 1 }, &GRAPHENE_RECT_INIT (0, 0, 100 / scale, 100 / scale));
++  nodes[0] = gsk_fill_node_new (color, path, GSK_FILL_RULE_WINDING);
++  nodes[1] = gsk_stroke_node_new (color, path, stroke);
++  transform = gsk_transform_scale (NULL, scale, scale);
++
++  for (guint i = 0; i < G_N_ELEMENTS (nodes); i++)
++    {
++      GskRenderNode *node;
++      GdkTexture *texture;
++
++      node = gsk_transform_node_new (nodes[i], transform);
++      texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, 100, 100));
++      gdk_texture_download (texture, (guchar *) data[i], 100 * 4);
++
++      g_object_unref (texture);
++      gsk_render_node_unref (node);
++    }
++
++  /* Pixels more than 1.5 pixels inside an edge are covered, pixels more
++   * than 1.5 pixels outside are not */
++  for (int y = 0; y < 100; y++)
++    for (int x = 0; x < 100; x++)
++      {
++        float distance = hypotf (x + 0.5f - 50, y + 0.5f - 50);
++        guchar fill = data[0][y * 100 + x] >> 24;
++        guchar ring = data[1][y * 100 + x] >> 24;
++
++        if (distance < 43.5f)
++          g_assert_cmpint (fill, ==, 255);
++        else if (distance > 46.5f)
++          g_assert_cmpint (fill, ==, 0);
++
++        if (fabsf (distance - 45) < 0.5f)
++          g_assert_cmpint (ring, ==, 255);
++        else if (fabsf (distance - 45) > 3.5f)
++          g_assert_cmpint (ring, ==, 0);
++      }
++
++  gsk_transform_unref (transform);
++  gsk_render_node_unref (nodes[1]);
++  gsk_render_node_unref (nodes[0]);
++  gsk_render_node_unref (color);
++  gsk_stroke_free (stroke);
++  gsk_path_unref (path);
++  gsk_renderer_unrealize (renderer);
++  g_object_unref (renderer);
++  gdk_display_close (display);
++#else
++  g_test_skip ("no GL support");
++#endif
++}
++
+ static void
+ test_vulkan_renderer (void)
+ {
+@@ -336,6 +782,11 @@ main (int argc, char *argv[])
+   g_test_add_func ("/rendernode/container/disjoint", test_container_disjoint);
+   g_test_add_func ("/renderer/cairo", test_cairo_renderer);
+   g_test_add_func ("/renderer/gl", test_gl_renderer);
++  g_test_add_func ("/renderer/gl/scaled-text", test_gl_renderer_scaled_text);
++  g_test_add_func ("/renderer/gl/scaled-fill", test_gl_renderer_scaled_fill);
++  g_test_add_func ("/renderer/gl/scaled-large-mask", test_gl_renderer_scaled_large_mask);
++  g_test_add_func ("/renderer/gl/scaled-tiny-text", test_gl_renderer_scaled_tiny_text);
++  g_test_add_func ("/renderer/gl/scaled-tiny-mask", test_gl_renderer_scaled_tiny_mask);
+   g_test_add_func ("/renderer/vulkan", test_vulkan_renderer);
+   g_test_add_func ("/gradient/opaque", test_gradient_opaque);
+   g_test_add_func ("/rendernode/radial-gradient/opaque", test_radial_gradient_opaque);
+-- 
+2.56.0
+

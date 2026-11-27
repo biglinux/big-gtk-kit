@@ -1,0 +1,15 @@
+id: once-timer
+valid:
+  - |
+    fn dropped(d: Duration) { glib::timeout_add_local_once(d, || {}); }
+  - |
+    fn computed(d: Duration) { let id = glib::timeout_add_local(d, move || flow()); }
+  - |
+    fn repeating(d: Duration) { let id = glib::timeout_add_local(d, move || glib::ControlFlow::Continue); }
+invalid:
+  - |
+    fn kept(d: Duration) { let id = glib::timeout_add_local_once(d, || {}); }
+  - |
+    fn block(d: Duration) { let id = glib::timeout_add_local(d, move || { glib::ControlFlow::Break }); }
+  - |
+    fn expression(d: Duration) { let id = glib::timeout_add_local(d, move || glib::ControlFlow::Break); }
