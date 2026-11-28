@@ -198,6 +198,16 @@ Both place the card on the row's end side, the other side when only that has
 room, or below the row when neither has, and report what happens as events
 the owner passes back, so no handler holds a widget.
 
+## Bars over a picture
+
+`immersion::BigMediaImmersionController` shows the bars of a picture, video or
+camera view on activity and fades them out once the person has only watched
+for a moment. An open popover or a guard the program gives pins them; the
+pointer resting on a bar and the keyboard focus in one do not. Idle bars stay in the
+focus chain and the accessibility tree, out of the pointer's way, and, fully
+transparent, draw nothing, so a video under them can still go to a hardware
+plane.
+
 ## Checks
 
 ```sh
