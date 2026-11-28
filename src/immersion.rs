@@ -35,7 +35,8 @@ revealer.big-media-chrome.big-media-chrome-idle { opacity: 0; }
 /// Shows the bars on activity over a media surface and hides them once the
 /// person has been idle for a while, unless a guard or an open popover pins
 /// them. Neither the pointer resting on a bar nor the keyboard focus in one
-/// keeps it: both stay usable, and the next key or motion shows it again.
+/// keeps it: both stay usable, and the next key, motion or focus landing on a
+/// bar shows it again.
 pub struct BigMediaImmersionController {
     /// Each bar, with whether it takes the pointer while shown.
     bars: RefCell<Vec<(gtk::glib::WeakRef<gtk::Revealer>, bool)>>,
@@ -49,6 +50,8 @@ pub struct BigMediaImmersionController {
     shown: Cell<Option<bool>>,
     last_activity: Cell<Instant>,
     last_pointer: Cell<(f64, f64)>,
+    /// The handler on the window that holds the root, for focus moves.
+    focus_handler: RefCell<Option<(gtk::glib::WeakRef<gtk::Window>, gtk::glib::SignalHandlerId)>>,
     idle_timer: OnceTimer,
     this: Weak<Self>,
 }
@@ -68,6 +71,7 @@ impl BigMediaImmersionController {
             shown: Cell::new(None),
             last_activity: Cell::new(Instant::now()),
             last_pointer: Cell::new((f64::NAN, f64::NAN)),
+            focus_handler: RefCell::default(),
             idle_timer: OnceTimer::new(),
             this: this.clone(),
         })
@@ -89,7 +93,8 @@ impl BigMediaImmersionController {
     }
 
     /// Show the bars on pointer motion, the pointer entering or leaving, or a
-    /// key press over `root`.
+    /// key press over `root`, and when the keyboard focus lands on a bar's
+    /// control. One root per controller.
     pub fn attach_activity_detection(&self, root: &impl IsA<gtk::Widget>) {
         let motion = gtk::EventControllerMotion::new();
         let this = self.this.clone();
@@ -134,7 +139,62 @@ impl BigMediaImmersionController {
             gtk::glib::Propagation::Proceed
         });
         root.add_controller(key);
+
+        // The window moves the focus on Tab before the key reaches `root`, so
+        // a focus landing on an idle bar's control is seen here, while `root`
+        // is on screen: a stack page out of view keeps its realization.
+        let this = self.this.clone();
+        root.connect_map(move |root| {
+            if let Some(this) = this.upgrade() {
+                this.follow_focus(root.upcast_ref());
+            }
+        });
+        let this = self.this.clone();
+        root.connect_unmap(move |_| {
+            if let Some(this) = this.upgrade() {
+                this.stop_following_focus();
+            }
+        });
+        if root.is_mapped() {
+            self.follow_focus(root.upcast_ref());
+        }
         self.show_and_schedule_hide();
+    }
+
+    fn follow_focus(&self, root: &gtk::Widget) {
+        self.stop_following_focus();
+        let Some(window) = root.root().and_downcast::<gtk::Window>() else {
+            return;
+        };
+        let this = self.this.clone();
+        // Only a focus that lands on a bar's control, the one a person could
+        // not see: one moved beside the view, or by the program within it,
+        // says nothing about the bars.
+        let handler = window.connect_focus_widget_notify(move |window| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
+            let Some(focus) = GtkWindowExt::focus(window) else {
+                return;
+            };
+            let on_bar = this.bars.borrow().iter().any(|(revealer, _)| {
+                revealer
+                    .upgrade()
+                    .is_some_and(|revealer| focus.is_ancestor(&revealer))
+            });
+            if on_bar {
+                this.show_and_schedule_hide();
+            }
+        });
+        *self.focus_handler.borrow_mut() = Some((window.downgrade(), handler));
+    }
+
+    fn stop_following_focus(&self) {
+        if let Some((window, handler)) = self.focus_handler.take()
+            && let Some(window) = window.upgrade()
+        {
+            window.disconnect(handler);
+        }
     }
 
     /// Fade `revealer` out while idle, by [`BIG_MEDIA_CHROME_IDLE_CSS_CLASS`].
@@ -280,6 +340,7 @@ impl BigMediaImmersionController {
 impl Drop for BigMediaImmersionController {
     fn drop(&mut self) {
         self.idle_timer.cancel();
+        self.stop_following_focus();
     }
 }
 
@@ -481,6 +542,48 @@ mod tests {
                 .expect("the pointer is followed");
             motion.emit_by_name::<()>("enter", &[&10.0_f64, &10.0_f64]);
             assert!(!hidden(&revealer));
+            window.destroy();
+        });
+    }
+
+    /// The focus landing on an idle bar's control, as Tab moves it before any
+    /// key controller under the window sees the key, shows the bars.
+    #[test]
+    fn focus_moving_shows_bars() {
+        require_gtk_test(|| {
+            let next = gtk::Button::with_label("Next");
+            let (window, revealer, controller) = bar_with(&next);
+            let root = window.child().expect("the window holds the host");
+            controller.attach_activity_detection(&root);
+            controller.hide_now();
+            assert!(next.grab_focus());
+            assert!(!hidden(&revealer));
+            window.destroy();
+        });
+    }
+
+    /// Focus moving beside the view, as in a sidebar, leaves the bars alone.
+    #[test]
+    fn focus_beside_the_view_shows_nothing() {
+        require_gtk_test(|| {
+            let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let revealer = gtk::Revealer::builder()
+                .reveal_child(true)
+                .child(&gtk::Button::with_label("Next"))
+                .build();
+            host.append(&revealer);
+            let sidebar = gtk::Button::with_label("Sidebar");
+            let split = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            split.append(&sidebar);
+            split.append(&host);
+            let window = gtk::Window::builder().child(&split).build();
+            window.present();
+            let controller = BigMediaImmersionController::new(&host);
+            controller.register_revealer(&revealer);
+            controller.attach_activity_detection(&host);
+            controller.hide_now();
+            assert!(sidebar.grab_focus());
+            assert!(hidden(&revealer));
             window.destroy();
         });
     }
