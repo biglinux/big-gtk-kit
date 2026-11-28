@@ -785,14 +785,15 @@ mod portal {
         ))
     }
 
-    /// A refusal meaning this bus has no `FileChooser` portal, which GTK's own
-    /// check finds too before it shows its dialog instead.
+    /// A refusal meaning this bus has no `FileChooser` portal: GTK's own check,
+    /// `Properties.Get` on that interface, fails on the same and it shows its
+    /// own dialog. Not `UnknownMethod` from the portal itself: GTK checks the
+    /// interface's version, not the method, and would ask it again.
     fn absent(error: &glib::Error) -> bool {
         [
             gio::DBusError::ServiceUnknown,
             gio::DBusError::UnknownObject,
             gio::DBusError::UnknownInterface,
-            gio::DBusError::UnknownMethod,
         ]
         .into_iter()
         .any(|code| error.matches(code))
@@ -1292,6 +1293,31 @@ mod tests {
                 let answer = ask_open();
                 assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
                 assert!(matches!(*answer.borrow(), Some(None)), "fall back");
+            })
+            .expect("the context of this thread");
+    }
+
+    /// A portal whose interface is there but refuses the method fails the
+    /// dialog: GTK checks the interface's version, and would ask it again.
+    #[test]
+    #[ignore = "owns the portal's name: needs the private bus of tools/headless-gate.sh"]
+    fn portal_unknown_method_is_error() {
+        glib::MainContext::new()
+            .with_thread_default(|| {
+                let (portal, owner) = fake_portal(|invocation| {
+                    invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", "no");
+                });
+                let answer = ask_open();
+                assert!(turn_until(&|| answer.borrow().is_some()), "an answer");
+                assert!(
+                    matches!(
+                        &*answer.borrow(),
+                        Some(Some(Err(error))) if error.matches(gio::DBusError::UnknownMethod)
+                    ),
+                    "the portal's own refusal"
+                );
+                gio::bus_unown_name(owner);
+                portal.close_sync(gio::Cancellable::NONE).expect("closed");
             })
             .expect("the context of this thread");
     }
