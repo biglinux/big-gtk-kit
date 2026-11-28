@@ -614,6 +614,8 @@ mod portal {
         options: glib::Variant,
         answered: impl Fn(Option<Result<Vec<gio::File>, glib::Error>>) + 'static,
     ) {
+        let sandboxed = std::path::Path::new(SANDBOX_MARK).exists();
+        let answered = move |answer| answered(without_portal(answer, sandboxed));
         let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
             answered(None);
             return;
@@ -741,6 +743,26 @@ mod portal {
                 }
             },
         );
+    }
+
+    /// The file GDK takes for a sandbox (`gdk_running_in_sandbox`): there GTK
+    /// asks the portal without checking that one is there.
+    const SANDBOX_MARK: &str = "/.flatpak-info";
+
+    /// `answer`, where no portal took the request: GTK's dialog stands in,
+    /// except in a sandbox, where it would ask the missing portal and never
+    /// answer, so that is a failed dialog.
+    pub(super) fn without_portal(
+        answer: Option<Result<Vec<gio::File>, glib::Error>>,
+        sandboxed: bool,
+    ) -> Option<Result<Vec<gio::File>, glib::Error>> {
+        match answer {
+            None if sandboxed => Some(Err(glib::Error::new(
+                gtk::DialogError::Failed,
+                "no file portal answers in this sandbox",
+            ))),
+            answer => answer,
+        }
     }
 
     /// The reply, or the error it carries, as GLib's `g_dbus_message_to_gerror`
@@ -1244,6 +1266,21 @@ mod tests {
                 portal.close_sync(gio::Cancellable::NONE).expect("closed");
             })
             .expect("the context of this thread");
+    }
+
+    /// Without a portal a sandboxed program's dialog fails, where GTK's would
+    /// ask the missing portal; elsewhere GTK's dialog stands in.
+    #[test]
+    fn sandbox_without_portal_fails() {
+        assert!(matches!(
+            portal::without_portal(None, true),
+            Some(Err(error)) if error.matches(gtk::DialogError::Failed)
+        ));
+        assert!(portal::without_portal(None, false).is_none());
+        assert!(matches!(
+            portal::without_portal(Some(Ok(Vec::new())), true),
+            Some(Ok(files)) if files.is_empty()
+        ));
     }
 
     /// No portal on the bus leaves the asking to the toolkit's dialog.
