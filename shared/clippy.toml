@@ -67,10 +67,10 @@ disallowed-methods = [
     { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build_drop_down`" },
     # An insensitive button cannot be picked, so a double-click on it lands on
     # the handle around it and maximizes the window.
-    { path = "gtk4::WindowHandle::new", reason = "a double-click on an insensitive button inside it maximizes the window; pass `gtk::WindowHandle::builder()` to `big_relm4_components::layout::window_handle::build`" },
-    { path = "gtk4::builders::WindowHandleBuilder::build", reason = "a double-click on an insensitive button inside it maximizes the window; pass the builder to `big_relm4_components::layout::window_handle::build`" },
-    { path = "libadwaita::HeaderBar::new", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass `adw::HeaderBar::builder()` to `big_relm4_components::layout::window_handle::header_bar`" },
-    { path = "libadwaita::builders::HeaderBarBuilder::build", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass the builder to `big_relm4_components::layout::window_handle::header_bar`" },
+    { path = "gtk4::WindowHandle::new", reason = "a double-click on an insensitive button inside it maximizes the window; pass `gtk::WindowHandle::builder()` to `big_gtk_kit::window_handle::build`" },
+    { path = "gtk4::builders::WindowHandleBuilder::build", reason = "a double-click on an insensitive button inside it maximizes the window; pass the builder to `big_gtk_kit::window_handle::build`" },
+    { path = "libadwaita::HeaderBar::new", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass `adw::HeaderBar::builder()` to `big_gtk_kit::window_handle::header_bar`" },
+    { path = "libadwaita::builders::HeaderBarBuilder::build", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass the builder to `big_gtk_kit::window_handle::header_bar`" },
     { path = "gtk4::style_context_add_provider_for_display", reason = "the display keeps every provider it is given; add a fixed sheet once with `big_relm4_components::css::install`, one that changes with `big_relm4_components::css::DisplaySheet`, or one tied to a widget with `big_gtk_kit::css::add_provider_for_widget_lifetime`" },
     { path = "gtk4::CssProvider::new", reason = "answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` as light and no preference whatever the system says; use `big_relm4_components::css::provider`" },
     # From big-gtk-kit/clippy.toml, routed to the suite's own wrappers where it

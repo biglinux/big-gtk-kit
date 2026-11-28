@@ -32,6 +32,7 @@ pub mod timer;
 pub mod tooltip;
 pub mod view_switcher;
 pub mod widget_tree;
+pub mod window_handle;
 
 use gtk::glib;
 use gtk::glib::translate::IntoGlib;
