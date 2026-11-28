@@ -5,7 +5,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 
@@ -18,7 +18,8 @@ pub const BIG_MEDIA_CHROME_IDLE_CSS_CLASS: &str = "big-media-chrome-idle";
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 /// A shorter delay hides the bars before the eye finds them.
 const MIN_IDLE_TIMEOUT: Duration = Duration::from_millis(250);
-/// A redrawn picture repeats `motion` where the pointer rests, within this.
+/// Motion smaller than this is no activity: GTK repeats `motion` where the
+/// pointer rests whenever the picture under it is redrawn.
 const MOTION_EPSILON_PX: f64 = 2.0;
 
 /// Fully transparent, an idle bar makes no render node, so a video under it
@@ -44,6 +45,9 @@ pub struct BigMediaImmersionController {
     idle_timeout: Cell<Duration>,
     pinned: Cell<bool>,
     hides_cursor: Cell<bool>,
+    /// Whether the bars were last shown or hidden; `None` before either.
+    shown: Cell<Option<bool>>,
+    last_activity: Cell<Instant>,
     last_pointer: Cell<(f64, f64)>,
     idle_timer: OnceTimer,
     this: Weak<Self>,
@@ -61,6 +65,8 @@ impl BigMediaImmersionController {
             idle_timeout: Cell::new(DEFAULT_IDLE_TIMEOUT),
             pinned: Cell::new(false),
             hides_cursor: Cell::new(false),
+            shown: Cell::new(None),
+            last_activity: Cell::new(Instant::now()),
             last_pointer: Cell::new((f64::NAN, f64::NAN)),
             idle_timer: OnceTimer::new(),
             this: this.clone(),
@@ -74,11 +80,11 @@ impl BigMediaImmersionController {
 
     /// Hide the cursor over the host while the bars are hidden.
     pub fn set_hide_cursor_when_idle(&self, hides: bool) {
-        if self.hides_cursor.replace(hides)
-            && !hides
+        if self.hides_cursor.replace(hides) != hides
             && let Some(host) = self.cursor_host.upgrade()
         {
-            host.set_cursor_from_name(Some("default"));
+            let hidden = hides && self.shown.get() == Some(false);
+            host.set_cursor_from_name(Some(if hidden { "none" } else { "default" }));
         }
     }
 
@@ -139,9 +145,13 @@ impl BigMediaImmersionController {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION - 1,
         );
         revealer.add_css_class("big-media-chrome");
-        self.bars
-            .borrow_mut()
-            .push((revealer.downgrade(), revealer.can_target()));
+        let targets = revealer.can_target();
+        self.bars.borrow_mut().push((revealer.downgrade(), targets));
+        match self.shown.get() {
+            Some(true) => show_bar(revealer, targets),
+            Some(false) => hide_bar(revealer),
+            None => {}
+        }
     }
 
     /// Keep the bars shown while `popover` is open; its closing starts the
@@ -164,6 +174,7 @@ impl BigMediaImmersionController {
 
     /// Keep the bars shown while `keeps_shown` says so. Its owner calls
     /// [`Self::show_and_schedule_hide`] when the answer turns to `false`.
+    /// It only reads state: it runs while the controller holds its guards.
     pub fn register_hide_guard(&self, keeps_shown: impl Fn() -> bool + 'static) {
         self.hide_guards.borrow_mut().push(Box::new(keeps_shown));
     }
@@ -171,32 +182,46 @@ impl BigMediaImmersionController {
     /// Keep the bars and the cursor shown while `pinned`, as for a view with
     /// nothing to look at instead; unpinned, they hide again when idle.
     pub fn set_pinned(&self, pinned: bool) {
-        if self.pinned.replace(pinned) != pinned {
+        if self.pinned.replace(pinned) != pinned || pinned {
             self.show_and_schedule_hide();
         }
     }
 
     /// Show the bars, and hide them after the delay unless something pins them.
     pub fn show_and_schedule_hide(&self) {
-        self.idle_timer.cancel();
+        // Called for every motion event: while the delay runs, it only moves
+        // the delay's start.
+        self.last_activity.set(Instant::now());
         self.show_bars();
         if self.keeps_shown() {
-            return;
+            self.idle_timer.cancel();
+        } else if !self.idle_timer.is_pending() {
+            self.arm_hide(self.idle_timeout.get());
         }
-        let this = self.this.clone();
-        self.idle_timer.arm(self.idle_timeout.get(), move || {
-            if let Some(this) = this.upgrade()
-                && !this.keeps_shown()
-            {
-                this.hide_bars();
-            }
-        });
     }
 
     /// Hide the bars now, whatever pins them, as for a window the person left.
     pub fn hide_now(&self) {
         self.idle_timer.cancel();
         self.hide_bars();
+    }
+
+    fn arm_hide(&self, delay: Duration) {
+        let this = self.this.clone();
+        self.idle_timer.arm(delay, move || {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
+            let left = this
+                .idle_timeout
+                .get()
+                .saturating_sub(this.last_activity.get().elapsed());
+            if !left.is_zero() {
+                this.arm_hide(left);
+            } else if !this.keeps_shown() {
+                this.hide_bars();
+            }
+        });
     }
 
     fn keeps_shown(&self) -> bool {
@@ -220,23 +245,24 @@ impl BigMediaImmersionController {
     }
 
     fn show_bars(&self) {
+        if self.shown.replace(Some(true)) == Some(true) {
+            return;
+        }
         for (revealer, targets) in self.bars.borrow().iter() {
             if let Some(revealer) = revealer.upgrade() {
-                revealer.set_reveal_child(true);
-                revealer.remove_css_class(BIG_MEDIA_CHROME_IDLE_CSS_CLASS);
-                revealer.set_can_target(*targets);
+                show_bar(&revealer, *targets);
             }
         }
         self.set_cursor("default");
     }
 
     fn hide_bars(&self) {
-        // Kept revealed: a hidden revealer's controls leave the focus chain
-        // and the accessibility tree, and the keyboard could not reach them.
+        if self.shown.replace(Some(false)) == Some(false) {
+            return;
+        }
         for (revealer, _) in self.bars.borrow().iter() {
             if let Some(revealer) = revealer.upgrade() {
-                revealer.add_css_class(BIG_MEDIA_CHROME_IDLE_CSS_CLASS);
-                revealer.set_can_target(false);
+                hide_bar(&revealer);
             }
         }
         self.set_cursor("none");
@@ -255,6 +281,19 @@ impl Drop for BigMediaImmersionController {
     fn drop(&mut self) {
         self.idle_timer.cancel();
     }
+}
+
+fn show_bar(revealer: &gtk::Revealer, targets: bool) {
+    revealer.set_reveal_child(true);
+    revealer.remove_css_class(BIG_MEDIA_CHROME_IDLE_CSS_CLASS);
+    revealer.set_can_target(targets);
+}
+
+/// Kept revealed: a hidden revealer's controls leave the focus chain and the
+/// accessibility tree, and the keyboard could not reach them.
+fn hide_bar(revealer: &gtk::Revealer) {
+    revealer.add_css_class(BIG_MEDIA_CHROME_IDLE_CSS_CLASS);
+    revealer.set_can_target(false);
 }
 
 fn moved_beyond_epsilon(last: (f64, f64), now: (f64, f64)) -> bool {
@@ -314,6 +353,38 @@ mod tests {
             controller.set_pinned(false);
             idle();
             assert!(hidden(&revealer), "unpinned bars hide when idle");
+            window.destroy();
+        });
+    }
+
+    /// Pinning shows bars hidden by hand, as `set_pinned` promises.
+    #[test]
+    fn pinning_shows_hidden_bars() {
+        require_gtk_test(|| {
+            let (window, revealer, controller) = bar_with(&gtk::Button::with_label("Next"));
+            controller.set_pinned(true);
+            controller.hide_now();
+            controller.set_pinned(true);
+            assert!(!hidden(&revealer));
+            window.destroy();
+        });
+    }
+
+    /// Activity during the delay starts it again.
+    #[test]
+    fn activity_extends_the_delay() {
+        require_gtk_test(|| {
+            let (window, revealer, controller) = bar_with(&gtk::Button::with_label("Next"));
+            controller.show_and_schedule_hide();
+            let until = Instant::now() + 3 * MIN_IDLE_TIMEOUT;
+            while Instant::now() < until {
+                controller.show_and_schedule_hide();
+                pump();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(!hidden(&revealer), "steady activity keeps the bars");
+            idle();
+            assert!(hidden(&revealer));
             window.destroy();
         });
     }
@@ -433,9 +504,9 @@ mod tests {
         });
     }
 
-    /// No longer hiding it, the controller gives the cursor back at once.
+    /// The cursor follows the setting at once, whichever way it turns.
     #[test]
-    fn cursor_comes_back_when_no_longer_hidden() {
+    fn cursor_follows_the_setting() {
         require_gtk_test(|| {
             let (window, _revealer, controller) = bar_with(&gtk::Button::with_label("Next"));
             let host = window.child().expect("the window holds the host");
@@ -449,6 +520,11 @@ mod tests {
             assert_eq!(
                 host.cursor().and_then(|cursor| cursor.name()).as_deref(),
                 Some("default")
+            );
+            controller.set_hide_cursor_when_idle(true);
+            assert_eq!(
+                host.cursor().and_then(|cursor| cursor.name()).as_deref(),
+                Some("none")
             );
             window.destroy();
         });
