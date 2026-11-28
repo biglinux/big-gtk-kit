@@ -684,7 +684,13 @@ mod portal {
             move |reply| {
                 let reply = match reply {
                     Ok(reply) => reply,
-                    // Never sent, or never answered: no portal took the request.
+                    // A portal that took the call and never answered it: the
+                    // toolkit's dialog would ask it again and wait forever.
+                    Err(error) if error.matches(gio::IOErrorEnum::TimedOut) => {
+                        finish(Some(Err(error)));
+                        return;
+                    }
+                    // Never sent: no portal took the request.
                     Err(error) => {
                         log::debug!("the file portal did not take the request: {error}");
                         finish(None);
@@ -1199,6 +1205,41 @@ mod tests {
                     ),
                     "the file the portal chose"
                 );
+                gio::bus_unown_name(owner);
+                portal.close_sync(gio::Cancellable::NONE).expect("closed");
+            })
+            .expect("the context of this thread");
+    }
+
+    /// A portal that takes the call and never answers it fails the dialog
+    /// rather than leaving it to the toolkit's, which would ask it again.
+    #[test]
+    #[ignore = "owns the portal's name: needs the private bus of tools/headless-gate.sh"]
+    fn silent_portal_is_error() {
+        glib::MainContext::new()
+            .with_thread_default(|| {
+                let held = Rc::new(RefCell::new(None));
+                let (portal, owner) = fake_portal({
+                    let held = Rc::clone(&held);
+                    move |invocation| *held.borrow_mut() = Some(invocation)
+                });
+                let answer = ask_open();
+                // The bus gives up on the call after its default 25 seconds.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
+                let context = glib::MainContext::ref_thread_default();
+                while answer.borrow().is_none() && std::time::Instant::now() < deadline {
+                    if !context.iteration(false) {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+                assert!(
+                    matches!(
+                        &*answer.borrow(),
+                        Some(Some(Err(error))) if error.matches(gio::IOErrorEnum::TimedOut)
+                    ),
+                    "the call's timeout"
+                );
+                drop(held.borrow_mut().take());
                 gio::bus_unown_name(owner);
                 portal.close_sync(gio::Cancellable::NONE).expect("closed");
             })
