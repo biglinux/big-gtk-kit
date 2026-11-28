@@ -567,9 +567,10 @@ mod tests {
     fn focus_beside_the_view_shows_nothing() {
         require_gtk_test(|| {
             let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let next = gtk::Button::with_label("Next");
             let revealer = gtk::Revealer::builder()
                 .reveal_child(true)
-                .child(&gtk::Button::with_label("Next"))
+                .child(&next)
                 .build();
             host.append(&revealer);
             let sidebar = gtk::Button::with_label("Sidebar");
@@ -581,6 +582,7 @@ mod tests {
             let controller = BigMediaImmersionController::new(&host);
             controller.register_revealer(&revealer);
             controller.attach_activity_detection(&host);
+            assert!(next.grab_focus());
             controller.hide_now();
             assert!(sidebar.grab_focus());
             assert!(hidden(&revealer));
