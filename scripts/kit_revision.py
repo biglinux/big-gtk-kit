@@ -20,47 +20,75 @@ Exit status: 0 one revision and current lockfiles; 1 otherwise; 2 usage error.
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
-MANIFEST_SOURCE = re.compile(r'\bgit\s*=\s*"([^"]*big-gtk-kit)"')
-MANIFEST_REV = re.compile(r'\brev\s*=\s*"([0-9a-f]{40})"')
-LOCK_SOURCE = re.compile(
-    r'^source = "git\+([^"?#]*big-gtk-kit)\?([^"#]*)#', re.MULTILINE
-)
-LOCK_REV = re.compile(r"^rev=([0-9a-f]{40})$")
+REV = re.compile(r"[0-9a-f]{40}")
+# `cargo metadata` may fetch the kit's git source before it answers.
+METADATA_TIMEOUT_S = 300
+
+
+def kit_source(url: str) -> str | None:
+    """`url` without a `.git` suffix when it names the kit's repository, else None."""
+    url = url.removesuffix("/").removesuffix(".git")
+    return url if url.endswith("/big-gtk-kit") else None
 
 
 def manifest_pins(text: str) -> list[tuple[str, str | None]]:
     """The kit sources a manifest names, each with its `rev`, or None without one."""
     pins = []
-    for line in text.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        source = MANIFEST_SOURCE.search(line)
-        if source:
-            rev = MANIFEST_REV.search(line)
-            pins.append((source.group(1), rev.group(1) if rev else None))
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            git = node.get("git")
+            source = kit_source(git) if isinstance(git, str) else None
+            if source:
+                rev = node.get("rev")
+                pins.append(
+                    (
+                        source,
+                        rev if isinstance(rev, str) and REV.fullmatch(rev) else None,
+                    )
+                )
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(tomllib.loads(text))
     return pins
 
 
 def lock_pins(text: str) -> list[tuple[str, str | None]]:
-    """The kit sources a lockfile resolves, each with its `rev`, or None for a tag or branch."""
+    """The kit sources a lockfile resolves, each with its `rev`, or None for a branch or tag."""
     pins = []
-    for source, query in LOCK_SOURCE.findall(text):
-        rev = LOCK_REV.match(query)
-        pins.append((source, rev.group(1) if rev else None))
+    for package in tomllib.loads(text).get("package", []):
+        source = package.get("source", "")
+        if not source.startswith("git+"):
+            continue
+        url, _, query = source.removeprefix("git+").partition("#")[0].partition("?")
+        kit = kit_source(url)
+        if kit is None:
+            continue
+        fields = dict(pair.partition("=")[::2] for pair in query.split("&") if pair)
+        rev = fields.get("rev")
+        pins.append((kit, rev if rev and REV.fullmatch(rev) else None))
     return pins
 
 
-def tracked(root: Path, pattern: str) -> list[Path]:
+def tracked(root: Path, name: str) -> list[Path]:
+    """The files git tracks under `root` whose name is `name`."""
     listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", pattern],
+        ["git", "ls-files", "-z"],
         cwd=root,
         check=True,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     ).stdout
-    return [root / name for name in listed.split("\0") if name]
+    return [
+        root / path for path in listed.split("\0") if path and Path(path).name == name
+    ]
 
 
 def check(root: Path) -> list[str]:
@@ -68,8 +96,8 @@ def check(root: Path) -> list[str]:
     pins: dict[tuple[str, str], list[str]] = {}
     files = {"manifests": 0, "lockfiles": 0}
     for kind, pattern, read in (
-        ("manifests", "*Cargo.toml", manifest_pins),
-        ("lockfiles", "*Cargo.lock", lock_pins),
+        ("manifests", "Cargo.toml", manifest_pins),
+        ("lockfiles", "Cargo.lock", lock_pins),
     ):
         for path in tracked(root, pattern):
             found = read(path.read_text(encoding="utf-8"))
@@ -84,7 +112,11 @@ def check(root: Path) -> list[str]:
     if len(pins) > 1:
         for (source, rev), names in sorted(pins.items()):
             problems.append(f"{source} {rev[:7]}: {', '.join(sorted(set(names)))}")
-    fuzz = tracked(root, "*fuzz/Cargo.toml")
+    fuzz = [
+        manifest
+        for manifest in tracked(root, "Cargo.toml")
+        if manifest.parent.name == "fuzz"
+    ]
     for manifest in fuzz:
         resolved = subprocess.run(
             [
@@ -99,7 +131,8 @@ def check(root: Path) -> list[str]:
             cwd=root,
             check=False,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            timeout=METADATA_TIMEOUT_S,
         )
         if resolved.returncode != 0:
             said = next(
