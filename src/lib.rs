@@ -12,6 +12,7 @@ pub mod breakpoint;
 pub mod capture;
 pub mod css;
 pub mod dialog;
+pub mod dialog_page;
 pub mod directory;
 pub mod dropdown;
 pub mod file_dialog;
@@ -32,6 +33,7 @@ pub mod timer;
 pub mod tooltip;
 pub mod view_switcher;
 pub mod widget_tree;
+pub mod window_handle;
 
 use gtk::glib;
 use gtk::glib::translate::IntoGlib;

@@ -126,6 +126,7 @@ ast-grep rules under `rules/` find the hand-made copies of the last two.
 | `switch::set_active` | `Switch::set_active` | GTK 4.22 cancels a click's slide on an unchanged value |
 | `timer::OnceTimer` | a `timeout_add_local_once` id kept to cancel | GLib gives the id of a timer that ran to another source, which the cancel then removes |
 | `view_switcher::toggles_for` | `AdwViewStack`, `AdwInlineViewSwitcher` | leak their animation and a tree per page |
+| `window_handle::build`, `header_bar` | `WindowHandle::new`, `WindowHandleBuilder::build`, `adw::HeaderBar::new`, `HeaderBarBuilder::build` | an insensitive button cannot be picked, so a press on it lands on the handle, and a double-click there maximizes the window |
 
 `Alert` and `Dialog` take the parent when they are made, and
 `present()`, `Alert::choose` and `Alert::choose_future` show them on it. A

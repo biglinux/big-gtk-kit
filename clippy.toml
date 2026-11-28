@@ -41,6 +41,10 @@ disallowed-methods = [
     { path = "gtk4::DropDown::new", reason = "leaves every choice unnamed for a screen reader; pass `gtk::DropDown::builder()` to `big_gtk_kit::dropdown::build_drop_down`" },
     { path = "gtk4::DropDown::from_strings", reason = "leaves every choice unnamed for a screen reader; use `big_gtk_kit::dropdown::from_strings`" },
     { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build_drop_down`" },
+    { path = "gtk4::WindowHandle::new", reason = "a double-click on an insensitive button inside it maximizes the window; pass `gtk::WindowHandle::builder()` to `big_gtk_kit::window_handle::build`" },
+    { path = "gtk4::builders::WindowHandleBuilder::build", reason = "a double-click on an insensitive button inside it maximizes the window; pass the builder to `big_gtk_kit::window_handle::build`" },
+    { path = "libadwaita::HeaderBar::new", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass `adw::HeaderBar::builder()` to `big_gtk_kit::window_handle::header_bar`" },
+    { path = "libadwaita::builders::HeaderBarBuilder::build", reason = "its own handle maximizes the window on a double-click on an insensitive button in the bar; pass the builder to `big_gtk_kit::window_handle::header_bar`" },
 ]
 disallowed-types = [
     { path = "libadwaita::InlineViewSwitcher", reason = "leaks a widget tree per page (libadwaita 1.9); use `big_gtk_kit::view_switcher::toggles_for` over a `gtk::Stack`" },
