@@ -12,6 +12,7 @@ pub mod breakpoint;
 pub mod capture;
 pub mod css;
 pub mod dialog;
+pub mod dialog_page;
 pub mod directory;
 pub mod dropdown;
 pub mod file_dialog;
