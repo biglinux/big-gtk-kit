@@ -41,14 +41,21 @@ pub fn build(builder: adw::builders::ComboRowBuilder) -> adw::ComboRow {
     for factory in [row.factory(), row.list_factory()] {
         name_items(factory);
     }
-    // libadwaita makes a new default factory when the expression changes.
+    // libadwaita makes a new default factory when the expression changes,
+    // and makes the items with it before it says so.
     row.connect_factory_notify(|row| {
-        show_whole_in(row.factory());
-        name_items(row.factory());
+        let named = name_items(row.factory());
+        show_whole_choices(row);
+        if named {
+            make_popup_items_again(row.upcast_ref());
+        }
     });
     row.connect_list_factory_notify(|row| {
-        show_whole_in(row.list_factory());
-        name_items(row.list_factory());
+        let named = name_items(row.list_factory());
+        show_whole_choices(row);
+        if named {
+            make_popup_items_again(row.upcast_ref());
+        }
     });
     focus_chosen_item_on_open(&row, |row| row.selected());
     row
@@ -67,9 +74,18 @@ pub fn build_drop_down(builder: gtk::builders::DropDownBuilder) -> gtk::DropDown
     for factory in [dropdown.factory(), dropdown.list_factory()] {
         name_items(factory);
     }
-    // GTK makes new default factories when the expression changes.
-    dropdown.connect_factory_notify(|dropdown| name_items(dropdown.factory()));
-    dropdown.connect_list_factory_notify(|dropdown| name_items(dropdown.list_factory()));
+    // GTK makes new default factories when the expression changes, and makes
+    // the items with them before it says so.
+    dropdown.connect_factory_notify(|dropdown| {
+        if name_items(dropdown.factory()) {
+            make_popup_items_again(dropdown.upcast_ref());
+        }
+    });
+    dropdown.connect_list_factory_notify(|dropdown| {
+        if name_items(dropdown.list_factory()) {
+            make_popup_items_again(dropdown.upcast_ref());
+        }
+    });
     focus_chosen_item_on_open(&dropdown, gtk::DropDown::selected);
     dropdown
 }
@@ -197,6 +213,18 @@ fn show_whole_in(factory: Option<gtk::ListItemFactory>) {
             show_whole(&label);
         }
     });
+}
+
+/// Make the items of `owner`'s popup list again with the list's own factory,
+/// so handlers connected after it made them reach them too. The list's
+/// factory, not the owner's: setting the owner's would mark it no longer
+/// the default one.
+fn make_popup_items_again(owner: &gtk::Widget) {
+    if let Some(list) = first_descendant::<gtk::ListView>(owner) {
+        let factory = list.factory();
+        list.set_factory(gtk::ListItemFactory::NONE);
+        list.set_factory(factory.as_ref());
+    }
 }
 
 /// What was connected to a factory.
@@ -328,10 +356,10 @@ fn shown_text(item: &gtk::ListItem) -> Option<String> {
 /// mark but leave the list item unnamed, so a screen reader reads an empty
 /// item; naming it keeps the factory's look. An item the factory named
 /// itself, which binds first, keeps that name.
-fn name_items(factory: Option<gtk::ListItemFactory>) {
+fn name_items(factory: Option<gtk::ListItemFactory>) -> bool {
     let Some(factory) = factory.and_then(|factory| first_dressing(&factory, Dressing::Named))
     else {
-        return;
+        return false;
     };
     factory.connect_bind(|_, item| {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
@@ -352,6 +380,7 @@ fn name_items(factory: Option<gtk::ListItemFactory>) {
             item.set_accessible_label("");
         }
     });
+    true
 }
 
 #[cfg(test)]
@@ -521,6 +550,58 @@ mod tests {
             let window = gtk::Window::builder().child(&list).build();
             window.present();
             assert_named(&list, &[c"Front", c"Rear"]);
+            window.destroy();
+        });
+    }
+
+    /// Items GTK already made with the factory it made for a new expression
+    /// are named too.
+    #[test]
+    fn expression_after_showing_keeps_names() {
+        big_testkit::harness::require_gtk_test(|| {
+            let dropdown = from_strings(&["Front", "Rear"]);
+            let window = gtk::Window::builder().child(&dropdown).build();
+            window.present();
+            big_testkit::harness::pump();
+            gtk::prelude::WidgetExt::activate(&dropdown);
+            big_testkit::harness::pump();
+            dropdown.set_expression(Some(gtk::PropertyExpression::new(
+                gtk::StringObject::static_type(),
+                None::<gtk::Expression>,
+                "string",
+            )));
+            let popover = first_descendant::<gtk::Popover>(dropdown.upcast_ref()).expect("popup");
+            let list = first_descendant::<gtk::ListView>(popover.upcast_ref()).expect("list");
+            assert_named(&list, &[c"Front", c"Rear"]);
+            window.destroy();
+        });
+    }
+
+    /// The choices of a shown row stay whole after its expression changes.
+    #[test]
+    fn row_expression_after_showing_keeps_whole() {
+        big_testkit::harness::require_gtk_test(|| {
+            let row = choice_row(
+                "Camera",
+                &["Front choice that is longer than twenty", "Rear"],
+            );
+            let list_box = gtk::ListBox::new();
+            list_box.append(&row);
+            let window = gtk::Window::builder().child(&list_box).build();
+            window.present();
+            big_testkit::harness::pump();
+            row.set_expression(Some(gtk::PropertyExpression::new(
+                gtk::StringObject::static_type(),
+                None::<gtk::Expression>,
+                "string",
+            )));
+            big_testkit::harness::pump();
+            let cut: Vec<_> = descendants(row.upcast_ref::<gtk::Widget>())
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .filter(|l| l.max_width_chars() == 20)
+                .map(|l| l.label().to_string())
+                .collect();
+            assert!(cut.is_empty(), "cut at 20: {cut:?}");
             window.destroy();
         });
     }
