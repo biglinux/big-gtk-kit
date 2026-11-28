@@ -59,6 +59,16 @@ glycin = { git = "https://github.com/biglinux/big-gtk-kit" }
 `shared/clippy.toml` holds their bans and `rules/` their ast-grep rules: a
 program copies the entries of the owners it calls.
 
+A program pins every kit crate at one revision. From its root,
+
+```sh
+python3 path/to/big-gtk-kit/scripts/kit_revision.py --check
+```
+
+checks that every tracked `Cargo.toml` pins the kit by one `rev`, every
+`Cargo.lock` resolves it to that revision, and each fuzz workspace's lockfile
+is current.
+
 The Python programs carry their own copy of the Python port (`big_gtk_kit`:
 `install()` with the tooltip card, the dialog focus fix and the popup-parent
 release), so they need nothing from this repository.
