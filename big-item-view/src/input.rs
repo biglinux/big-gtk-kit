@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use big_gtk_kit::timer::OnceTimer;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene};
@@ -206,121 +207,145 @@ fn install_click(view: &ItemView) {
         let Some(view) = weak.upgrade() else {
             return;
         };
-        let imp = view.imp();
-        imp.keyboard_cursor.set(false);
+        view.imp().keyboard_cursor.set(false);
         let position = view.position_at(x, y);
         match gesture.current_button() {
-            gdk::BUTTON_PRIMARY => {}
+            gdk::BUTTON_PRIMARY => primary_pressed(&view, gesture, n_press, position, x, y),
             gdk::BUTTON_MIDDLE => {
                 if let Some(position) = position {
                     view.emit_by_name::<()>("middle-click", &[&position]);
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
-                return;
             }
             gdk::BUTTON_SECONDARY => {
                 view.grab_focus();
                 let position = position.unwrap_or(gtk::INVALID_LIST_POSITION);
                 view.emit_by_name::<()>("context-menu", &[&position, &x, &y]);
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                return;
             }
-            _ => return,
-        }
-        view.grab_focus();
-        let (ctrl, shift) = modifiers(gesture);
-        imp.pending.set(None);
-        let Some(position) = position else {
-            if !ctrl
-                && !shift
-                && let Some(model) = view.model()
-            {
-                model.unselect_all();
-            }
-            return;
-        };
-        match control_at(&view, position, x, y) {
-            Some(Control::Expander(row)) => {
-                row.set_expanded(!row.is_expanded());
-                imp.set_cursor(Some(position));
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                return;
-            }
-            Some(Control::Cell { column, value }) => {
-                imp.set_cursor(Some(position));
-                view.emit_by_name::<()>("cell-pressed", &[&position, &column, &value]);
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                return;
-            }
-            None => {}
-        }
-        if on_tick(&view, position, x, y) {
-            if imp.geometry.borrow().tick == TickMode::Check {
-                view.emit_by_name::<()>("check-toggled", &[&position]);
-            } else {
-                toggle(&view, position);
-            }
-            imp.set_cursor(Some(position));
-            imp.anchor.set(Some(position));
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            return;
-        }
-        let selected = view
-            .model()
-            .is_some_and(|model| model.is_selected(position));
-        if shift {
-            select_range(&view, imp.anchor.get().unwrap_or(position), position, !ctrl);
-        } else if ctrl {
-            imp.pending.set(Some(Pending::Toggle(position)));
-            imp.anchor.set(Some(position));
-        } else if selected {
-            // Kept until the release: dragging a selection must carry all of it.
-            imp.pending.set(Some(Pending::SelectOnly(position)));
-            imp.anchor.set(Some(position));
-        } else {
-            if let Some(model) = view.model() {
-                model.select_item(position, true);
-            }
-            imp.anchor.set(Some(position));
-        }
-        imp.set_cursor(Some(position));
-        if n_press == 2 {
-            imp.pending.set(None);
-            view.emit_by_name::<()>("activate", &[&position]);
+            _ => {}
         }
     });
     let weak = view.downgrade();
     click.connect_released(move |gesture, n_press, x, y| {
-        let Some(view) = weak.upgrade() else {
-            return;
-        };
-        if gesture.current_button() != gdk::BUTTON_PRIMARY {
-            return;
-        }
-        let imp = view.imp();
-        let pending = imp.pending.take();
-        match pending {
-            Some(Pending::Toggle(position)) => toggle(&view, position),
-            Some(Pending::SelectOnly(position)) => {
-                if let Some(model) = view.model() {
-                    model.select_item(position, true);
-                }
-            }
-            None => {}
-        }
-        let (ctrl, shift) = modifiers(gesture);
-        if imp.single_click.get()
-            && n_press == 1
-            && !ctrl
-            && !shift
-            && let Some(position) = view.position_at(x, y)
-            && !on_tick(&view, position, x, y)
-            && control_at(&view, position, x, y).is_none()
+        if let Some(view) = weak.upgrade()
+            && gesture.current_button() == gdk::BUTTON_PRIMARY
         {
-            view.emit_by_name::<()>("activate", &[&position]);
+            primary_released(&view, gesture, n_press, x, y);
         }
     });
     view.add_controller(click);
+}
+
+fn primary_pressed(
+    view: &ItemView,
+    gesture: &gtk::GestureClick,
+    n_press: i32,
+    position: Option<u32>,
+    x: f64,
+    y: f64,
+) {
+    let imp = view.imp();
+    view.grab_focus();
+    let (ctrl, shift) = modifiers(gesture);
+    imp.pending.set(None);
+    let Some(position) = position else {
+        if !ctrl
+            && !shift
+            && let Some(model) = view.model()
+        {
+            model.unselect_all();
+        }
+        return;
+    };
+    if press_control(view, position, x, y) {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        return;
+    }
+    select_on_press(view, position, ctrl, shift);
+    imp.set_cursor(Some(position));
+    if n_press == 2 && !imp.single_click.get() {
+        imp.pending.set(None);
+        view.emit_by_name::<()>("activate", &[&position]);
+    }
+}
+
+/// Act on the expander, cell control or tick under a press on `position`;
+/// whether there was one, so the press is the view's alone.
+fn press_control(view: &ItemView, position: u32, x: f64, y: f64) -> bool {
+    let imp = view.imp();
+    match control_at(view, position, x, y) {
+        Some(Control::Expander(row)) => {
+            row.set_expanded(!row.is_expanded());
+            imp.set_cursor(Some(position));
+            return true;
+        }
+        Some(Control::Cell { column, value }) => {
+            imp.set_cursor(Some(position));
+            view.emit_by_name::<()>("cell-pressed", &[&position, &column, &value]);
+            return true;
+        }
+        None => {}
+    }
+    if !on_tick(view, position, x, y) {
+        return false;
+    }
+    if imp.geometry.borrow().tick == TickMode::Check {
+        view.emit_by_name::<()>("check-toggled", &[&position]);
+    } else {
+        toggle(view, position);
+    }
+    imp.set_cursor(Some(position));
+    imp.anchor.set(Some(position));
+    true
+}
+
+/// The selection a press on `position` makes now, or leaves for the release.
+fn select_on_press(view: &ItemView, position: u32, ctrl: bool, shift: bool) {
+    let imp = view.imp();
+    let selected = view
+        .model()
+        .is_some_and(|model| model.is_selected(position));
+    if shift {
+        select_range(view, imp.anchor.get().unwrap_or(position), position, !ctrl);
+    } else if ctrl {
+        imp.pending.set(Some(Pending::Toggle(position)));
+        imp.anchor.set(Some(position));
+    } else if selected {
+        // Kept until the release: dragging a selection must carry all of it.
+        imp.pending.set(Some(Pending::SelectOnly(position)));
+        imp.anchor.set(Some(position));
+    } else {
+        if let Some(model) = view.model() {
+            model.select_item(position, true);
+        }
+        imp.anchor.set(Some(position));
+    }
+}
+
+fn primary_released(view: &ItemView, gesture: &gtk::GestureClick, n_press: i32, x: f64, y: f64) {
+    let imp = view.imp();
+    let pending = imp.pending.take();
+    match pending {
+        Some(Pending::Toggle(position)) => toggle(view, position),
+        Some(Pending::SelectOnly(position)) => {
+            if let Some(model) = view.model() {
+                model.select_item(position, true);
+            }
+        }
+        None => {}
+    }
+    let (ctrl, shift) = modifiers(gesture);
+    if imp.single_click.get()
+        && n_press == 1
+        && !ctrl
+        && !shift
+        && let Some(position) = view.position_at(x, y)
+        && !on_tick(view, position, x, y)
+        && control_at(view, position, x, y).is_none()
+    {
+        view.emit_by_name::<()>("activate", &[&position]);
+    }
 }
 
 /// Drag a rectangle from empty space to select what it meets.
@@ -364,7 +389,8 @@ fn install_band(view: &ItemView) {
         let met: Vec<u32> = imp
             .sections
             .borrow()
-            .positions_in(&imp.metrics.borrow().clone(), &rect)
+            .over(&imp.metrics.borrow().clone())
+            .positions_in(&rect)
             .into_iter()
             .filter(|position| {
                 !drawn_only
@@ -526,7 +552,8 @@ pub(crate) fn bring_into_view(view: &ItemView, position: u32) {
     let Some(rect) = imp
         .sections
         .borrow()
-        .rect(&imp.metrics.borrow().clone(), position)
+        .over(&imp.metrics.borrow().clone())
+        .rect(position)
     else {
         return;
     };
@@ -592,7 +619,8 @@ fn move_cursor(view: &ItemView, step: Step, ctrl: bool, shift: bool) -> bool {
     let Some(target) = imp
         .sections
         .borrow()
-        .step(&imp.metrics.borrow().clone(), from, step)
+        .over(&imp.metrics.borrow().clone())
+        .step(from, step)
     else {
         return false;
     };
@@ -681,9 +709,16 @@ fn install_keys(view: &ItemView) {
         };
         // In a tree, the key towards the reading direction's end opens the
         // row and the other closes it, or goes to its parent.
-        let opens = matches!(key, gdk::Key::Right | gdk::Key::KP_Right) != rtl;
-        let closes = matches!(key, gdk::Key::Left | gdk::Key::KP_Left) != rtl;
-        if (opens || closes) && !ctrl && !shift && tree_key(&view, opens) {
+        let opens = match key {
+            gdk::Key::Right | gdk::Key::KP_Right => Some(!rtl),
+            gdk::Key::Left | gdk::Key::KP_Left => Some(rtl),
+            _ => None,
+        };
+        if let Some(opens) = opens
+            && !ctrl
+            && !shift
+            && tree_key(&view, opens)
+        {
             return glib::Propagation::Stop;
         }
         let step = match key {
@@ -856,8 +891,12 @@ fn install_focus(view: &ItemView) {
     view.add_controller(focus);
 }
 
-/// A spring-load timer: its source, the item it waits on, where the pointer was.
-type Dwell = (glib::SourceId, u32, (f64, f64));
+/// A spring-load timer, the item it waits on and where the pointer was.
+#[derive(Default)]
+struct Dwell {
+    timer: OnceTimer,
+    at: Cell<Option<(u32, (f64, f64))>>,
+}
 
 /// The one action enter and motion answer with (GTK refuses a set): the
 /// presenter's [`ItemPresenter::drop_action`] once the dragged value has
@@ -915,14 +954,10 @@ pub(crate) fn update_drop_action(view: &ItemView) {
 
 /// Accept drops on the view; the presenter decides which items take them.
 pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::DragAction) {
-    if view.imp().drop_controller.get().is_some() {
+    let target = gtk::DropTarget::new(glib::Type::INVALID, actions);
+    if view.imp().drop_controller.set(target.clone()).is_err() {
         return;
     }
-    let target = gtk::DropTarget::new(glib::Type::INVALID, actions);
-    view.imp()
-        .drop_controller
-        .set(target.clone())
-        .expect("checked above");
     target.set_types(types);
     target.set_preload(view.imp().drop_preload.get());
     let weak = view.downgrade();
@@ -937,7 +972,7 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             update_drop_action(&view);
         }
     });
-    let dwell: Rc<RefCell<Option<Dwell>>> = Rc::new(RefCell::new(None));
+    let dwell = Rc::new(Dwell::default());
     let weak = view.downgrade();
     let spring = Rc::clone(&dwell);
     target.connect_motion(move |_, x, y| {
@@ -954,33 +989,28 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
             view.queue_draw();
         }
         // Resting on a folder opens it; crossing folders does not.
-        let restart = match (spring.borrow().as_ref(), under) {
-            (Some((_, at, from)), Some(p)) => {
-                *at != p || (x - from.0).hypot(y - from.1) > SPRING_DRIFT
-            }
+        let waiting = spring.timer.is_pending().then(|| spring.at.get()).flatten();
+        let restart = match (waiting, under) {
+            (Some((at, from)), Some(p)) => at != p || (x - from.0).hypot(y - from.1) > SPRING_DRIFT,
             (None, Some(_)) => true,
             (_, None) => false,
         };
-        if (restart || under.is_none())
-            && let Some((source, _, _)) = spring.take()
-        {
-            big_gtk_kit::source::remove(source);
+        if restart || under.is_none() {
+            spring.timer.cancel();
         }
         if restart
             && let Some(position) = under
             && presenter.springs_open(position)
         {
             let view_weak = view.downgrade();
-            let slot = Rc::clone(&spring);
-            let source = glib::timeout_add_local_once(SPRING_DWELL, move || {
-                slot.take();
+            spring.at.set(Some((position, (x, y))));
+            spring.timer.arm(SPRING_DWELL, move || {
                 if let Some(view) = view_weak.upgrade()
                     && view.imp().drop_target.get() == Some(position)
                 {
                     view.emit_by_name::<()>("activate", &[&position]);
                 }
             });
-            spring.replace(Some((source, position, (x, y))));
         }
         answer(
             presenter.as_ref(),
@@ -1008,9 +1038,7 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
     let weak = view.downgrade();
     let spring = Rc::clone(&dwell);
     target.connect_leave(move |_| {
-        if let Some((source, _, _)) = spring.take() {
-            big_gtk_kit::source::remove(source);
-        }
+        spring.timer.cancel();
         if let Some(view) = weak.upgrade() {
             view.imp().drop_target.set(None);
             view.imp().drop_at.set(None);
@@ -1020,9 +1048,7 @@ pub(crate) fn install_drop(view: &ItemView, types: &[glib::Type], actions: gdk::
     let weak = view.downgrade();
     let spring = dwell;
     target.connect_drop(move |target, value, x, y| {
-        if let Some((source, _, _)) = spring.take() {
-            big_gtk_kit::source::remove(source);
-        }
+        spring.timer.cancel();
         let Some(view) = weak.upgrade() else {
             return false;
         };

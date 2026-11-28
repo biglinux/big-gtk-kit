@@ -3,7 +3,7 @@
 
 //! One tooltip look for every BigLinux program.
 //!
-//! Call [`install`] once, after GTK is initialised and before the first window
+//! Call [`install`] once, after GTK is initialized and before the first window
 //! is realized. From then on a widget's own `tooltip-text` or `tooltip-markup`
 //! (set in code, by a builder, in a relm4 `view!` or in a `.ui` file) shows as
 //! the BigLinux card instead of GTK's tooltip window. Call sites do not change,
@@ -22,6 +22,9 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
+
+use crate::timer::OnceTimer;
+use crate::widget_tree::children;
 
 const SHOW_DELAY: Duration = Duration::from_millis(150);
 /// Reaching another widget this soon after a card hid shows its card at once.
@@ -71,15 +74,12 @@ pub fn install() {
         return;
     }
     if let Some(display) = gdk::Display::default() {
-        let provider = crate::css::following_settings(&display);
-        provider.load_from_string(include_str!("tooltip.css"));
         let hide_all: Rc<dyn Fn()> = Rc::new(dismiss_every_card);
         // SAFETY: HIDE_ALL_KEY holds an `Rc<dyn Fn()>` (see its definition).
         unsafe { display.set_data(HIDE_ALL_KEY, hide_all) };
         // Process-wide: the card is the same in every window.
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
+        crate::css::install(
+            include_str!("tooltip.css"),
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 100,
         );
     }
@@ -183,7 +183,7 @@ fn attach(native: &gtk::Widget) {
         owner: RefCell::default(),
         area: RefCell::default(),
         owner_handlers: RefCell::default(),
-        timer: RefCell::default(),
+        timer: OnceTimer::new(),
         shown: Cell::new(false),
         hidden_at: Cell::new(None),
         pressed: Cell::new(false),
@@ -291,7 +291,7 @@ struct Engine {
     /// The owner's tip under the pointer, for a widget with [`set_area_tips`].
     area: RefCell<Area>,
     owner_handlers: RefCell<Vec<glib::SignalHandlerId>>,
-    timer: RefCell<Option<glib::SourceId>>,
+    timer: OnceTimer,
     shown: Cell<bool>,
     hidden_at: Cell<Option<Instant>>,
     /// Pressed on the current owner: no card until the pointer moves to another.
@@ -358,14 +358,11 @@ impl Engine {
             return;
         }
         let weak = Rc::downgrade(self);
-        let timer = glib::timeout_add_local_once(SHOW_DELAY, move || {
+        self.timer.arm(SHOW_DELAY, move || {
             if let Some(engine) = weak.upgrade() {
-                // Ran: nothing left to remove.
-                engine.timer.take();
                 engine.show(false);
             }
         });
-        self.timer.replace(Some(timer));
     }
 
     fn owner(&self) -> Option<gtk::Widget> {
@@ -465,6 +462,10 @@ impl Engine {
         Some(gdk::Rectangle::new(column, y, 1, height))
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "the card is made above when there is none"
+    )]
     fn card(&self, native: &gtk::Widget) -> std::cell::Ref<'_, Card> {
         if self.card.borrow().is_none() {
             let popover = gtk::Popover::builder()
@@ -510,7 +511,7 @@ impl Engine {
 
     /// Close the card for good on its owner: a press acted on it.
     fn dismiss(&self) {
-        self.cancel_timer();
+        self.timer.cancel();
         self.pressed.set(true);
         self.popdown();
         // The next owner waits its delay, as after any action.
@@ -524,7 +525,7 @@ impl Engine {
 
     /// Let go of the owner, leaving the card as it is.
     fn release(&self) {
-        self.cancel_timer();
+        self.timer.cancel();
         self.area.take();
         if let Some(owner) = self.owner.take().and_then(|owner| owner.upgrade()) {
             for handler in self.owner_handlers.take() {
@@ -543,18 +544,17 @@ impl Engine {
             self.hidden_at.set(Some(Instant::now()));
         }
     }
-
-    fn cancel_timer(&self) {
-        if let Some(timer) = self.timer.take() {
-            crate::source::remove(timer);
-        }
-    }
 }
 
 /// The widget under `(x, y)` whose tooltip shows there: the nearest with a
 /// tooltip text or a tip there, as GTK picks it (insensitive widgets explain
 /// themselves too).
 fn tip_owner(native: &gtk::Widget, x: f64, y: f64) -> Option<(gtk::Widget, Area)> {
+    // GTK 4.24 enters a popover that maps under its grab at (-1, -1), where
+    // `pick` finds its first button.
+    if !native.contains(x, y) {
+        return None;
+    }
     let point = graphene::Point::new(x as f32, y as f32);
     let mut widget = native.pick(x, y, gtk::PickFlags::INSENSITIVE);
     while let Some(candidate) = widget {
@@ -615,7 +615,7 @@ fn silence(widget: &gtk::Widget) {
 /// when it has none any more.
 fn fill(card: &Card, owner: &gtk::Widget, area: Option<&(String, gdk::Rectangle)>) -> bool {
     // Cards with structure (an icon, bold or small lines) read from the left
-    // and keep their lines; a plain sentence is centred and wraps. Plain lines
+    // and keep their lines; a plain sentence is centered and wraps. Plain lines
     // of their own (a list of choices) wrap too, but read from the left.
     let (left, wrap, icon) = match area {
         Some((text, _)) => {
@@ -674,37 +674,127 @@ fn active(native: &gtk::Widget) -> bool {
 /// Whether a card for `owner` would cover an open popover.
 ///
 /// A popover parented to `owner`, menu or panel, opens beside it where the
-/// card would. Elsewhere only menus count: popovers that close on a click
-/// outside them. Another control's panel and the card itself stay open and
+/// card would. Elsewhere only menus count, popovers that close on a click
+/// outside them, and not one that holds `owner`: the card explains its rows.
+/// Another control's panel and the card itself stay open and
 /// leave cards shown, though a menu inside a panel counts. Each popover
 /// is a native of its own, so the walk starts at the window that holds
 /// `native`: an owner in a panel sees a menu of the window and the other way
 /// round. A popover off screen shows none of its children.
 fn popover_open(native: &gtk::Widget, owner: &gtk::Widget) -> bool {
-    let mut child = owner.first_child();
-    while let Some(widget) = child {
-        if widget.is::<gtk::Popover>() && widget.is_mapped() {
-            return true;
-        }
-        child = widget.next_sibling();
+    if children(owner).any(|widget| widget.is::<gtk::Popover>() && widget.is_mapped()) {
+        return true;
     }
     let Some(root) = native.root() else {
         return false;
     };
-    let mut pending: Vec<gtk::Widget> = root.first_child().into_iter().collect();
+    let mut pending: Vec<gtk::Widget> = children(&root).collect();
     while let Some(widget) = pending.pop() {
-        pending.extend(widget.next_sibling());
         if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
             if !popover.is_mapped() {
                 continue;
             }
-            if popover.is_autohide() {
+            if popover.is_autohide() && !owner.is_ancestor(popover) {
                 return true;
             }
         }
-        pending.extend(widget.first_child());
+        pending.extend(children(&widget));
     }
     false
+}
+
+/// Give `widget` one name: the tooltip a person reads and the label a screen
+/// reader announces.
+///
+/// A button built with a label is labeled by that label, which outranks a
+/// label property, so the relation goes; a label set on the button after this
+/// call relates it again.
+pub fn name_control(widget: &impl IsA<gtk::Widget>, label: &str) {
+    let widget = widget.upcast_ref::<gtk::Widget>();
+    widget.set_tooltip_text(Some(label));
+    widget.reset_relation(gtk::AccessibleRelation::LabelledBy);
+    widget.update_property(&[gtk::accessible::Property::Label(label)]);
+}
+
+/// Build an icon-only button with tooltip and accessible label set together.
+///
+/// The image child carries no `image-button` class, which
+/// `ButtonBuilder::icon_name` adds unless `css_classes` replaces it; pass it in
+/// `classes` for that narrower padding.
+#[must_use]
+pub fn icon_button(icon_name: &str, label: &str, classes: &[&str]) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .child(&gtk::Image::from_icon_name(icon_name))
+        .css_classes(classes)
+        .build();
+    name_control(&button, label);
+    button
+}
+
+/// Build an icon-only menu button with tooltip and accessible label set together.
+#[must_use]
+pub fn icon_menu_button(icon_name: &str, label: &str, classes: &[&str]) -> gtk::MenuButton {
+    let button = gtk::MenuButton::builder()
+        .icon_name(icon_name)
+        .css_classes(classes)
+        .build();
+    name_control(&button, label);
+    button
+}
+
+/// Build an icon-only toggle button with tooltip and accessible label set
+/// together, `active` as it starts. Its classes follow [`icon_button`]'s.
+#[must_use]
+pub fn icon_toggle_button(
+    icon_name: &str,
+    label: &str,
+    active: bool,
+    classes: &[&str],
+) -> gtk::ToggleButton {
+    let button = gtk::ToggleButton::builder()
+        .child(&gtk::Image::from_icon_name(icon_name))
+        .css_classes(classes)
+        .active(active)
+        .build();
+    name_control(&button, label);
+    button
+}
+
+/// Build a menu button with app-owned child content and a shared tooltip and
+/// accessible label policy.
+#[must_use]
+pub fn custom_menu_button(
+    child: &impl IsA<gtk::Widget>,
+    label: &str,
+    classes: &[&str],
+) -> gtk::MenuButton {
+    let button = gtk::MenuButton::builder()
+        .child(child)
+        .css_classes(classes)
+        .build();
+    name_control(&button, label);
+    button
+}
+
+/// Build a button with an icon, text label, tooltip, and accessible label.
+#[must_use]
+pub fn labeled_icon_button(
+    icon_name: &str,
+    label: &str,
+    tooltip: &str,
+    classes: &[&str],
+) -> gtk::Button {
+    let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    inner.append(&gtk::Image::from_icon_name(icon_name));
+    inner.append(&gtk::Label::new(Some(label)));
+
+    let button = gtk::Button::builder()
+        .child(&inner)
+        .css_classes(classes)
+        .build();
+    button.set_tooltip_text(Some(tooltip));
+    button.update_property(&[gtk::accessible::Property::Label(label)]);
+    button
 }
 
 #[cfg(test)]
@@ -725,11 +815,7 @@ mod tests {
         unsafe { display.set_data(SHOW_WHEN_INACTIVE_KEY, true) };
         assert!(display_flag(SHOW_WHEN_INACTIVE_KEY));
         set_follow_pointer(true);
-        // SAFETY: as above.
-        assert!(
-            unsafe { display.data::<bool>(FOLLOW_POINTER_KEY) }
-                .is_some_and(|flag| unsafe { *flag.as_ref() })
-        );
+        assert!(display_flag(FOLLOW_POINTER_KEY));
 
         let owner = gtk::Button::with_label("Save");
         owner.set_tooltip_text(Some("Save the document"));
@@ -905,10 +991,191 @@ mod tests {
         pump();
     }
 
+    /// A row of an open menu, or of a submenu beside it, explains itself: the
+    /// menu that holds it is not one the card would cover.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn menu_row_shows_card() {
+        gtk::init().expect("a display");
+        install();
+        set_show_when_inactive(true);
+        let host = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let window = gtk::Window::builder().child(&host).build();
+        window.present();
+        pump();
+
+        let door = gtk::Button::with_label("Tab Color");
+        let off = gtk::Button::with_label("Move Right");
+        off.set_tooltip_text(Some("This is the last tab"));
+        off.set_sensitive(false);
+        let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        rows.append(&door);
+        rows.append(&off);
+        let menu = gtk::Popover::builder().child(&rows).build();
+        menu.set_parent(&host);
+        menu.popup();
+        pump();
+        let shows = |native: &gtk::Widget, owner: &gtk::Button| {
+            let engine = engine(native).expect("attached at realize");
+            engine
+                .owner
+                .replace(Some(owner.upcast_ref::<gtk::Widget>().downgrade()));
+            engine.show(true);
+            pump();
+            let shown = engine.shown.get();
+            engine.popdown();
+            pump();
+            shown
+        };
+        assert!(
+            shows(menu.upcast_ref(), &off),
+            "a card for a row of its menu"
+        );
+
+        let red = gtk::Button::with_label("Red");
+        red.set_tooltip_text(Some("Red"));
+        let submenu = gtk::Popover::builder().child(&red).build();
+        submenu.set_parent(&door);
+        submenu.popup();
+        pump();
+        assert!(
+            shows(submenu.upcast_ref(), &red),
+            "a card for a row of a submenu"
+        );
+        assert!(
+            !shows(menu.upcast_ref(), &off),
+            "no card under a submenu of another row"
+        );
+        submenu.popdown();
+        submenu.unparent();
+        menu.popdown();
+        menu.unparent();
+        set_show_when_inactive(false);
+        window.destroy();
+        pump();
+    }
+
+    /// GTK 4.24 enters a popover that maps under its grab at (-1, -1), before
+    /// its first allocation, where `pick` finds its first button: no card is
+    /// armed for it, and one is for the row under the pointer afterwards.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn popover_entered_outside_arms_no_card() {
+        gtk::init().expect("a display");
+        install();
+        let host = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let window = gtk::Window::builder().child(&host).build();
+        window.present();
+        pump();
+        let row = gtk::Button::with_label("Open");
+        row.set_tooltip_text(Some("A row of the menu"));
+        let menu = gtk::Popover::builder().child(&row).build();
+        menu.set_parent(&host);
+        let entered = Rc::new(RefCell::new(None));
+        let seen = Rc::clone(&entered);
+        menu.connect_map(move |menu| {
+            let engine = engine(menu.upcast_ref()).expect("attached at realize");
+            engine.hovered(-1.0, -1.0);
+            seen.replace(Some(engine.owner()));
+        });
+        menu.popup();
+        pump();
+        assert_eq!(entered.take(), Some(None), "no owner outside the popover");
+
+        let engine = engine(menu.upcast_ref()).expect("attached at realize");
+        let center = graphene::Point::new(row.width() as f32 / 2.0, row.height() as f32 / 2.0);
+        let inside = row
+            .compute_point(&menu, &center)
+            .expect("the row in its popover");
+        engine.hovered(f64::from(inside.x()), f64::from(inside.y()));
+        assert_eq!(
+            engine.owner().as_ref(),
+            Some(row.upcast_ref()),
+            "the row inside it"
+        );
+        engine.popdown();
+        menu.popdown();
+        menu.unparent();
+        window.destroy();
+        pump();
+    }
+
+    /// GTK relates a labeled button to its label, which a screen reader reads
+    /// over the label property.
+    #[test]
+    fn named_labeled_button_reads_its_name() {
+        big_testkit::harness::require_gtk_test(|| {
+            let toggle = gtk::ToggleButton::with_label("Read");
+            name_control(&toggle, "Owner can read");
+            let window = gtk::Window::builder().child(&toggle).build();
+            window.present();
+            big_testkit::harness::pump();
+            assert!(!gtk::test_accessible_has_relation(
+                &toggle,
+                gtk::AccessibleRelation::LabelledBy
+            ));
+            assert!(big_testkit::harness::has_named_descendant(
+                &toggle,
+                gtk::AccessibleRole::ToggleButton,
+                "Owner can read"
+            ));
+            window.destroy();
+        });
+    }
+
     #[test]
     fn only_real_markup_is_structured() {
         assert!(is_structured("<b>Volume</b>\n<small>50 %</small>"));
         assert!(!is_structured("Fish &amp; chips"));
         assert!(!is_structured("1 &lt; 2"));
+    }
+
+    /// An image child sized as `ButtonBuilder::icon_name` sizes it: the same
+    /// classes, the same measure, with and without `image-button`.
+    #[test]
+    fn icon_button_matches_icon_name_builder() {
+        big_testkit::harness::require_gtk_test(|| {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let mut pairs = Vec::new();
+            for classes in [&["flat"][..], &["flat", "circular"], &[]] {
+                // `css_classes` replaces the `image-button` class that `icon_name` added.
+                let replaced = gtk::Button::builder()
+                    .icon_name("list-add-symbolic")
+                    .css_classes(classes)
+                    .build();
+                pairs.push((replaced, icon_button("list-add-symbolic", "Add", classes)));
+                let kept = gtk::Button::builder()
+                    .icon_name("list-add-symbolic")
+                    .build();
+                for class in classes {
+                    kept.add_css_class(class);
+                }
+                let mut with_image_class = vec!["image-button"];
+                with_image_class.extend_from_slice(classes);
+                pairs.push((
+                    kept,
+                    icon_button("list-add-symbolic", "Add", &with_image_class),
+                ));
+            }
+            for (built, owned) in &pairs {
+                row.append(built);
+                row.append(owned);
+            }
+            let window = gtk::Window::builder().child(&row).build();
+            window.present();
+            big_testkit::harness::pump();
+            for (built, owned) in &pairs {
+                assert_eq!(built.css_classes(), owned.css_classes());
+                for orientation in [gtk::Orientation::Horizontal, gtk::Orientation::Vertical] {
+                    assert_eq!(
+                        built.measure(orientation, -1),
+                        owned.measure(orientation, -1),
+                        "{:?}",
+                        built.css_classes()
+                    );
+                }
+            }
+            window.destroy();
+        });
     }
 }

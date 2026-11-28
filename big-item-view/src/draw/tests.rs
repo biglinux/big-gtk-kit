@@ -79,8 +79,8 @@ fn a_press_finds_the_star_under_it() {
     );
 }
 
-/// The disc is round, centred on the picture and inside the item's
-/// background, so a round tile's tint never spills into its neighbour.
+/// The disc is round, centered on the picture and inside the item's
+/// background, so a round tile's tint never spills into its neighbor.
 #[test]
 fn picture_disc_circles_the_picture() {
     let geometry = Geometry {
@@ -115,4 +115,33 @@ fn no_disc_without_room_around_picture() {
         ..Geometry::grid(120, 48)
     };
     assert!(picture_disc(&flat, (120.0, 110.0), false).is_none());
+}
+
+/// A name wrapped inside a word shows no hyphen it does not have: each line
+/// but the last, which the ellipsis may shorten, draws one glyph per character.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn wrapped_title_adds_no_hyphen() {
+    let context = gtk::Label::new(None).pango_context();
+    let geometry = Geometry {
+        title_lines: 2,
+        ..Geometry::grid(120, 48)
+    };
+    let name = "Sway_Wallpaper_Blue_1136x640.png";
+    let layout = title_layout(&context, &geometry, name, 90.0);
+    assert!(layout.line_count() > 1, "the name wraps");
+    let lines = layout.lines_readonly();
+    for line in &lines[..lines.len() - 1] {
+        let start = usize::try_from(line.start_index()).unwrap();
+        let end = start + usize::try_from(line.length()).unwrap();
+        let glyphs: i32 = line
+            .runs()
+            .iter()
+            .map(|run| run.glyph_string().num_glyphs())
+            .sum();
+        assert_eq!(
+            usize::try_from(glyphs).unwrap(),
+            name[start..end].chars().count()
+        );
+    }
 }

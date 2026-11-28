@@ -1,9 +1,20 @@
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+
 # GTK and libadwaita APIs that leak, measured, and the big-gtk-kit function to
 # use instead. This is the canonical list: a consumer copies these entries into
 # the `disallowed-methods` / `disallowed-types` of its own clippy.toml (Clippy has
 # no include) and keeps them in step with this file.
 
 disallowed-methods = [
+    { path = "relm4::set_global_css", reason = "a provider made by relm4 answers prefers-color-scheme, prefers-contrast and prefers-reduced-motion from its own properties, light and no preference; use `big_gtk_kit::css::install`", allow-invalid = true },
+    { path = "relm4::set_global_css_with_priority", reason = "a provider made by relm4 answers prefers-color-scheme, prefers-contrast and prefers-reduced-motion from its own properties, light and no preference; use `big_gtk_kit::css::install`", allow-invalid = true },
+    { path = "gtk4::Scale::new", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
+    { path = "gtk4::Scale::with_range", reason = "takes every wheel turn over it, so scrolling a page moves the slider; use `big_gtk_kit::slider::with_range`" },
+    { path = "gtk4::builders::ScaleBuilder::build", reason = "takes every wheel turn over it, so scrolling a page moves the slider; pass the builder to `big_gtk_kit::slider::build`" },
+    { path = "gtk4::FileDialog::builder", reason = "opens GTK's own picker instead of the desktop's; use `big_gtk_kit::file_dialog::present`, which asks the portal first" },
+    { path = "gtk4::FileDialog::new", reason = "opens GTK's own picker instead of the desktop's; use `big_gtk_kit::file_dialog::present`, which asks the portal first" },
     { path = "gtk4::prelude::AccessibleExtManual::update_relation", reason = "leaks the list of targets on every call (gtk-rs 0.11); use `big_gtk_kit::accessible::relate`" },
     { path = "libadwaita::PasswordEntryRow::new", reason = "leaks its buffer and the password in it (libadwaita 1.9); use `big_gtk_kit::password::password_row(adw::PasswordEntryRow::builder())`" },
     { path = "libadwaita::builders::PasswordEntryRowBuilder::build", reason = "leaks its buffer and the password in it (libadwaita 1.9); pass the builder to `big_gtk_kit::password::password_row`" },
@@ -22,7 +33,14 @@ disallowed-methods = [
     { path = "libadwaita::Dialog::builder", reason = "every dialog leaves three breakpoints behind when it goes (libadwaita 1.9, about 1.8 KB an opening); use `big_gtk_kit::dialog::Dialog::builder`" },
     { path = "gtk4::DirectoryList::new", reason = "a watched list crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`, and make the list again when the folder changes" },
     { path = "gtk4::DirectoryList::builder", reason = "a list it builds is watched, and crashes reading freed memory when it goes while a change in its folder is looked up (GTK 4.22 to 4.24); use `big_gtk_kit::directory::unwatched`, and make the list again when the folder changes" },
+    { path = "gtk4::CssProvider::new", reason = "answers `prefers-color-scheme`, `prefers-contrast` and `prefers-reduced-motion` as light and no preference whatever the system says; use `big_gtk_kit::css::provider`" },
+    { path = "gtk4::style_context_add_provider_for_display", reason = "the display keeps every provider it is given; add a fixed sheet once with `big_gtk_kit::css::install`, one that changes with `big_gtk_kit::css::DisplaySheet`, or one tied to a widget with `big_gtk_kit::css::add_provider_for_widget_lifetime`" },
     { path = "gio::Menu::append_section", reason = "GTK 4.22's menu tracker keeps every section it shows; use `big_gtk_kit::menu::append_shared_section`, or `append_refilled_section` for items that vary per build" },
+    { path = "libadwaita::ComboRow::new", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass `adw::ComboRow::builder()` to `big_gtk_kit::dropdown::build`" },
+    { path = "libadwaita::builders::ComboRowBuilder::build", reason = "cuts every choice at 20 characters and leaves it unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build`" },
+    { path = "gtk4::DropDown::new", reason = "leaves every choice unnamed for a screen reader; pass `gtk::DropDown::builder()` to `big_gtk_kit::dropdown::build_drop_down`" },
+    { path = "gtk4::DropDown::from_strings", reason = "leaves every choice unnamed for a screen reader; use `big_gtk_kit::dropdown::from_strings`" },
+    { path = "gtk4::builders::DropDownBuilder::build", reason = "leaves every choice unnamed for a screen reader; pass the builder to `big_gtk_kit::dropdown::build_drop_down`" },
 ]
 disallowed-types = [
     { path = "libadwaita::InlineViewSwitcher", reason = "leaks a widget tree per page (libadwaita 1.9); use `big_gtk_kit::view_switcher::toggles_for` over a `gtk::Stack`" },

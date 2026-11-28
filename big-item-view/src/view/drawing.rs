@@ -12,7 +12,7 @@ use gtk::{gdk, glib, graphene, gsk, pango};
 
 use crate::draw;
 use crate::icons::{IconKey, IconState, Icons};
-use crate::layout::{self, Metrics};
+use crate::layout;
 use crate::{IconFrame, IconSource, ItemContent};
 
 use super::{HEADING_BELOW, imp, tree_of};
@@ -59,23 +59,18 @@ impl Cache {
 }
 
 impl imp::ItemView {
-    /// Draw heading `index`: the presenter's words for the run under it.
+    /// Draw the heading at `rect`: the presenter's words for the run that
+    /// starts at `start`.
     pub(super) fn draw_heading(
         &self,
         snapshot: &gtk::Snapshot,
-        sections: &layout::Sections,
-        metrics: &Metrics,
-        index: usize,
+        rect: layout::Rect,
+        start: u32,
         scroll: (f32, f32),
     ) {
-        let (Some(rect), Some(model), Some(presenter)) = (
-            sections.heading(metrics, index),
-            self.model(),
-            self.presenter.borrow().clone(),
-        ) else {
+        let (Some(model), Some(presenter)) = (self.model(), self.presenter.borrow().clone()) else {
             return;
         };
-        let start = sections.starts[index];
         let Some(title) = model
             .item(start)
             .and_then(|item| presenter.section_title(start, &crate::view::presented(&item)))
@@ -163,7 +158,7 @@ impl imp::ItemView {
                     *scratch = ItemContent::default();
                     presenter.content(position, &crate::view::presented(&item), &mut scratch);
                     vacant.insert(Entry {
-                        _object: item.clone(),
+                        _object: item,
                         content: scratch.clone(),
                         icon: None,
                         title: None,
@@ -317,16 +312,15 @@ impl imp::ItemView {
         let (size, scale) = (key.1, key.2);
         let view = obj.downgrade();
         let wanted = key.clone();
-        let fallback = gicon.clone();
-        let deliver = move |texture: Option<gdk::Texture>| {
+        let deliver = move |answer: Result<gdk::Texture, gtk::gio::Icon>| {
             let Some(view) = view.upgrade() else {
                 return;
             };
-            let state = match texture {
-                Some(texture) => IconState::Texture(texture),
-                None => IconState::Paintable(crate::icons::paintable(
+            let state = match answer {
+                Ok(texture) => IconState::Texture(texture),
+                Err(icon) => IconState::Paintable(crate::icons::paintable(
                     &view.display(),
-                    &fallback,
+                    &icon,
                     size,
                     scale,
                     view.direction() == gtk::TextDirection::Rtl,
@@ -336,7 +330,7 @@ impl imp::ItemView {
         };
         match self.icon_loader.get() {
             Some(load) => load(&obj.display(), gicon, size, scale, Box::new(deliver)),
-            None => deliver(None),
+            None => deliver(Err(gicon.clone())),
         }
         self.icons.borrow().get(&key)
     }

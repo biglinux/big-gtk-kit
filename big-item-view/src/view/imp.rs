@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::{gdk, glib, graphene, gsk};
+use gtk::{glib, graphene, gsk};
 
 use crate::a11y;
 use crate::draw;
@@ -200,11 +200,10 @@ impl ObjectImpl for ItemView {
         // take the focus from here.
         obj.connect_has_focus_notify(|view| view.imp().sync_focus());
         obj.set_overflow(gtk::Overflow::Hidden);
-        // Before the probes are ever styled: installed later, at realize, the
-        // first styling happened without them and the colours never changed.
-        if let Some(display) = gdk::Display::default() {
-            crate::palette::install_defaults(&display);
-        }
+        // Before the probes are first styled, on the default display, where an
+        // unparented view is; realize installs on another display the view's
+        // window may be on.
+        crate::palette::install_defaults(&obj.display());
         // The probes wait for the view to be shown: a view kept in a stack
         // for another mode (bigfiles keeps three per tab) never pays for them.
         crate::input::install(&obj);
@@ -332,7 +331,7 @@ impl WidgetImpl for ItemView {
                     (width, 0.0),
                     false,
                 ));
-                let full = self.sections.borrow().content_size(&metrics).1;
+                let full = self.sections.borrow().over(&metrics).content_size().1;
                 (if scrolls_here { cell_h.min(full) } else { full }, full)
             }
             (Flow::ColumnMajor, gtk::Orientation::Vertical) => {
@@ -366,14 +365,12 @@ impl WidgetImpl for ItemView {
         // A popover a consumer parents here (renaming an item, pointing at
         // its `item_rect`) is placed by its parent's allocation. The item
         // proxies get a size, zero, so they stay mapped.
-        let mut child = obj.first_child();
-        while let Some(widget) = child {
+        for widget in big_gtk_kit::widget_tree::children(&*obj) {
             if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
                 popover.present();
             } else if widget.is::<a11y::ItemProxy>() {
                 widget.allocate(0, 0, -1, None);
             }
-            child = widget.next_sibling();
         }
         self.read_fonts();
         let rtl = obj.direction() == gtk::TextDirection::Rtl;
@@ -385,7 +382,7 @@ impl WidgetImpl for ItemView {
             rtl,
         ));
         self.metrics.replace(metrics.clone());
-        let (content_w, content_h) = self.sections.borrow().content_size(&metrics);
+        let (content_w, content_h) = self.sections.borrow().over(&metrics).content_size();
         let (pitch_x, pitch_y) = metrics.cell_size();
         // Headings over the columns move when a line changes width.
         if self.line_width.replace(pitch_x) != pitch_x && !self.geometry.borrow().columns.is_empty()
@@ -413,12 +410,15 @@ impl WidgetImpl for ItemView {
         let (width, height) = (obj.width() as f32, obj.height() as f32);
         snapshot.push_clip(&graphene::Rect::new(0.0, 0.0, width, height));
         let sections = self.sections.borrow().clone();
-        let range = sections.visible_range(&metrics, scroll);
-        for index in sections.visible_headings(&metrics, scroll) {
-            self.draw_heading(snapshot, &sections, &metrics, index, scroll);
+        let runs = sections.over(&metrics);
+        let range = runs.visible_range(scroll);
+        for index in runs.visible_headings(scroll) {
+            if let Some(rect) = runs.heading(index) {
+                self.draw_heading(snapshot, rect, sections.starts[index], scroll);
+            }
         }
         for position in range.clone() {
-            let Some(rect) = sections.rect(&metrics, position) else {
+            let Some(rect) = runs.rect(position) else {
                 continue;
             };
             let Some(node) = self.item_node(position, (rect.width, rect.height)) else {
@@ -792,7 +792,8 @@ impl ItemView {
         let range = self
             .sections
             .borrow()
-            .visible_range(&metrics, self.scroll());
+            .over(&metrics)
+            .visible_range(self.scroll());
         if self.last_range.get() == (range.start, range.end) {
             return;
         }

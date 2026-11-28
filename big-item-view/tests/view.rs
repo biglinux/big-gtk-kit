@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! The widget in a real window: what it asks the presenter, and what it keeps.
+#![expect(clippy::expect_used, reason = "a failed fixture fails the test")]
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -286,7 +287,7 @@ fn hits_only_drawn_parts() {
     let rect = view.item_rect(0).unwrap();
     let (x, y) = (f64::from(rect.x()), f64::from(rect.y()));
     let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
-    // The picture, centred at the top, and beside a short name ("entry
+    // The picture, centered at the top, and beside a short name ("entry
     // 0"): the card is as wide as the cell.
     assert_eq!(view.position_at(x + w / 2.0, y + 30.0), Some(0));
     assert_eq!(view.position_at(x + w / 2.0 - 40.0, y + h - 10.0), Some(0));
@@ -432,15 +433,7 @@ fn headings_resize_and_move_by_keys() {
         pump_until(|| header.width() > 0),
         "the header was never shown"
     );
-    let headings = || {
-        let mut found = Vec::new();
-        let mut child = header.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            found.push(widget);
-        }
-        found
-    };
+    let headings = || big_gtk_kit::widget_tree::children(&header).collect::<Vec<_>>();
     let size = headings()[1].clone();
     assert_eq!(heading_title(&size).as_deref(), Some("Size"));
     assert!(gtk::test_accessible_has_property(
@@ -472,6 +465,90 @@ fn headings_resize_and_move_by_keys() {
         gdk::Key::Right,
         gdk::ModifierType::CONTROL_MASK
     ));
+    window.destroy();
+}
+
+/// WCAG 2.2 relative luminance of an sRGB pixel.
+fn luminance(pixel: &[u8]) -> f64 {
+    let linear = |channel: u8| {
+        let c = f64::from(channel) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(pixel[0]) + 0.7152 * linear(pixel[1]) + 0.0722 * linear(pixel[2])
+}
+
+/// What `page` drew in its last frame, as RGBA rows of `stride` bytes, once
+/// it has drawn one.
+fn rendered(page: &gtk::Box) -> (glib::Bytes, usize) {
+    let capture = || big_gtk_kit::capture::widget_texture(page);
+    assert!(pump_until(|| capture().is_some()), "the page never painted");
+    let texture = capture().expect("the page painted");
+    let mut downloader = gdk::TextureDownloader::new(&texture);
+    downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
+    downloader.download_bytes()
+}
+
+/// Oracle: WCAG 2.2 success criterion 1.4.3 asks 4.5:1 of text this size,
+/// measured between the strongest glyph pixel and the heading's background.
+#[gtk::test]
+#[ignore = "needs a display"]
+fn heading_title_meets_text_contrast() {
+    let geometry = Geometry {
+        columns: vec![Column {
+            id: 0,
+            title: "Name".into(),
+            shows: ColumnShows::Primary,
+            width: 200,
+            expand: true,
+            xalign: 0.0,
+            sort: None,
+        }],
+        ..Geometry::rows(22)
+    };
+    let view = ItemView::new(Rc::new(Counting::default()), geometry);
+    let header = ColumnHeader::new(&view);
+    // The theme's window background, painted by the widget rendered below.
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    page.add_css_class("background");
+    page.append(&header);
+    page.append(&view);
+    let window = gtk::Window::builder()
+        .default_width(300)
+        .default_height(100)
+        .child(&page)
+        .build();
+    window.present();
+    let heading = header.first_child().expect("the Name heading");
+    let title = heading
+        .first_child()
+        .and_then(|content| content.first_child())
+        .expect("the heading's title");
+
+    let (pixels, stride) = rendered(&page);
+    let pixel = |x: usize, y: usize| &pixels[y * stride + x * 4..][..4];
+
+    let corner = heading
+        .compute_bounds(&page)
+        .expect("the heading is laid out");
+    let background = pixel(corner.x() as usize + 1, corner.y() as usize + 1);
+    let ground = luminance(background);
+    let bounds = title.compute_bounds(&page).expect("the title is laid out");
+    let mut strongest = 1.0_f64;
+    for y in bounds.y() as usize..(bounds.y() + bounds.height()) as usize {
+        for x in bounds.x() as usize..(bounds.x() + bounds.width()) as usize {
+            let glyph = luminance(pixel(x, y));
+            let ratio = (glyph.max(ground) + 0.05) / (glyph.min(ground) + 0.05);
+            strongest = strongest.max(ratio);
+        }
+    }
+    assert!(
+        strongest >= 4.5,
+        "heading title contrast {strongest:.2}:1 on {background:?}"
+    );
     window.destroy();
 }
 

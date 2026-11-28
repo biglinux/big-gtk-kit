@@ -16,6 +16,7 @@ authors.workspace = true
 adw = { workspace = true }
 gtk = { workspace = true }
 glib = { workspace = true }
+big-gtk-kit = { workspace = true }
 big-os-kit = { workspace = true }
 big-relm4-components = { workspace = true }
 

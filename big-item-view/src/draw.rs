@@ -137,7 +137,7 @@ pub(crate) fn icon_box(geometry: &Geometry, size: (f32, f32), rtl: bool) -> grap
 }
 
 /// The disc an item's tint and rings take with [`Geometry::picture_disc`]:
-/// centred on the picture, `padding` clear of it on every side, and inside the
+/// centered on the picture, `padding` clear of it on every side, and inside the
 /// item's background. `None` when no such disc goes around the whole picture (a
 /// cell too narrow, a picture that is not square): an opaque picture would cover
 /// a smaller one, so the item keeps its background's mark.
@@ -586,7 +586,7 @@ fn grayscale() -> graphene::Matrix {
     ])
 }
 
-/// `natural` fitted inside `bound`, centred.
+/// `natural` fitted inside `bound`, centered.
 fn fitted(natural: (f32, f32), bound: &graphene::Rect) -> graphene::Rect {
     let (w, h) = (natural.0.max(1.0), natural.1.max(1.0));
     let scale = (bound.width() / w).min(bound.height() / h).min(1.0);
@@ -624,7 +624,7 @@ fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect
             snapshot.save();
             snapshot.translate(&graphene::Point::new(icon.x(), icon.y()));
             let (w, h) = (f64::from(icon.width()), f64::from(icon.height()));
-            // Since GTK 4.20 every icon paintable takes colours; a coloured
+            // Since GTK 4.20 every icon paintable takes colors; a colored
             // icon simply ignores them.
             let fg = palette.get(Role::Text);
             paintable.snapshot_symbolic(snapshot.upcast_ref::<gdk::Snapshot>(), w, h, &[fg]);
@@ -636,7 +636,7 @@ fn draw_picture(snapshot: &gtk::Snapshot, item: &Item<'_>, icon: &graphene::Rect
                 (texture.width() as f32).max(1.0),
                 (texture.height() as f32).max(1.0),
             );
-            // Grown until both sides cover the box, centred, and cut to it.
+            // Grown until both sides cover the box, centered, and cut to it.
             // A small picture (an icon, a favicon) grown past twice its own
             // pixels is a blur: it keeps that size instead and sits in the
             // middle of the box, on the placeholder's fill.
@@ -731,7 +731,7 @@ fn draw_words(snapshot: &gtk::Snapshot, item: &Item<'_>) {
         .map_or(0.0, |layout| layout.pixel_extents().1.height() as f32);
     let top = match geometry.composition {
         Composition::Stacked => words.y(),
-        // A row centres its words; a line that is not there leaves no gap.
+        // A row centers its words; a line that is not there leaves no gap.
         Composition::Inline => words.y() + ((words.height() - title_h - subtitle_h) / 2.0).max(0.0),
     };
     snapshot.save();
@@ -910,6 +910,10 @@ pub(crate) fn title_layout(
     if geometry.title_lines > 1 {
         layout.set_wrap(pango::WrapMode::WordChar);
         layout.set_height(-i32::from(geometry.title_lines));
+        // A name broken inside a word gets no hyphen it does not have.
+        let attributes = pango::AttrList::new();
+        attributes.insert(pango::AttrInt::new_insert_hyphens(false));
+        layout.set_attributes(Some(&attributes));
     }
     layout.set_alignment(match geometry.composition {
         Composition::Stacked => pango::Alignment::Center,

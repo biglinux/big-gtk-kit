@@ -2,16 +2,145 @@
 name = "big-gtk-kit"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.98.1"
+rust-version = "1.100.0"
 license = "MIT"
 repository = "https://github.com/biglinux/big-gtk-kit"
 description = "GTK4 building blocks shared by the BigLinux programs"
 publish = false
+exclude = ["upstream"]
 
 [workspace]
-members = ["big-item-view"]
+members = [
+    "big-item-view",
+    "shared/big-os-kit",
+    "shared/big-image",
+    "shared/big-relm4-components",
+    "shared/big-testkit",
+    "shared/big-app-kit",
+]
+exclude = [
+    # Fuzz targets are their own crates: `cargo fuzz` builds them with a
+    # nightly toolchain and sanitizer flags.
+    "shared/big-os-kit/fuzz",
+    "third_party",
+]
+resolver = "3"
+
+# The shared crates inherit these; the kit's own crate and big-item-view keep
+# their own package fields.
+[workspace.package]
+edition = "2024"
+rust-version = "1.100.0"
+license = "MIT"
+repository = "https://github.com/biglinux/big-gtk-kit"
+authors = ["BigLinux contributors"]
+
+[workspace.dependencies]
+adw = { version = "0.9", features = ["v1_9", "gtk_v4_22"], package = "libadwaita" }
+async-global-executor = { version = "3.1", default-features = false }
+base64 = "0.22"
+bon = "3.1"
+cairo-rs = "0.22"
+env_logger = "0.11.11"
+futures-util = { version = "0.3", default-features = false }
+gdk4-wayland = { version = "0.11.4", features = ["wayland_crate"] }
+gettext-rs = { version = "0.8", features = ["gettext-system"] }
+gio = "0.22"
+glib = "0.22"
+glycin = "=3.1.0"
+gtk = { version = "0.11.2", features = ["v4_24"], package = "gtk4" }
+libc = "0.2"
+libsecret = "=0.9.0"
+log = { version = "0.4", features = ["std"] }
+qrcodegen = "1.8"
+relm4 = { version = "0.11.0", features = ["libadwaita"] }
+rustix = "1.1.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.25"
+thiserror = "2"
+wayland-backend = "0.3"
+wayland-client = { version = "0.31", features = ["dlopen"] }
+zbus = "5"
+big-gtk-kit = { path = "." }
+big-os-kit = { path = "shared/big-os-kit", version = "0.1.0" }
+big-image = { path = "shared/big-image", version = "0.1.0" }
+big-relm4-components = { path = "shared/big-relm4-components", version = "0.1.0" }
+big-testkit = { path = "shared/big-testkit", version = "0.1.0" }
 
 [dependencies]
 # The BigLinux GTK and libadwaita: no older library is supported.
 gtk = { version = "0.11", features = ["v4_22"], package = "gtk4" }
-adw = { version = "0.9", features = ["v1_9"], package = "libadwaita" }
+adw = { version = "0.9", features = ["v1_9", "gtk_v4_22"], package = "libadwaita" }
+# The file dialog's portal request: a window handle exported over Wayland, and
+# the one answer its future waits for.
+gdk4-wayland = { version = "0.11", features = ["v4_12"] }
+futures-channel = "0.3"
+log = { version = "0.4", features = ["std"] }
+
+[dev-dependencies]
+big-testkit = { workspace = true }
+
+# glycin 3.1.0 starts every loader at its caller's priority, and unconfined
+# where bubblewrap cannot run; the copy lets a pool start its loaders at a nice
+# value, which big-image's thumbnails use to stay behind the program's own
+# threads, and confines that loader with seccomp and Landlock
+# (third_party/glycin/BIGLINUX-PATCH.md).
+# Cargo reads [patch] only in the workspace it builds, so a program that builds
+# big-image names this copy in its own.
+[patch.crates-io]
+glycin = { path = "third_party/glycin" }
+
+# Every package takes these with `[lints] workspace = true`, which cannot be
+# combined with lints of its own: a crate that differs says so with a
+# crate-level attribute in its root file.
+[workspace.lints.cargo]
+# A dependency nothing uses, build scripts' included: Cargo 1.100 judges it as it compiles.
+unused_dependencies = "deny"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+deprecated = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+missing_safety_doc = "warn"
+# The programs built on these crates may share one process, where a panic
+# raised in a GLib callback cannot unwind and aborts it whole. `expect`,
+# `unwrap` and `panic!` are denied, so Clippy refuses a new site with or
+# without `-D warnings`: a site that stays says why with `#[expect]`; tests may
+# panic (`clippy.toml`).
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+exit = "deny"
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"
+unwrap_used = "deny"
+allow_attributes_without_reason = "deny"
+unused_result_ok = "warn"
+significant_drop_in_scrutinee = "warn"
+unchecked_time_subtraction = "warn"
+read_zero_byte_vec = "warn"
+path_buf_push_overwrite = "warn"
+debug_assert_with_mut_call = "warn"
+unused_peekable = "warn"
+redundant_clone = "warn"
+implicit_clone = "warn"
+cloned_instead_of_copied = "warn"
+inefficient_to_string = "warn"
+unnecessary_join = "warn"
+manual_instant_elapsed = "warn"
+large_futures = "warn"
+cast_lossless = "warn"
+non_std_lazy_statics = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+ignore_without_reason = "warn"
+should_panic_without_expect = "warn"
+redundant_test_prefix = "warn"
+
+[lints]
+workspace = true

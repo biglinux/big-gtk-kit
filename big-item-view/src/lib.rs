@@ -12,7 +12,7 @@
 //! Here no item has a widget tree. [`ItemView`] lays items out by arithmetic
 //! ([`layout`]), draws the ones on screen into render nodes it keeps and hands
 //! back to GSK unchanged frame after frame (so the renderer's diff damages only
-//! what changed), reads its colours and fonts from CSS through a few invisible
+//! what changed), reads its colors and fonts from CSS through a few invisible
 //! probe widgets, and exposes the items on screen to assistive technology as one
 //! undrawn widget each, which AT-SPI can activate. What an item shows comes from
 //! the consumer's [`ItemPresenter`].
@@ -33,14 +33,14 @@ mod view;
 use gtk::{gdk, gio, glib};
 
 pub use header::ColumnHeader;
-pub use layout::{Flow, Sections, Step};
+pub use layout::{Flow, Runs, Sections, Step};
 pub use view::ItemView;
 
 /// Draws `icon` at `size` and `scale` for the display, and hands the picture to
-/// `deliver` on the main thread, at once or later; `None` lets GTK's icon theme
-/// draw it.
+/// `deliver` on the main thread, at once or later; `Err` names the icon GTK's
+/// icon theme draws in its place.
 pub type IconLoader =
-    fn(&gdk::Display, &gio::Icon, i32, i32, Box<dyn FnOnce(Option<gdk::Texture>)>);
+    fn(&gdk::Display, &gio::Icon, i32, i32, Box<dyn FnOnce(Result<gdk::Texture, gio::Icon>)>);
 
 /// What a consumer tells the view about its items.
 ///
@@ -145,13 +145,13 @@ pub struct ItemContent {
     pub badges: Vec<Badge>,
     /// The item's own check, in [`TickMode::Check`].
     pub checked: Option<bool>,
-    /// Drawn faded and grey, e.g. a file marked to be moved.
+    /// Drawn faded and gray, e.g. a file marked to be moved.
     pub dimmed: bool,
     /// What assistive technology reads as the item's name; the title when unset.
     pub accessible_label: Option<String>,
     /// What assistive technology reads after the name.
     pub accessible_description: Option<String>,
-    /// Drawn in the accent colour: the item that is playing, or current.
+    /// Drawn in the accent color: the item that is playing, or current.
     pub emphasized: bool,
     /// Ratings out of five, by [`ColumnShows::Stars`] index.
     pub ratings: Vec<u8>,
@@ -188,7 +188,7 @@ pub enum IconFrame {
     /// photograph shown as a cover. A soft placeholder holds its place while
     /// the item has no picture yet.
     Cover,
-    /// Half the picture box, centred: a symbolic mark of a kind of item in
+    /// Half the picture box, centered: a symbolic mark of a kind of item in
     /// rows whose other items show covers.
     Small,
 }
@@ -198,7 +198,7 @@ pub enum IconFrame {
 pub struct Badge {
     /// Which corner.
     pub corner: Corner,
-    /// The disc's colour.
+    /// The disc's color.
     pub fill: gdk::RGBA,
     /// What is drawn on the disc.
     pub glyph: Glyph,
@@ -233,7 +233,7 @@ pub enum Corner {
 /// How the picture and the words of an item are arranged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Composition {
-    /// Picture above, words centred under it: an icon grid.
+    /// Picture above, words centered under it: an icon grid.
     Stacked,
     /// Picture at the start, words beside it: a list row.
     Inline,

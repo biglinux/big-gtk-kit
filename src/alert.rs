@@ -30,28 +30,49 @@ use gtk::{gio, glib};
 
 use crate::dialog::Opening;
 
-/// Present `dialog` on `parent` and call `callback` once with the response.
-/// An [`Alert`] asks with [`Alert::choose`], on the parent it was made for.
+/// Present `dialog` on `parent` and call `callback` once with the response,
+/// or with the close response when the dialog goes unanswered (its window
+/// destroyed and let go). An [`Alert`] asks with [`Alert::choose`], on the
+/// parent it was made for.
 pub fn choose(
     dialog: &adw::AlertDialog,
     parent: Option<&impl IsA<gtk::Widget>>,
     callback: impl FnOnce(glib::GString) + 'static,
 ) {
     // Taken on the first answer, so what the callback holds is let go as soon as
-    // it has run rather than when the dialog is finalized; and the handler goes
+    // it has run rather than when the dialog is finalized; and the handlers go
     // too, as an [`Alert`] asks again.
     let callback = Cell::new(Some(callback));
-    let handler = Rc::new(Cell::new(None));
-    let connected = Rc::clone(&handler);
-    let id = dialog.connect_response(None, move |dialog, response| {
-        if let Some(handler) = connected.take() {
+    let handlers = Rc::new(Cell::new(Vec::new()));
+    let connected = Rc::clone(&handlers);
+    let answer = Rc::new(move |dialog: &adw::AlertDialog, response: glib::GString| {
+        for handler in connected.take() {
             dialog.disconnect(handler);
         }
         if let Some(callback) = callback.take() {
-            callback(response.into());
+            callback(response);
         }
     });
-    handler.set(Some(id));
+    let responded = Rc::clone(&answer);
+    let response = dialog.connect_response(None, move |dialog, response| {
+        responded(dialog, response.into());
+    });
+    // libadwaita emits `response` from `closed`, which neither `force_close` on
+    // a dialog in a window of its own nor destroying a sheet's window emits.
+    let left = dialog.connect_notify_local(Some("parent"), move |dialog, _| {
+        if WidgetExt::parent(dialog).is_some() {
+            return;
+        }
+        let (dialog, answer) = (dialog.clone(), Rc::clone(&answer));
+        // In an idle: a dialog closing without animation leaves its parent
+        // before the `response` that closed it.
+        glib::idle_add_local_once(move || {
+            if WidgetExt::parent(&dialog).is_none() {
+                answer(&dialog, dialog.close_response());
+            }
+        });
+    });
+    handlers.set(vec![response, left]);
     dialog.present(parent);
 }
 
@@ -95,6 +116,9 @@ fn ask(
 /// and [`choose_future`](Self::choose_future), on the parent it was made for:
 /// a dialog once shown as a sheet cannot be shown in a window of its own.
 ///
+/// Opened as a sheet, it places the focus as a [`Dialog`](crate::dialog::Dialog)
+/// does, the default response standing for the default widget.
+///
 /// An `Alert` kept past its closing may hold the dialog while it asks
 /// something else: its [`close`](Self::close) then does nothing, and a
 /// [`WeakAlert`] stops upgrading. Everything else reached through the
@@ -137,17 +161,9 @@ impl WeakAlert {
 
 /// The scroll pane the template puts around the body and extra child.
 fn body_pane(widget: &gtk::Widget) -> Option<gtk::ScrolledWindow> {
-    if widget.has_css_class("body-scrolled-window") {
-        return widget.downcast_ref().cloned();
-    }
-    let mut child = widget.first_child();
-    while let Some(each) = child {
-        if let Some(pane) = body_pane(&each) {
-            return Some(pane);
-        }
-        child = each.next_sibling();
-    }
-    None
+    crate::widget_tree::subtree(widget)
+        .find(|each| each.has_css_class("body-scrolled-window"))
+        .and_then(|pane| pane.downcast().ok())
 }
 
 /// Whether a widget inside `widget` takes the focus, or will once shown and
@@ -156,17 +172,7 @@ fn holds_stop(widget: &gtk::Widget) -> bool {
     if !widget.can_focus() {
         return false;
     }
-    if widget.is_focusable() {
-        return true;
-    }
-    let mut child = widget.first_child();
-    while let Some(each) = child {
-        if holds_stop(&each) {
-            return true;
-        }
-        child = each.next_sibling();
-    }
-    false
+    widget.is_focusable() || crate::widget_tree::children(widget).any(|each| holds_stop(&each))
 }
 
 /// Keep the body's pane in the Tab chain for what it holds. GtkScrolledWindow
@@ -180,7 +186,9 @@ fn holds_stop(widget: &gtk::Widget) -> bool {
 /// insensitive entry counts as a stop: it may be shown or enabled later.
 fn follow_body(pane: &gtk::ScrolledWindow) {
     let adjustment = pane.vadjustment();
-    let scrolls = adjustment.upper() > adjustment.page_size();
+    // The pane's content measures a pixel past it when nothing overflows, its
+    // height rounded: that is no scroll for the keys.
+    let scrolls = adjustment.upper() - adjustment.page_size() > 1.0;
     pane.set_focusable(scrolls);
     pane.set_can_focus(scrolls || pane.child().is_some_and(|child| holds_stop(&child)));
 }
@@ -433,36 +441,43 @@ pub struct AlertBuilder {
 }
 
 impl AlertBuilder {
+    /// The heading, as `adw::AlertDialog`'s `heading`.
     pub fn heading(mut self, heading: impl Into<glib::GString>) -> Self {
         self.heading = Some(heading.into());
         self
     }
 
+    /// The body text, as `adw::AlertDialog`'s `body`.
     pub fn body(mut self, body: impl Into<glib::GString>) -> Self {
         self.body = Some(body.into());
         self
     }
 
+    /// Whether the body is Pango markup, as `adw::AlertDialog`'s `body-use-markup`.
     pub fn body_use_markup(mut self, markup: bool) -> Self {
         self.body_use_markup = markup;
         self
     }
 
+    /// A widget under the body, as `adw::AlertDialog`'s `extra-child`.
     pub fn extra_child(mut self, child: &impl IsA<gtk::Widget>) -> Self {
         self.extra_child = Some(child.clone().upcast());
         self
     }
 
+    /// The response Enter gives, as `adw::AlertDialog`'s `default-response`.
     pub fn default_response(mut self, id: impl Into<glib::GString>) -> Self {
         self.default_response = Some(id.into());
         self
     }
 
+    /// The response Escape and closing give, as `adw::AlertDialog`'s `close-response`.
     pub fn close_response(mut self, id: impl Into<glib::GString>) -> Self {
         self.close_response = Some(id.into());
         self
     }
 
+    /// The alert [`Alert::new`] makes, with these properties set.
     pub fn build(self) -> Alert {
         let alert = Alert::new(
             self.parent.as_ref(),
@@ -666,6 +681,7 @@ mod tests {
                 .default_response("cancel")
                 .build();
             alert.add_responses(&[("cancel", "_Cancel"), ("delete", "_Delete")]);
+            alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
             alert.present();
             for _ in 0..10 {
                 pump();
@@ -682,6 +698,47 @@ mod tests {
             let shown = alert.dialog().clone();
             drop(alert);
             cancel.emit_clicked();
+            while shown.parent().is_some() {
+                pump();
+            }
+            pump();
+        }
+        window.destroy();
+        pump();
+    }
+
+    /// A question with a field opens with the focus in the field, asked again
+    /// as the first time, whether the field was set as its focus or not.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn field_takes_the_focus_each_time() {
+        init();
+        crate::dialog::install();
+        let window = adw::Window::new();
+        window.present();
+        for (round, named) in [(0, false), (1, false), (2, true), (3, true)] {
+            let entry = gtk::Entry::new();
+            let alert = Alert::builder(Some(&window))
+                .heading("Name?")
+                .default_response("save")
+                .build();
+            alert.add_responses(&[("cancel", "_Cancel"), ("save", "_Save")]);
+            alert.set_extra_child(Some(&entry));
+            if named {
+                alert.set_focus(Some(&entry));
+            }
+            alert.present();
+            for _ in 0..10 {
+                pump();
+            }
+            let focused = GtkWindowExt::focus(&window);
+            assert!(
+                focused.is_some_and(|focus| focus == entry || focus.is_ancestor(&entry)),
+                "round {round}: the field lacks the focus (set as focus: {named})"
+            );
+            let shown = alert.dialog().clone();
+            drop(alert);
+            shown.close();
             while shown.parent().is_some() {
                 pump();
             }
@@ -1010,14 +1067,79 @@ mod tests {
         pump();
     }
 
+    /// The close response answers a question whose dialog went without
+    /// `closed`, and only such a one: a button that closes it without
+    /// animation answers itself.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "choose and choose_future take a plain dialog"
+    )]
+    fn unanswered_dialog_answers_its_close_response() {
+        init();
+        crate::dialog::install();
+        let settings = gtk::Settings::default().expect("settings");
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let question = || {
+            let dialog = adw::AlertDialog::new(Some("Delete?"), None);
+            dialog.add_responses(&[("cancel", "_Cancel"), ("delete", "_Delete")]);
+            dialog.set_close_response("cancel");
+            dialog
+        };
+
+        settings.set_gtk_enable_animations(false);
+        let window = adw::Window::new();
+        window.present();
+        let clicked = question();
+        let answers = Rc::clone(&heard);
+        choose(&clicked, Some(&window), move |response| {
+            answers.borrow_mut().push(format!("clicked {response}"));
+        });
+        pump();
+        buttons(clicked.upcast_ref())
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("_Delete"))
+            .expect("the response's button")
+            .emit_clicked();
+        pump();
+        settings.set_gtk_enable_animations(true);
+
+        let sheet = question();
+        let answers = Rc::clone(&heard);
+        choose(&sheet, Some(&window), move |response| {
+            answers.borrow_mut().push(format!("sheet {response}"));
+        });
+        pump();
+        window.destroy();
+        drop(window);
+        pump();
+
+        let windowed = question();
+        let answers = Rc::clone(&heard);
+        let answered = choose_future(&windowed, gtk::Widget::NONE);
+        glib::MainContext::default().spawn_local(async move {
+            let response = answered.await;
+            answers.borrow_mut().push(format!("windowed {response}"));
+        });
+        pump();
+        assert!(
+            windowed.parent().is_some(),
+            "presented in a window of its own"
+        );
+        windowed.force_close();
+        pump();
+
+        assert_eq!(
+            *heard.borrow(),
+            ["clicked delete", "sheet cancel", "windowed cancel"]
+        );
+    }
+
     fn buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {
-        let mut found: Vec<gtk::Button> = widget.downcast_ref().cloned().into_iter().collect();
-        let mut child = widget.first_child();
-        while let Some(widget) = child {
-            found.extend(buttons(&widget));
-            child = widget.next_sibling();
-        }
-        found
+        crate::widget_tree::subtree(widget)
+            .filter_map(|each| each.downcast().ok())
+            .collect()
     }
 
     #[gtk::test]

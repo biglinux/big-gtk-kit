@@ -984,7 +984,10 @@ fn key_accel(
     Some(accel)
 }
 
-fn is_modifier_key(key: gdk::Key) -> bool {
+/// Whether `key` only modifies the key pressed with it (Shift, Control, AltGr,
+/// the locks): a shortcut capture waits past it for the key it modifies.
+#[must_use]
+pub fn is_modifier_key(key: gdk::Key) -> bool {
     matches!(
         key,
         gdk::Key::Alt_L

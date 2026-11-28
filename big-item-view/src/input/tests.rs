@@ -186,6 +186,33 @@ fn tree_toggles_and_star_rates() {
     window.destroy();
 }
 
+#[gtk::test]
+#[ignore = "needs a display"]
+fn rtl_down_passes_closed_row() {
+    let view = ItemView::new(Rc::new(Named::default()), Geometry::rows(16));
+    view.set_direction(gtk::TextDirection::Rtl);
+    view.set_model(Some(&gtk::SingleSelection::new(Some(tree()))));
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(300)
+        .child(&view)
+        .build();
+    window.present();
+    pump();
+    view.imp().set_cursor(Some(0));
+
+    let keys: gtk::EventControllerKey = controller(&view);
+    let taken = keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[&gdk::Key::Down, &0_u32, &gdk::ModifierType::empty()],
+    );
+    pump();
+    assert!(taken);
+    assert_eq!(view.cursor(), Some(1), "Down moves to b");
+    assert!(!row(&view, 0).is_expanded(), "a stays closed");
+    window.destroy();
+}
+
 /// Drags and drops over rows; every row can be picked up and dropped on.
 struct Draggable;
 
@@ -260,6 +287,36 @@ fn enter_and_motion_move_before_load() {
         (entered, moved),
         (gdk::DragAction::MOVE, gdk::DragAction::MOVE)
     );
+    window.destroy();
+}
+
+/// Oracle: GTK's list widgets activate on a second press only when single
+/// click activation is off (`gtklistfactorywidget.c`).
+#[gtk::test]
+#[ignore = "needs a display"]
+fn single_click_double_activates_once() {
+    let (view, _selection, window) = shown_view();
+    let activations = Rc::new(RefCell::new(Vec::new()));
+    view.connect_closure(
+        "activate",
+        false,
+        glib::closure_local!(
+            #[strong]
+            activations,
+            move |_: ItemView, position: u32| activations.borrow_mut().push(position)
+        ),
+    );
+    let click: gtk::GestureClick = controller(&view);
+    let (x, y) = middle(&view, 1);
+    for single in [true, false] {
+        view.set_single_click_activate(single);
+        activations.borrow_mut().clear();
+        for n_press in [1, 2] {
+            primary_pressed(&view, &click, n_press, view.position_at(x, y), x, y);
+            primary_released(&view, &click, n_press, x, y);
+        }
+        assert_eq!(*activations.borrow(), [1], "single click: {single}");
+    }
     window.destroy();
 }
 

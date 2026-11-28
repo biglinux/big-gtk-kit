@@ -350,7 +350,7 @@ fn atomic_sibling_temp_path(target: &Path) -> PathBuf {
 /// missing.
 ///
 /// GTK-free and blocking: offload it (e.g. via
-/// `big_relm4_components::task::spawn_blocking_result`) so a slow/network
+/// `big_gtk_kit::task::spawn_blocking_result`) so a slow/network
 /// filesystem can't stall the UI thread.
 ///
 /// Existing Unix permission bits are copied to the replacement inode; new files

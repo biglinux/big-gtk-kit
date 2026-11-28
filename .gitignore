@@ -4,3 +4,8 @@ __pycache__/
 *.so
 *.o
 dist/
+upstream/*/package/src/
+upstream/*/package/pkg/
+upstream/gtk/package/gtk/
+*.pkg.tar.*
+upstream/libadwaita/package/libadwaita/

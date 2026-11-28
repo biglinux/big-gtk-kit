@@ -1,5 +1,5 @@
 # cargo-deny policy: advisories (CVEs), licenses, bans, sources.
-# Run: cargo deny check
+# Run: cargo deny --workspace check
 
 [graph]
 all-features = true
@@ -7,12 +7,58 @@ all-features = true
 [advisories]
 version = 2
 yanked = "warn"
-ignore = []
+# Each ignore names what clears it and a revisit date; osv-scanner.toml
+# repeats them for osv-scanner.
+ignore = [
+    # paste is unmaintained with no successor release; glycin 3.1.0 pulls it
+    # through glycin-common, glycin-utils and gufo. Drop with the glycin that
+    # leaves it.
+    { id = "RUSTSEC-2024-0436", reason = "glycin 3.1 needs paste; revisit 2027-01-19" },
+    # zvariant, zvariant_derive and zbus_names moved into zbus 6. glycin 3.1
+    # still builds on zbus 5, so moving our own crates alone would keep all
+    # three in the graph. Drop with the glycin on zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "glycin needs zbus 5; revisit 2027-01-19" },
+    { id = "RUSTSEC-2026-0371", reason = "glycin needs zbus 5; revisit 2027-01-19" },
+    { id = "RUSTSEC-2026-0372", reason = "glycin needs zbus 5; revisit 2027-01-19" },
+]
 
 [licenses]
 version = 2
 allow = ["Apache-2.0", "Apache-2.0 WITH LLVM-exception", "MIT", "Unicode-3.0"]
 confidence-threshold = 0.8
+
+# glycin (MPL-2.0 OR LGPL-2.1-or-later, taken as MPL-2.0) and the MPL crates
+# under it, in big-image's image loading.
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+name = "glycin"
+version = "3.1.0"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+name = "glycin-common"
+version = "1.0.4"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+name = "glycin-utils"
+version = "4.1.0"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+name = "gufo-common"
+version = "1.1.0"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+name = "gufo-exif"
+version = "0.4.0"
+
+# Under wayland-client, which loads libwayland-client at run time.
+[[licenses.exceptions]]
+allow = ["ISC"]
+name = "libloading"
+version = "0.8.9"
 
 [bans]
 multiple-versions = "warn"

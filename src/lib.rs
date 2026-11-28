@@ -2,48 +2,61 @@
 // SPDX-License-Identifier: MIT
 
 //! GTK4 building blocks shared by the BigLinux programs. Each one stands in for
-//! a toolkit behaviour that was measured to leak, stall or look different from
+//! a toolkit behavior that was measured to leak, stall or look different from
 //! program to program, without patching GTK or libadwaita: a fixed library
 //! version leaves every workaround here idle.
 
 pub mod accessible;
 pub mod alert;
 pub mod breakpoint;
+pub mod capture;
 pub mod css;
 pub mod dialog;
 pub mod directory;
+pub mod dropdown;
+pub mod file_dialog;
+pub mod focus;
+pub mod hover_card;
+pub mod list;
 pub mod menu;
 pub mod password;
 pub mod popover;
 mod shadow;
+pub mod side_card;
+pub mod slider;
 pub mod source;
 mod surface;
 pub mod switch;
+pub mod task;
+pub mod timer;
 pub mod tooltip;
 pub mod view_switcher;
+pub mod widget_tree;
 
 use gtk::glib;
 use gtk::glib::translate::IntoGlib;
 use gtk::prelude::*;
 
 /// Turn on what every program gets without changing a call site: the
-/// tooltip card, the closing-dialog focus fix, the popup-parent release and
-/// the Cairo window shadows.
+/// tooltip card, the closing-dialog focus fix, the popup-parent release,
+/// the Cairo window shadows and switches that turn while their window is
+/// not drawn.
 ///
-/// Call once, after GTK and libadwaita are initialised (an application's
+/// Call once, after GTK and libadwaita are initialized (an application's
 /// `startup`). Idempotent.
 pub fn install() {
     tooltip::install();
     dialog::install();
     surface::install();
     shadow::install();
+    switch::install();
 }
 
 /// Run `callback` with the object of every `signal` emission on `T` and its
 /// subclasses, for the rest of the process.
 fn on_every_emission<T: IsA<glib::Object>>(signal: &str, callback: fn(T)) {
     let object_type = T::static_type();
-    // A class's signals exist once the class is initialised.
+    // A class's signals exist once the class is initialized.
     let _class = glib::Class::<glib::Object>::from_type(object_type);
     let Some(signal) = glib::subclass::SignalId::lookup(signal, object_type) else {
         return;

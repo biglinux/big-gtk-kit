@@ -699,10 +699,11 @@ fn boot_application(spec: &AppShellSpec) -> Option<adw::Application> {
         return None;
     }
 
-    let app = adw::Application::new(
-        Some(&spec.application_id),
+    let app: adw::Application = application::ShellApplication::new(
+        &spec.application_id,
         gio::ApplicationFlags::HANDLES_COMMAND_LINE,
-    );
+    )
+    .upcast();
     read_icon_theme_once(&app);
     // GTK and libadwaita start in `startup`, which only the process that owns
     // the application id runs. A launch that hands its arguments to a running
@@ -883,5 +884,6 @@ fn require(condition: bool, error: AppShellSpecError) -> Result<(), AppShellSpec
     if condition { Ok(()) } else { Err(error) }
 }
 
+mod application;
 #[cfg(test)]
 mod tests;

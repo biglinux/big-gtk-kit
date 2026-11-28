@@ -477,28 +477,23 @@ pub fn painted_pixel(widget: &impl IsA<gtk::Widget>) -> [u8; 4] {
 /// Panics when the widget is not in a realized window.
 #[must_use]
 pub fn painted_pixel_at(widget: &impl IsA<gtk::Widget>, x: i32, y: i32) -> [u8; 4] {
-    let (width, height) = (widget.width(), widget.height());
-    let snapshot = gtk::Snapshot::new();
-    gtk::WidgetPaintable::new(Some(widget)).snapshot(
-        &snapshot,
-        f64::from(width),
-        f64::from(height),
+    assert!(
+        widget
+            .native()
+            .and_then(|native| native.renderer())
+            .is_some(),
+        "a widget in a realized window"
     );
-    let Some(node) = snapshot.to_node() else {
+    // Nothing painted, or no frame drawn yet.
+    let Some(texture) = big_gtk_kit::capture::widget_texture(widget) else {
         return [0; 4];
     };
-    #[expect(
-        clippy::expect_used,
-        reason = "a test harness: its panics are the failures it reports"
-    )]
-    let renderer = widget
-        .native()
-        .and_then(|native| native.renderer())
-        .expect("a widget in a realized window");
-    // The widget's box as the viewport: without it the texture covers only
-    // what was painted, and its center is not the widget's.
-    let viewport = gtk::graphene::Rect::new(0.0, 0.0, width as f32, height as f32);
-    let texture = renderer.render_texture(&node, Some(&viewport));
+    // The texture starts at the border box, before the widget's own origin by
+    // its padding and border.
+    let origin = widget
+        .compute_bounds(widget)
+        .map_or((0, 0), |bounds| (bounds.x() as i32, bounds.y() as i32));
+    let (x, y) = (x - origin.0, y - origin.1);
     let mut downloader = gtk::gdk::TextureDownloader::new(&texture);
     downloader.set_format(gtk::gdk::MemoryFormat::R8g8b8a8);
     let (pixels, stride) = downloader.download_bytes();

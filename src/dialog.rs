@@ -51,12 +51,20 @@ pub(crate) fn install() {
 /// program by a whole set every time. Kept, it costs one set for as long as
 /// the window lives. A dialog that releases cleanly should be built per
 /// opening instead: kept, it would cost memory while closed.
+///
+/// Kept only as a sheet: where libadwaita shows the dialog in a window of its
+/// own (over a window that is not a resizable `AdwWindow`), it is built per
+/// opening, since GTK refuses to show one kept dialog that way twice.
 pub fn present_kept<D: IsA<adw::Dialog>>(
     parent: &impl IsA<gtk::Widget>,
     build: impl FnOnce() -> D,
 ) {
     let parent = parent.as_ref();
-    let Some(window) = parent.root().and_downcast::<gtk::Window>() else {
+    let window = parent
+        .root()
+        .and_downcast::<gtk::Window>()
+        .filter(|_| presents_in_window(Some(parent)));
+    let Some(window) = window else {
         build().present(Some(parent));
         return;
     };
@@ -80,8 +88,8 @@ pub fn present_kept<D: IsA<adw::Dialog>>(
 ///
 /// A dialog once shown as a sheet cannot be shown in a window of its own:
 /// libadwaita 1.9 sets a parent on its content, which the sheet still holds,
-/// and GTK refuses it with a critical. So the pools take and give back only
-/// dialogs for which this holds.
+/// and GTK refuses it with a critical. So the pools and [`present_kept`] keep
+/// only dialogs for which this holds.
 pub(crate) fn presents_in_window(parent: Option<&gtk::Widget>) -> bool {
     parent
         .and_then(WidgetExt::root)
@@ -105,6 +113,14 @@ pub(crate) struct Opening {
     /// The widget this opening is presented on, held weakly; `None` for one in
     /// a window of its own.
     parent: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
+    /// This opening set the content width through [`Dialog`].
+    content_width_set: Cell<bool>,
+    /// This opening set the content height through [`Dialog`].
+    content_height_set: Cell<bool>,
+    /// An earlier opening set the content width, which libadwaita keeps.
+    content_width_kept: Cell<bool>,
+    /// An earlier opening set the content height, which libadwaita keeps.
+    content_height_kept: Cell<bool>,
 }
 
 impl Opening {
@@ -153,16 +169,50 @@ impl Opening {
         }
         self.reusable.set(false);
         self.parent.take();
+        if self.content_width_set.take() {
+            self.content_width_kept.set(true);
+        }
+        if self.content_height_set.take() {
+            self.content_height_kept.set(true);
+        }
         self.number.set(self.number.get() + 1);
     }
+}
+
+/// The first field in `dialog`'s content (an alert's extra child) that takes
+/// typing and is shown. The content maps after the dialog, so a field counts as
+/// shown when it and every parent up to the content are.
+fn first_field(dialog: &adw::Dialog) -> Option<gtk::Widget> {
+    let content = dialog
+        .downcast_ref::<adw::AlertDialog>()
+        .map_or_else(|| dialog.child(), adw::AlertDialog::extra_child)?;
+    let shown = |widget: &gtk::Widget| {
+        let mut inside = Some(widget.clone());
+        while let Some(current) = inside {
+            if !current.is_visible() || !current.is_child_visible() {
+                return false;
+            }
+            if current == content {
+                return true;
+            }
+            inside = current.parent();
+        }
+        false
+    };
+    crate::widget_tree::subtree(&content).find(|widget| {
+        widget.is_sensitive()
+            && widget
+                .dynamic_cast_ref::<gtk::Editable>()
+                .is_some_and(gtk::prelude::EditableExt::is_editable)
+            && shown(widget)
+    })
 }
 
 /// Hand `dialog` to `give_back` once it has closed and left its window: at the
 /// end of its closing, or with its window. Not at `closed`, which comes as the
 /// closing starts and before the `response` that closed an alert; in an idle,
 /// because one closing without animation leaves before that `response` too.
-/// From its second map on it takes the focus, which libadwaita gives a dialog
-/// only the first time.
+/// Each map places the focus, which libadwaita does only on the first.
 ///
 /// Only for a dialog made for [`presents_in_window`]. One that was shown in a
 /// window of its own all the same (its parent's window changed) is never given
@@ -184,14 +234,28 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
             closing.reusable.set(!windowed);
         });
     // libadwaita takes the focus into a dialog only the first time it maps and
-    // when it is presented while shown, so one asked again opens with none: Esc
-    // and Enter do nothing until a Tab. The first map is left to libadwaita.
+    // when it is presented while shown, so one asked again opens with none, and
+    // on that first map it prefers a destructive answer to the default one. So
+    // each map gives the focus to the field set as the dialog's focus, else to
+    // the first shown field that takes typing, else to the default answer; a
+    // dialog asked again with none of them takes it itself.
     let mapped_before = Cell::new(false);
     dialog
         .upcast_ref::<adw::Dialog>()
         .connect_map(move |dialog| {
-            if mapped_before.replace(true) && dialog.focus().is_none() {
-                dialog.grab_focus();
+            let asked_again = mapped_before.replace(true);
+            let field = dialog
+                .focus()
+                .filter(|focus| !focus.is::<gtk::Button>())
+                .or_else(|| first_field(dialog));
+            match field.or_else(|| dialog.default_widget()) {
+                Some(target) => {
+                    target.grab_focus();
+                }
+                None if asked_again => {
+                    dialog.grab_focus();
+                }
+                None => {}
             }
         });
     let give_back = Rc::new(give_back);
@@ -225,6 +289,15 @@ pub(crate) fn give_back_once_left<D: IsA<adw::Dialog> + IsA<gtk::Widget>>(
 /// something else: its [`close`](Self::close) then does nothing, and a
 /// [`WeakDialog`] stops upgrading. Everything else reached through the
 /// deref acts on whatever the dialog shows now.
+///
+/// Each opening as a sheet puts the focus on the field set as the dialog's
+/// focus, else on the first shown field that takes typing, else on the
+/// default widget; a button set as the focus is passed over, as libadwaita
+/// sets one itself.
+///
+/// Content sizes go through [`Self::set_content_width`],
+/// [`Self::set_content_height`] or [`Self::builder`]: [`present`](Self::present)
+/// may replace one set on the `adw::Dialog` itself.
 #[derive(Clone)]
 pub struct Dialog {
     dialog: adw::Dialog,
@@ -312,8 +385,41 @@ impl Dialog {
     /// Show this opening on the parent it was made for; nothing once the
     /// parent is gone or the dialog shows another opening.
     pub fn present(&self) {
-        if let Some(parent) = self.opening.target(self.number) {
-            self.dialog.present(parent.as_ref());
+        let Some(parent) = self.opening.target(self.number) else {
+            return;
+        };
+        self.dialog.present(parent.as_ref());
+        // libadwaita resolves a content size when it is set, `-1` included,
+        // against the child of that moment, and keeps it for later openings.
+        // A size an earlier opening set and this one did not is measured
+        // again here, with the child in its sheet and styled as it shows; one
+        // never set follows the child.
+        let opening = &self.opening;
+        if opening.content_width_kept.get() && !opening.content_width_set.get() {
+            self.dialog.set_content_width(-1);
+        }
+        if opening.content_height_kept.get() && !opening.content_height_set.get() {
+            self.dialog.set_content_height(-1);
+        }
+    }
+
+    /// As `AdwDialogExt::set_content_width`, when the dialog still shows this
+    /// opening. [`Self::present`] sizes the dialog to its child where the
+    /// opening sets no size.
+    pub fn set_content_width(&self, width: i32) {
+        if self.is_current() {
+            self.opening.content_width_set.set(true);
+            self.dialog.set_content_width(width);
+        }
+    }
+
+    /// As `AdwDialogExt::set_content_height`, when the dialog still shows this
+    /// opening. [`Self::present`] sizes the dialog to its child where the
+    /// opening sets no size.
+    pub fn set_content_height(&self, height: i32) {
+        if self.is_current() {
+            self.opening.content_height_set.set(true);
+            self.dialog.set_content_height(height);
         }
     }
 
@@ -324,8 +430,6 @@ impl Dialog {
         dialog.set_child(gtk::Widget::NONE);
         dialog.set_default_widget(gtk::Widget::NONE);
         dialog.set_title("");
-        dialog.set_content_width(-1);
-        dialog.set_content_height(-1);
         dialog.set_follows_content_size(false);
         dialog.set_can_close(true);
         dialog.set_presentation_mode(adw::DialogPresentationMode::Auto);
@@ -396,26 +500,31 @@ pub struct DialogBuilder {
 }
 
 impl DialogBuilder {
+    /// The title, as `adw::Dialog`'s `title`.
     pub fn title(mut self, title: impl Into<glib::GString>) -> Self {
         self.title = Some(title.into());
         self
     }
 
+    /// The width it asks for, as `adw::Dialog`'s `content-width`.
     pub fn content_width(mut self, width: i32) -> Self {
         self.content_width = Some(width);
         self
     }
 
+    /// The height it asks for, as `adw::Dialog`'s `content-height`.
     pub fn content_height(mut self, height: i32) -> Self {
         self.content_height = Some(height);
         self
     }
 
+    /// Its content, as `adw::Dialog`'s `child`.
     pub fn child(mut self, child: &impl IsA<gtk::Widget>) -> Self {
         self.child = Some(child.clone().upcast());
         self
     }
 
+    /// The dialog [`Dialog::new`] makes, with these properties set.
     pub fn build(self) -> Dialog {
         let dialog = Dialog::new(self.parent.as_ref());
         if let Some(title) = &self.title {
@@ -522,6 +631,114 @@ mod tests {
         assert_eq!(finalized.get(), 25);
     }
 
+    /// Each opening of one reused dialog is as large as its child asks, or as
+    /// the opening sets, before or after giving it its child.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn reused_dialog_sized_per_opening() {
+        init();
+        install();
+        FREE.with_borrow_mut(Vec::clear);
+        let window = adw::Window::builder()
+            .default_width(1000)
+            .default_height(900)
+            .build();
+        window.present();
+        pump();
+        let mut dialogs = Vec::<adw::Dialog>::new();
+        let openings = [
+            (None, None, (500, 400)),
+            (None, None, (500, 400)),
+            (Some((300, 250)), None, (300, 250)),
+            (None, None, (500, 400)),
+            (None, Some(300), (300, 400)),
+        ];
+        for (set, width_after_child, size) in openings {
+            // Small at its minimum, large at its natural size, as a list is.
+            let child = gtk::ScrolledWindow::builder()
+                .child(
+                    &gtk::Box::builder()
+                        .width_request(500)
+                        .height_request(400)
+                        .build(),
+                )
+                .propagate_natural_width(true)
+                .propagate_natural_height(true)
+                .build();
+            let mut builder = Dialog::builder(Some(&window)).child(&child);
+            if let Some((width, height)) = set {
+                builder = builder.content_width(width).content_height(height);
+            }
+            let dialog = builder.build();
+            if let Some(width) = width_after_child {
+                dialog.set_content_width(width);
+            }
+            dialogs.push(dialog.dialog().clone());
+            dialog.present();
+            pump();
+            assert_eq!(
+                (child.width(), child.height()),
+                size,
+                "{set:?} {width_after_child:?}"
+            );
+            dialog.close();
+            while dialog.parent().is_some() {
+                pump();
+            }
+            pump();
+        }
+        window.destroy();
+        dialogs.dedup();
+        assert_eq!(dialogs.len(), 1, "one dialog showed them all");
+    }
+
+    /// A dialog is measured in its sheet, under its window's style, the first
+    /// time and when reused after an opening that set its size.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn dialog_measured_in_its_sheet() {
+        init();
+        install();
+        FREE.with_borrow_mut(Vec::clear);
+        let sheet = crate::css::DisplaySheet::new(gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        sheet.load(
+            &gtk::gdk::Display::default().expect("a display"),
+            "window.big-gtk-kit-large label { font-size: 40px; }",
+        );
+        let window = adw::Window::builder()
+            .default_width(1000)
+            .default_height(900)
+            .css_classes(["big-gtk-kit-large"])
+            .build();
+        window.present();
+        pump();
+        for set in [None, Some((300, 250)), None] {
+            // Narrower than its natural width only when it wraps.
+            let child = gtk::Label::builder()
+                .label("Measured where it is shown")
+                .wrap(true)
+                .build();
+            let mut builder = Dialog::builder(Some(&window)).child(&child);
+            if let Some((width, height)) = set {
+                builder = builder.content_width(width).content_height(height);
+            }
+            let dialog = builder.build();
+            dialog.present();
+            pump();
+            if set.is_none() {
+                let (_, natural, _, _) = child.measure(gtk::Orientation::Horizontal, -1);
+                assert!(child.width() >= natural, "{} < {natural}", child.width());
+            }
+            dialog.close();
+            while dialog.parent().is_some() {
+                pump();
+            }
+            pump();
+        }
+        sheet.release();
+        window.destroy();
+    }
+
     #[gtk::test]
     #[ignore = "needs a display"]
     fn kept_dialog_built_once_per_window() {
@@ -557,5 +774,49 @@ mod tests {
         drop(window);
         pump();
         assert_eq!(finalized.get(), 1, "the kept dialog outlived its window");
+    }
+
+    /// A dialog libadwaita shows in a window of its own is built per opening:
+    /// one kept and shown that way again is refused by GTK with a critical.
+    #[gtk::test]
+    #[ignore = "needs a display"]
+    fn kept_dialog_only_as_sheet() {
+        init();
+        let window = adw::Window::new();
+        window.present();
+        pump();
+        let built = Rc::new(Cell::new(0));
+        // Over a plain window, over one that cannot be resized, then back as a
+        // sheet, where the dialog kept before is shown again.
+        let plain = gtk::Window::new();
+        plain.present();
+        pump();
+        for (parent, resizable, total) in [
+            (plain.upcast_ref::<gtk::Widget>(), true, 1),
+            (plain.upcast_ref(), true, 2),
+            (window.upcast_ref(), true, 3),
+            (window.upcast_ref(), false, 4),
+            (window.upcast_ref(), false, 5),
+            (window.upcast_ref(), true, 5),
+        ] {
+            window.set_resizable(resizable);
+            let (count, last) = (built.clone(), Rc::new(RefCell::new(None)));
+            let made = last.clone();
+            present_kept(parent, move || {
+                count.set(count.get() + 1);
+                let dialog = adw::ShortcutsDialog::new();
+                made.replace(Some(dialog.clone().upcast::<adw::Dialog>()));
+                dialog
+            });
+            pump();
+            assert_eq!(built.get(), total);
+            let made = last.take();
+            if let Some(dialog) = window.visible_dialog().or(made) {
+                dialog.force_close();
+            }
+            pump();
+        }
+        plain.destroy();
+        window.destroy();
     }
 }

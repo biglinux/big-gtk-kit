@@ -564,8 +564,12 @@ fn refill_on_model_change(
     });
 }
 
-/// Replace a popover's child with flat named action rows.
-pub(crate) fn populate_flat_action_popover(
+/// Replace a popover's child with flat named action rows, each activating its
+/// item's detailed action on `action_context` and closing the popover. Fill it
+/// before it is first shown, or give it the group role yourself: GTK refuses a
+/// role once assistive technology has read the popover. Later refills keep the
+/// role, so it can be filled again on each opening.
+pub fn populate_flat_action_popover(
     popover: &gtk::Popover,
     action_context: &impl IsA<gtk::Widget>,
     items: &[BigMenuActionItem],
@@ -614,9 +618,10 @@ fn flat_action_rows() -> gtk::ListBox {
     rows
 }
 
-/// Build a flat action popover with named action rows.
+/// Build a flat action popover with named action rows, as
+/// [`populate_flat_action_popover`] fills one. The caller parents it.
 #[must_use]
-pub(crate) fn build_flat_action_popover(
+pub fn build_flat_action_popover(
     action_context: &impl IsA<gtk::Widget>,
     items: &[BigMenuActionItem],
 ) -> gtk::Popover {

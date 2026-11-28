@@ -591,3 +591,31 @@ fn boot_leaves_toolkit_alone() {
         .expect("a valid spec boots");
     assert!(!gtk::is_initialized());
 }
+
+/// GApplication's own option parsing would hand `prog -- echo x` over as
+/// `prog echo x`.
+#[test]
+#[ignore = "display: needs a GTK display"]
+fn command_line_keeps_double_dash() {
+    for arguments in [
+        vec!["appkit-dash", "--", "echo", "x"],
+        vec!["appkit-dash", "file", "--", "echo"],
+        vec!["appkit-dash", "-e", "echo", "x"],
+    ] {
+        let received = Rc::new(RefCell::new(Vec::<OsString>::new()));
+        let received_for_command_line = Rc::clone(&received);
+        let app = super::application::ShellApplication::new(
+            "br.com.biglinux.AppKitDash",
+            gio::ApplicationFlags::HANDLES_COMMAND_LINE | gio::ApplicationFlags::NON_UNIQUE,
+        );
+        app.connect_command_line(move |_, command_line| {
+            *received_for_command_line.borrow_mut() = command_line.arguments();
+            glib::ExitCode::SUCCESS
+        });
+        assert_eq!(
+            run_application_with_os_args(app.upcast_ref(), &arguments),
+            glib::ExitCode::SUCCESS
+        );
+        assert_eq!(*received.borrow(), arguments, "{arguments:?}");
+    }
+}

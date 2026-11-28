@@ -141,14 +141,7 @@ impl ItemProxy {
 
 /// The first of `view`'s children that is not a proxy.
 pub(crate) fn first_real_child(view: &gtk::Widget) -> Option<gtk::Widget> {
-    let mut child = view.first_child();
-    while let Some(widget) = child {
-        if !widget.is::<ItemProxy>() {
-            return Some(widget);
-        }
-        child = widget.next_sibling();
-    }
-    None
+    big_gtk_kit::widget_tree::children(view).find(|widget| !widget.is::<ItemProxy>())
 }
 
 /// What one proxy says.
