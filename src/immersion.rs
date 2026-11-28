@@ -26,6 +26,9 @@ const MOTION_EPSILON_PX: f64 = 2.0;
 const CSS: &str = "
 revealer.big-media-chrome { transition: opacity 200ms ease-out; }
 revealer.big-media-chrome.big-media-chrome-idle { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  revealer.big-media-chrome { transition: none; }
+}
 ";
 
 /// Shows the bars on activity over a media surface and hides them once the
@@ -71,11 +74,16 @@ impl BigMediaImmersionController {
 
     /// Hide the cursor over the host while the bars are hidden.
     pub fn set_hide_cursor_when_idle(&self, hides: bool) {
-        self.hides_cursor.set(hides);
+        if self.hides_cursor.replace(hides)
+            && !hides
+            && let Some(host) = self.cursor_host.upgrade()
+        {
+            host.set_cursor_from_name(Some("default"));
+        }
     }
 
-    /// Show the bars on pointer motion, the pointer entering or leaving, a
-    /// key press or the focus moving over `root`.
+    /// Show the bars on pointer motion, the pointer entering or leaving, or a
+    /// key press over `root`.
     pub fn attach_activity_detection(&self, root: &impl IsA<gtk::Widget>) {
         let motion = gtk::EventControllerMotion::new();
         let this = self.this.clone();
@@ -107,7 +115,11 @@ impl BigMediaImmersionController {
         });
         root.add_controller(motion);
 
-        let key = gtk::EventControllerKey::new();
+        // Before the focused control takes the key: a button or a slider in
+        // a bar ends a key it handles.
+        let key = gtk::EventControllerKey::builder()
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
         let this = self.this.clone();
         key.connect_key_pressed(move |_, _, _, _| {
             if let Some(this) = this.upgrade() {
@@ -116,21 +128,6 @@ impl BigMediaImmersionController {
             gtk::glib::Propagation::Proceed
         });
         root.add_controller(key);
-
-        // The focus moving is activity too, from a shortcut or a screen
-        // reader as much as from a key over the root.
-        let this = self.this.clone();
-        root.connect_realize(move |root| {
-            let Some(window) = root.root().and_downcast::<gtk::Window>() else {
-                return;
-            };
-            let this = this.clone();
-            window.connect_focus_widget_notify(move |_| {
-                if let Some(this) = this.upgrade() {
-                    this.show_and_schedule_hide();
-                }
-            });
-        });
         self.show_and_schedule_hide();
     }
 
@@ -347,7 +344,10 @@ mod tests {
             controller.show_and_schedule_hide();
             idle();
             assert!(hidden(&revealer));
-            assert!(crate::focus::holds_focus(&next), "the control keeps the focus");
+            assert!(
+                crate::focus::holds_focus(&next),
+                "the control keeps the focus"
+            );
             window.destroy();
         });
     }
@@ -410,6 +410,46 @@ mod tests {
                 .expect("the pointer is followed");
             motion.emit_by_name::<()>("enter", &[&10.0_f64, &10.0_f64]);
             assert!(!hidden(&revealer));
+            window.destroy();
+        });
+    }
+
+    /// Keys are seen on their way to the focused control: a button or a
+    /// slider in a bar ends the keys it handles, and they would never bubble.
+    #[test]
+    fn keys_seen_before_the_control() {
+        require_gtk_test(|| {
+            let (window, _revealer, controller) = bar_with(&gtk::Button::with_label("Next"));
+            let root = window.child().expect("the window holds the host");
+            controller.attach_activity_detection(&root);
+            let keys = root
+                .observe_controllers()
+                .into_iter()
+                .filter_map(Result::ok)
+                .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+                .expect("keys are followed");
+            assert_eq!(keys.propagation_phase(), gtk::PropagationPhase::Capture);
+            window.destroy();
+        });
+    }
+
+    /// No longer hiding it, the controller gives the cursor back at once.
+    #[test]
+    fn cursor_comes_back_when_no_longer_hidden() {
+        require_gtk_test(|| {
+            let (window, _revealer, controller) = bar_with(&gtk::Button::with_label("Next"));
+            let host = window.child().expect("the window holds the host");
+            controller.set_hide_cursor_when_idle(true);
+            controller.hide_now();
+            assert_eq!(
+                host.cursor().and_then(|cursor| cursor.name()).as_deref(),
+                Some("none")
+            );
+            controller.set_hide_cursor_when_idle(false);
+            assert_eq!(
+                host.cursor().and_then(|cursor| cursor.name()).as_deref(),
+                Some("default")
+            );
             window.destroy();
         });
     }
