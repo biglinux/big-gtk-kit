@@ -43,6 +43,24 @@ impl BigDialogPage {
         Self::new(ScrollMode::Plain)
     }
 
+    /// A page whose content box fills the space under the header edge to
+    /// edge, without the dialog margins, as a full-window page such as a media
+    /// viewer needs.
+    #[must_use]
+    pub fn edge_to_edge() -> Self {
+        let page = Self::plain();
+        apply_margins(
+            &page.content,
+            BigDialogMargins {
+                start: 0,
+                end: 0,
+                top: 0,
+                bottom: 0,
+            },
+        );
+        page
+    }
+
     /// A page whose content box scrolls vertically under the header.
     #[must_use]
     pub fn scrolled() -> Self {
@@ -182,4 +200,27 @@ fn apply_margins(content: &gtk::Box, margins: BigDialogMargins) {
     content.set_margin_end(margins.end);
     content.set_margin_top(margins.top);
     content.set_margin_bottom(margins.bottom);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A full-window page has no dialog margins; a plain one keeps them.
+    #[test]
+    fn edge_to_edge_has_no_margins() {
+        big_testkit::harness::require_gtk_test(|| {
+            let margins = |page: &BigDialogPage| {
+                let content = page.content();
+                (
+                    content.margin_start(),
+                    content.margin_end(),
+                    content.margin_top(),
+                    content.margin_bottom(),
+                )
+            };
+            assert_eq!(margins(&BigDialogPage::edge_to_edge()), (0, 0, 0, 0));
+            assert_eq!(margins(&BigDialogPage::plain()), (16, 16, 12, 12));
+        });
+    }
 }
