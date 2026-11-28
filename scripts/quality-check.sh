@@ -29,4 +29,5 @@ ast-grep test --skip-snapshot-tests
 cargo deny --workspace check
 ruff check .
 ruff format --check .
+python3 -m unittest discover -s scripts/tests
 make -C tools check
