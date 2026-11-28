@@ -23,7 +23,7 @@ Older libraries are not supported. Every crate here needs Rust 1.100.
 Rust, as a Cargo git dependency:
 
 ```toml
-big-gtk-kit = { git = "https://github.com/biglinux/big-gtk-kit" }
+big-gtk-kit = { git = "https://github.com/biglinux/big-gtk-kit", rev = "<commit>" }
 ```
 
 `deny.toml` in each consumer allows git sources from the `biglinux` GitHub
@@ -38,7 +38,7 @@ the whole window, as are none; a `GtkColumnView` with the same columns makes
 `IconLoader`, else GTK's icon theme draws them.
 
 ```toml
-big-item-view = { git = "https://github.com/biglinux/big-gtk-kit" }
+big-item-view = { git = "https://github.com/biglinux/big-gtk-kit", rev = "<commit>" }
 ```
 
 `shared/` holds the crates the BigLinux programs are built on, above the kit:
@@ -53,7 +53,7 @@ copy in its own `Cargo.toml`:
 
 ```toml
 [patch.crates-io]
-glycin = { git = "https://github.com/biglinux/big-gtk-kit" }
+glycin = { git = "https://github.com/biglinux/big-gtk-kit", rev = "<commit>" }
 ```
 
 `shared/clippy.toml` holds their bans and `rules/` their ast-grep rules: a
@@ -203,10 +203,10 @@ the owner passes back, so no handler holds a widget.
 `immersion::BigMediaImmersionController` shows the bars of a picture, video or
 camera view on activity and fades them out once the person has only watched
 for a moment. An open popover or a guard the program gives pins them; the
-pointer resting on a bar and the keyboard focus in one do not. Idle bars stay in the
-focus chain and the accessibility tree, out of the pointer's way, and, fully
-transparent, draw nothing, so a video under them can still go to a hardware
-plane.
+pointer resting on a bar and the keyboard focus in one do not. Idle bars stay
+in the focus chain and the accessibility tree, out of the pointer's way, and,
+fully transparent, draw nothing, so a video under them can still go to a
+hardware plane.
 
 ## Checks
 

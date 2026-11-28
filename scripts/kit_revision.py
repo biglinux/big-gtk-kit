@@ -7,12 +7,12 @@
 
 ROOT is the program's repository, the current directory when left out.
 
-Every tracked Cargo.toml that names the kit's git source pins it by `rev` on
-the same line, every tracked Cargo.lock resolves its kit crates to that same
-source and revision, and every tracked fuzz workspace's Cargo.lock is current
+Every tracked Cargo.toml that names the kit's git source pins it by a `rev`,
+every tracked Cargo.lock resolves its kit crates to that same source and
+revision, and every tracked fuzz workspace's Cargo.lock is current
 (`cargo metadata --locked`). A moved pin that misses one manifest, or a
 `cargo update -p big-gtk-kit` that leaves the other kit crates behind, fails
-here instead of in a fuzz build or a package weeks later.
+here instead of in a fuzz build or a package.
 
 Exit status: 0 one revision and current lockfiles; 1 otherwise; 2 usage error.
 """
@@ -109,6 +109,10 @@ def check(root: Path) -> list[str]:
                     problems.append(f"{name}: the kit is not pinned by a 40-hex rev")
                 else:
                     pins.setdefault((source, rev), []).append(name)
+    if files["manifests"] == 0:
+        problems.append("no tracked Cargo.toml names the kit's git source")
+    elif files["lockfiles"] == 0:
+        problems.append("no tracked Cargo.lock resolves the kit")
     if len(pins) > 1:
         for (source, rev), names in sorted(pins.items()):
             problems.append(f"{source} {rev[:7]}: {', '.join(sorted(set(names)))}")
