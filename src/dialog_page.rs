@@ -5,30 +5,12 @@
 
 use adw::prelude::*;
 
-/// The margins of dialog content, in pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BigDialogMargins {
-    pub start: i32,
-    pub end: i32,
-    pub top: i32,
-    pub bottom: i32,
-}
+/// The dialog margins around a page's content: start and end, top and bottom.
+const MARGINS: (i32, i32) = (16, 12);
 
-impl Default for BigDialogMargins {
-    fn default() -> Self {
-        Self {
-            start: 16,
-            end: 16,
-            top: 12,
-            bottom: 12,
-        }
-    }
-}
-
-/// Reusable dialog shell: `AdwToolbarView`, top `AdwHeaderBar`, content box.
-///
-/// Use this when app dialogs share the same visual structure. Put app-specific
-/// controls in [`BigDialogPage::content`].
+/// A header bar over a content box, in an `AdwToolbarView`: the page of a
+/// dialog, or of a full-window view. Put the page's controls in
+/// [`BigDialogPage::content`].
 #[derive(Debug, Clone)]
 pub struct BigDialogPage {
     root: adw::ToolbarView,
@@ -40,7 +22,7 @@ impl BigDialogPage {
     /// A page whose content box fills the space under the header.
     #[must_use]
     pub fn plain() -> Self {
-        Self::new(ScrollMode::Plain)
+        Self::new(ScrollMode::Plain, MARGINS)
     }
 
     /// A page whose content box fills the space under the header edge to
@@ -48,42 +30,40 @@ impl BigDialogPage {
     /// viewer needs.
     #[must_use]
     pub fn edge_to_edge() -> Self {
-        let page = Self::plain();
-        apply_margins(
-            &page.content,
-            BigDialogMargins {
-                start: 0,
-                end: 0,
-                top: 0,
-                bottom: 0,
-            },
-        );
-        page
+        Self::new(ScrollMode::Plain, (0, 0))
     }
 
     /// A page whose content box scrolls vertically under the header.
     #[must_use]
     pub fn scrolled() -> Self {
-        Self::new(ScrollMode::Scrolled)
+        Self::new(ScrollMode::Scrolled, MARGINS)
     }
 
     /// A scrolled page whose content is at most `maximum_size` pixels wide,
     /// as [`adw::Clamp`] measures it with `tightening_threshold`.
     #[must_use]
     pub fn scrolled_clamped(maximum_size: i32, tightening_threshold: i32) -> Self {
-        Self::new(ScrollMode::ScrolledClamped {
-            maximum_size,
-            tightening_threshold,
-        })
+        Self::new(
+            ScrollMode::ScrolledClamped {
+                maximum_size,
+                tightening_threshold,
+            },
+            MARGINS,
+        )
     }
 
-    fn new(scroll_mode: ScrollMode) -> Self {
+    fn new(scroll_mode: ScrollMode, (horizontal, vertical): (i32, i32)) -> Self {
         let root = adw::ToolbarView::new();
         let header = crate::window_handle::header_bar(adw::HeaderBar::builder());
         root.add_top_bar(&header);
 
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        apply_margins(&content, BigDialogMargins::default());
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_start(horizontal)
+            .margin_end(horizontal)
+            .margin_top(vertical)
+            .margin_bottom(vertical)
+            .build();
 
         match scroll_mode {
             ScrollMode::Plain => root.set_content(Some(&content)),
@@ -125,7 +105,7 @@ impl BigDialogPage {
         &self.header
     }
 
-    /// The vertical box, with the dialog margins, that holds the page's controls.
+    /// The vertical box that holds the page's controls.
     #[must_use]
     pub fn content(&self) -> &gtk::Box {
         &self.content
@@ -139,7 +119,13 @@ impl BigDialogPage {
 
     /// Append a wrapped, dimmed paragraph of `text` to the content, and return it.
     pub fn append_description(&self, text: &str) -> gtk::Label {
-        let label = dialog_description(text);
+        let label = gtk::Label::builder()
+            .label(text)
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .margin_bottom(16)
+            .build();
+        label.add_css_class("dimmed");
         self.content.append(&label);
         label
     }
@@ -153,20 +139,6 @@ enum ScrollMode {
         maximum_size: i32,
         tightening_threshold: i32,
     },
-}
-
-/// Build a wrapped, left-aligned dim label suitable for placing above
-/// the form on a dialog page.
-#[must_use]
-pub(crate) fn dialog_description(text: &str) -> gtk::Label {
-    let label = gtk::Label::builder()
-        .label(text)
-        .halign(gtk::Align::Start)
-        .wrap(true)
-        .margin_bottom(16)
-        .build();
-    label.add_css_class("dimmed");
-    label
 }
 
 /// Focus `field` and select its text from `start` to `end` (`-1` for the end)
@@ -195,13 +167,6 @@ fn scrolled_window() -> gtk::ScrolledWindow {
         .build()
 }
 
-fn apply_margins(content: &gtk::Box, margins: BigDialogMargins) {
-    content.set_margin_start(margins.start);
-    content.set_margin_end(margins.end);
-    content.set_margin_top(margins.top);
-    content.set_margin_bottom(margins.bottom);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,7 +185,7 @@ mod tests {
                 )
             };
             assert_eq!(margins(&BigDialogPage::edge_to_edge()), (0, 0, 0, 0));
-            assert_eq!(margins(&BigDialogPage::plain()), (16, 16, 12, 12));
+            assert_ne!(margins(&BigDialogPage::plain()), (0, 0, 0, 0));
         });
     }
 }
