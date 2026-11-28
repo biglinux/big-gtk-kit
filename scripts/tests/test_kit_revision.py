@@ -37,6 +37,15 @@ class ManifestPins(unittest.TestCase):
                 [],
             ),
             ("[package]\nname = 'x'", []),
+            (f'[package.metadata.upstream]\ngit = "{KIT}"', []),
+            (
+                f'[target.\'cfg(unix)\'.dependencies]\nkit = {{ git = "{KIT}", rev = "{REV}" }}',
+                [(KIT, REV)],
+            ),
+            (
+                f'[replace]\n"kit:0.1.0" = {{ git = "{KIT}", rev = "{REV}" }}',
+                [(KIT, REV)],
+            ),
         ]:
             with self.subTest(manifest=manifest):
                 self.assertEqual(kit_revision.manifest_pins(manifest), expected)
@@ -45,10 +54,11 @@ class ManifestPins(unittest.TestCase):
 class LockPins(unittest.TestCase):
     def test_table(self):
         for source, expected in [
-            (f"git+{KIT}?rev={REV}#{REV[:8]}", [(KIT, REV)]),
-            (f"git+{KIT}.git?rev={REV}#{REV[:8]}", [(KIT, REV)]),
+            (f"git+{KIT}?rev={REV}#{REV}", [(KIT, REV)]),
+            (f"git+{KIT}.git?rev={REV}#{REV}", [(KIT, REV)]),
             (f"git+{KIT}#{REV}", [(KIT, None)]),
             (f"git+{KIT}?branch=main#{REV}", [(KIT, None)]),
+            (f"git+{KIT}?rev={REV}#{'b' * 40}", [(KIT, None)]),
             ("registry+https://github.com/rust-lang/crates.io-index", []),
         ]:
             lock = f'version = 4\n\n[[package]]\nname = "kit"\nversion = "0.1.0"\nsource = "{source}"\n'
@@ -72,7 +82,7 @@ class Check(unittest.TestCase):
     def test_table(self):
         other = "b" * 40
         manifest = f'[dependencies]\nkit = {{ git = "{KIT}", rev = "{REV}" }}\n'
-        lock = f'version = 4\n\n[[package]]\nname = "kit"\nversion = "0.1.0"\nsource = "git+{KIT}?rev={REV}#{REV[:8]}"\n'
+        lock = f'version = 4\n\n[[package]]\nname = "kit"\nversion = "0.1.0"\nsource = "git+{KIT}?rev={REV}#{REV}"\n'
         for files, failing in [
             ({"Cargo.toml": manifest, "Cargo.lock": lock}, False),
             (

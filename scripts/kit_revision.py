@@ -24,6 +24,10 @@ import tomllib
 from pathlib import Path
 
 REV = re.compile(r"[0-9a-f]{40}")
+UNPINNED = {
+    "manifests": "pinned by a 40-hex rev",
+    "lockfiles": "resolved at the 40-hex rev it asks for",
+}
 # `cargo metadata` may fetch the kit's git source before it answers.
 METADATA_TIMEOUT_S = 300
 
@@ -34,46 +38,61 @@ def kit_source(url: str) -> str | None:
     return url if url.endswith("/big-gtk-kit") else None
 
 
+DEPENDENCY_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
+
+
+def dependency_specs(manifest: dict) -> list[object]:
+    """Every dependency a manifest declares: its own, its workspace's, per
+    target, and in `[patch]` and `[replace]`. Tool tables such as
+    `[package.metadata]` declare none."""
+    holders = [
+        manifest,
+        manifest.get("workspace", {}),
+        *manifest.get("target", {}).values(),
+    ]
+    specs = [
+        spec
+        for holder in holders
+        for table in DEPENDENCY_TABLES
+        for spec in holder.get(table, {}).values()
+    ]
+    for patches in manifest.get("patch", {}).values():
+        specs.extend(patches.values())
+    specs.extend(manifest.get("replace", {}).values())
+    return specs
+
+
 def manifest_pins(text: str) -> list[tuple[str, str | None]]:
-    """The kit sources a manifest names, each with its `rev`, or None without one."""
+    """The kit sources a manifest's dependencies name, each with its `rev`, or None without one."""
     pins = []
-
-    def walk(node: object) -> None:
-        if isinstance(node, dict):
-            git = node.get("git")
-            source = kit_source(git) if isinstance(git, str) else None
-            if source:
-                rev = node.get("rev")
-                pins.append(
-                    (
-                        source,
-                        rev if isinstance(rev, str) and REV.fullmatch(rev) else None,
-                    )
-                )
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(tomllib.loads(text))
+    for spec in dependency_specs(tomllib.loads(text)):
+        git = spec.get("git") if isinstance(spec, dict) else None
+        source = kit_source(git) if isinstance(git, str) else None
+        if source:
+            rev = spec.get("rev")
+            pins.append(
+                (source, rev if isinstance(rev, str) and REV.fullmatch(rev) else None)
+            )
     return pins
 
 
 def lock_pins(text: str) -> list[tuple[str, str | None]]:
-    """The kit sources a lockfile resolves, each with its `rev`, or None for a branch or tag."""
+    """The kit sources a lockfile resolves, each with the `rev` it asked for
+    and got, or None for a branch, a tag or a commit other than the `rev`."""
     pins = []
     for package in tomllib.loads(text).get("package", []):
         source = package.get("source", "")
         if not source.startswith("git+"):
             continue
-        url, _, query = source.removeprefix("git+").partition("#")[0].partition("?")
+        located, _, commit = source.removeprefix("git+").partition("#")
+        url, _, query = located.partition("?")
         kit = kit_source(url)
         if kit is None:
             continue
         fields = dict(pair.partition("=")[::2] for pair in query.split("&") if pair)
         rev = fields.get("rev")
-        pins.append((kit, rev if rev and REV.fullmatch(rev) else None))
+        resolved = rev and REV.fullmatch(rev) and commit == rev
+        pins.append((kit, rev if resolved else None))
     return pins
 
 
@@ -106,7 +125,7 @@ def check(root: Path) -> list[str]:
             for source, rev in found:
                 name = str(path.relative_to(root))
                 if rev is None:
-                    problems.append(f"{name}: the kit is not pinned by a 40-hex rev")
+                    problems.append(f"{name}: the kit is not {UNPINNED[kind]}")
                 else:
                     pins.setdefault((source, rev), []).append(name)
     if files["manifests"] == 0:
